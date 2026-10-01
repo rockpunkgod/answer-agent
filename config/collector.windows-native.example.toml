@@ -1,0 +1,42 @@
+[collector]
+database = "data/native-messages.db"
+business_database = "data/native-demo.db"
+business_timezone = "Asia/Shanghai"
+processing_mode = "ACK_ONLY"
+page_size = 1000
+max_pages = 1000
+poll_seconds = 10
+stale_after_seconds = 300
+self_sender_ids = []
+teacher_sender_ids = []
+
+[source]
+name = "windows_native_staging"
+kind = "native_clipboard_archive"
+factory = "helpdesk.native_message_source:create_source"
+native_root = "data/private/chat-text-records"
+max_acquisitions = 10000
+
+# Current stage, independently configurable from the capture adapter.
+# Changing these modes preserves an audit trail; it never bypasses source checks.
+[stage]
+answer_review_required = false
+performance_enabled = true
+name = "题面确认后自动答疑，答案人工发送"
+require_ack_before_generation = true
+# Optional: enable original-message clarity review with an existing audited bundle.
+# Paths follow the same workspace-relative convention as the databases above.
+# source_review_manifest = "data/private/teaching-bundles/approved/manifest.json"
+
+[stage.delivery]
+ACK = "AUTO"
+ANSWER = "MANUAL"
+CORRECTION = "MANUAL"
+CLARIFICATION = "MANUAL"
+REQUEST_IMAGE = "MANUAL"
+PROGRESS = "MANUAL"
+TEST_ANSWER = "MANUAL"
+
+# No administrator archive permission or invented platform metadata is required.
+# This imports already acquired native Clipboard text and original call evidence.
+# It does not start desktop observation, reconstruct students/times, or send ACK.

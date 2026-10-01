@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>英语答疑 · 本地模拟演示</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+  <script src="/worker-control.js" defer></script>
+</head>
+<body>
+  <header class="hero">
+    <div class="wrap">
+      <div id="mode-label" class="eyebrow">SIMULATION · 本地演示</div>
+      <h1>英语答疑工作台</h1>
+      <p id="mode-description">这里的 Alice、Bob 和群聊都是模拟身份。生成内容来自模拟器，<strong>不是真实 DeepSeek，也不是教学答案</strong>；发送只写入本机模拟传输记录。</p>
+      <div id="status" class="status" role="status" aria-live="polite">正在读取演示状态…</div>
+    </div>
+  </header>
+  <main class="wrap">
+    <section id="answer-review-panel" class="card" hidden>
+      <div class="section-title"><div><h2>DeepSeek 讲解</h2><p>保留完整原文供查看或复制；交付方式以当前阶段为准。</p></div></div>
+      <div id="answer-review-packets"></div>
+      <p id="answer-review-status" role="status" aria-live="polite"></p>
+    </section>
+    <section id="collector-panel" class="card" hidden>
+      <div class="section-title"><span class="step">01</span><div><h2>消息采集与收到</h2><p>只保存消息与排队“收到”，当前不接入自动答疑。</p></div></div>
+      <div id="collector-status" role="status" aria-live="polite">正在检查真实采集状态…</div>
+      <div class="actions"><button data-action="collector_start">启动采集与收到排队</button><button data-action="collector_stop" class="secondary">停止采集，保留进度</button></div>
+      <p id="collector-control-note">正在读取原文导入与收到任务状态；发送方式以当前阶段配置为准。</p>
+    </section>
+    <section class="card simulation-controls">
+      <div class="section-title"><span class="step">01</span><div><h2>提交完整样题</h2><p>已核实的原文：He returned home to look after his mother. 第 12 题含完整 A–D 选项。</p></div></div>
+      <div class="actions"><button data-action="new_alice">Alice 提交第 12 题</button><button data-action="new_bob" class="secondary">Bob 提交同一题</button><button data-action="dispatch_ack" class="secondary">模拟发送一条确认收到</button></div>
+    </section>
+    <section class="card simulation-controls">
+      <div class="section-title"><span class="step">02</span><div><h2>演示上下文变化</h2><p>先提交 Alice 的题目。追问、另一小题、更正与异议都引用她自己的原消息。</p></div></div>
+      <div class="actions"><button data-action="followup_alice">Alice 追问：为什么不选 B</button><button data-action="subquestion_alice">Alice 追加第 13 题</button><button data-action="correction_alice">Alice 更正为否定题干</button><button data-action="reorder_alice">Alice 更正选项顺序</button><button data-action="dispute_alice">Alice 提出异议</button><button data-action="unknown_alice" class="secondary">无法判断的消息 → 人工队列</button></div>
+    </section>
+    <section class="card simulation-controls">
+      <div class="section-title"><span class="step">03</span><div><h2>审核与模拟发送</h2><p>生成最新一轮的模拟答复，人工批准后才能模拟发送。更正或异议会使旧答复失效。</p></div></div>
+      <div class="actions"><button data-action="generate">生成最新一轮答复</button><button data-action="approve">批准最新待审核答案</button><button data-action="dispatch">模拟发送已批准答案</button><button data-action="dispatch_unknown" class="secondary">模拟发送状态未知</button></div>
+    </section>
+    <section id="real-controls" class="card" hidden>
+      <div class="section-title"><span class="step">01</span><div><h2>已准备真实任务</h2><p>对固定且已核验的教学会话生成答案，审核后仅允许交付已配置的企业微信苇中鹤测试副本。</p></div></div>
+      <div class="actions"><button data-action="real_generate">生成已准备任务答案</button><button data-action="real_approve">批准当前真实答案</button><button data-action="real_dispatch_test">交付已批准测试副本</button></div>
+      <p id="real-delivery-note">正在检查测试交付配置…</p>
+      <div id="real-jobs" role="status" aria-live="polite"></div>
+    </section>
+    <section class="card">
+      <div class="section-title"><span id="control-step" class="step">04</span><div><h2>运行控制</h2><p>停止开关、恢复检查与本地人工队列。</p></div></div>
+      <div class="actions"><button data-action="stop" class="danger">停止发送</button><button data-action="resume" class="secondary">恢复发送</button><button data-action="recover" class="secondary">执行恢复检查</button><button id="refresh" class="secondary">刷新看板</button></div>
+    </section>
+    <section class="card" data-performance-entry>
+      <div class="section-title"><span id="performance-step" class="step">05</span><div><h2>每日答疑统计</h2><p>本地草稿，业务工作量与绩效篇数分开。模拟发送不计入正式绩效；未关联或缺少证据的记录列入待核对。</p></div></div>
+      <div class="actions"><label for="report-date">统计日期</label><input id="report-date" type="date"><button id="performance-refresh" class="secondary">查看统计草稿</button><button id="performance-export" class="secondary">下载日报（含明细）</button></div>
+      <div id="performance-result" role="status" aria-live="polite">选择日期后查看，报表不会发送到任何群聊。</div>
+      <p id="performance-export-status" role="status" aria-live="polite"></p>
+    </section>
+    <section id="question-review-panel" class="card" data-teaching-entry>
+      <div class="section-title"><div><h2 id="question-review-title">录入本机测试题</h2><p id="question-review-description">保存草稿后核对题面，再建立测试任务。这里不代表学生原始消息，不计绩效，也不会向群聊发送。</p></div></div>
+      <form id="operator-form" class="operator-form">
+        <label>题型<select name="question_type"><option>阅读理解</option></select></label>
+        <label>题号<input name="number" maxlength="80"></label>
+        <label class="wide">材料原文<textarea name="passage" rows="5"></textarea></label>
+        <label class="wide">题干<textarea name="stem" rows="2"></textarea></label>
+        <label>A<input name="A"></label><label>B<input name="B"></label>
+        <label>C<input name="C"></label><label>D<input name="D"></label>
+        <button type="submit">保存新题草稿</button>
+      </form>
+      <div class="operator-form">
+        <label>审核人<input id="operator-reviewer"></label>
+        <label>题面核对依据<input id="operator-evidence" placeholder="填写核对的原题或材料来源"></label>
+      </div>
+      <p id="operator-flow-note">核对完整材料、题干和选项后再批准。冻结只保存生成输入，尚未上传或提交 DeepSeek。</p>
+      <div class="actions"><button id="operator-refresh" class="secondary" type="button">刷新本机任务</button></div>
+      <div id="operator-tasks" aria-live="polite"></div>
+    </section>
+    <section class="card">
+      <div class="section-title"><div><h2>原始聊天文字记录</h2><p>先查看原文再核对计量。采集时间不是学生发送时间；这些记录尚未计入正式绩效。</p></div></div>
+      <div class="actions"><button id="native-export" type="button">下载原始记录导出包</button><button id="native-refresh" class="secondary">查看已采集原文</button></div>
+      <p>先导出再统计。导出包包含已采集原文、清单和采集凭据；历史覆盖为 partial（部分），全部群、退出群及 9 月 17 日以来历史仍待核验，尚不能用于正式统计。</p>
+      <div id="native-export-status" aria-live="polite"></div>
+      <div id="native-records" aria-live="polite">点击查看已保存的文字记录。历史覆盖仍待核验。</div>
+    </section>
+    <section class="board" aria-label="演示状态看板">
+      <div class="board-head"><h2>演示状态</h2><span id="updated"></span></div>
+      <div id="health" class="health"></div>
+      <div class="grid">
+        <article class="panel"><h3>消息</h3><div id="messages"></div></article>
+        <article class="panel" data-teaching-entry><h3>题目</h3><div id="questions"></div></article>
+        <article class="panel" data-teaching-entry><h3>答案</h3><div id="answers"></div></article>
+        <article class="panel"><h3>发件箱</h3><div id="outbox"></div></article>
+        <article class="panel"><h3>人工队列</h3><div id="human_tasks"></div></article>
+        <article class="panel" data-teaching-entry><h3>审核记录</h3><div id="reviews"></div></article>
+        <article class="panel" data-teaching-entry><h3>运行记录</h3><div id="runs"></div></article>
+      </div>
+    </section>
+  </main>
+  <footer id="mode-footer" class="wrap">仅供本机功能验收 · 无真实群聊连接 · 无真实模型调用</footer>
+</body>
+</html>

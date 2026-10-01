@@ -1,0 +1,36 @@
+mode = "dry_run"
+manual_review = true
+stop_requested = false
+test_group_allowlist = []
+allow_real_send = false
+database = "data/helpdesk.db"
+retention_days = 30 # Planning value; automated cleanup is not implemented in phase one.
+
+[scheduler]
+channel_label = "GPT-5.6 Luna medium"
+provider = "UNCONFIGURED"
+base_url = ""
+model_id = ""
+api_key_env = "HELPDESK_MODEL_API_KEY"
+reasoning_effort = "" # Only set after the provider's connection test.
+tool_calling_verified = false
+
+[desktop]
+adapter = "disabled"
+windows_mcp_endpoint = ""
+
+[deepseek]
+adapter = "mock"
+profile_path = ""
+selectors_verified = false
+
+[teaching]
+skill_paths = [] # Explicit teaching-only allowlist, never discover development skills automatically.
+
+[test_delivery]
+enabled = false # Remains disabled until the real WeCom contact identity is verified.
+platform = "wecom"
+display_name = "苇中鹤" # User explicitly excluded personal Weixin on 2026-09-29.
+stable_key = ""
+verification_evidence = ""
+verified_at = ""

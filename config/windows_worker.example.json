@@ -1,0 +1,11 @@
+{
+  "worker_id": "wecom-worker-1",
+  "policy": {
+    "mode": "OBSERVE_ONLY",
+    "allowed_actions": [],
+    "allowed_accounts": [],
+    "allowed_scopes": [],
+    "allowed_profiles": [],
+    "human_reads_allowed": false
+  }
+}

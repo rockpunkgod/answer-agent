@@ -1,0 +1,2 @@
+# Optional native archive bridge RSA dependency; no SDK binary is installed here.
+cryptography>=44

@@ -1,0 +1,17 @@
+# Read-only account verification. Copy locally; never put credentials in this file.
+[archive]
+enabled = false
+admin_authorized = false
+member_scope_verified = false
+consent_verified = false
+evidence_reference = ""
+bridge_command = []
+timeout_seconds = 30
+
+[archive_probe]
+allow_network_read_only = false
+# Optional actual authorized room IDs, not names or UI titles.
+room_ids = []
+# For single chats use [{ userid = "...", exteranalopenid = "..." }].
+# 'exteranalopenid' is the spelling specified by the official archive API.
+single_pairs = []

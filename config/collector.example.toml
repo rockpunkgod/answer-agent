@@ -1,0 +1,47 @@
+[collector]
+database = "data/messages.db"
+business_database = "data/helpdesk.db"
+business_timezone = "Asia/Shanghai"
+processing_mode = "ACK_ONLY"
+self_sender_ids = []
+teacher_sender_ids = []
+page_size = 1000
+max_pages = 1000
+poll_seconds = 10
+stale_after_seconds = 300
+
+[source]
+name = "wecom_archive"
+factory = "helpdesk.wecom_archive:create_source"
+# Fill only after administrator authorization and real SDK/account verification.
+# factory = "your_verified_archive_runtime:create_source"
+# GUI requires a provider of official Windows-MCP observations, not saved screenshots.
+
+[archive]
+enabled = false
+admin_authorized = false
+member_scope_verified = false
+consent_verified = false
+evidence_reference = ""
+bridge_command = []
+timeout_seconds = 30
+source_name = "wecom_archive"
+min_call_interval = 0.1
+
+[media]
+root = "data/media"
+limit = 20
+
+[performance]
+special_count_start = "23:00"
+special_count_start_inclusive = true
+special_count_end = "07:00"
+special_count_end_inclusive = false
+special_count_end_status = "CONFIRMED"
+reporting_cutoff = "07:00"
+cross_day_attribution = "original_question_business_day_07:00"
+cross_day_attribution_status = "CONFIRMED"
+# Policy metadata: actual calculation uses the persisted business rule history.
+# Count units do not imply a confirmed price.
+special_count_unit = "篇"
+special_price_status = "NEED_CONFIRMATION"

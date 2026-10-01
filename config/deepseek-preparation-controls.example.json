@@ -1,0 +1,8 @@
+{
+  "material_order": "COURSE_THEN_QUESTION",
+  "upload_button": "Upload files",
+  "picker_window": "Open",
+  "file_input": "File name",
+  "open_button": "Open",
+  "preparation_mode": "FAST_UPLOAD_THEN_GENERATE"
+}

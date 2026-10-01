@@ -1,0 +1,19 @@
+# Copy this file to a local private config; paths are examples only.
+database = "data/your-local-helpdesk.db"
+output_dir = "outputs/performance"
+teacher = "待填写"
+business_timezone = "Asia/Shanghai"
+attribution = "question_day_07"
+generate_at = "08:00"
+catch_up_start = "2026-09-17"
+scope_start_date = "2026-09-17"
+export_xlsx = true
+# For real records, export and verify acquired original text before statistics.
+# Leave the archive path unset only for an isolated demo/test ledger.
+require_native_export = false
+# native_archive_root = "data/private/chat-text-records"
+# native_export_dir = "outputs/performance-native-sources"
+# Unconfirmed historical application remains preview-only.
+retroactive_rule_application = false
+# Applies only to completed/approved activity-day metrics. Persisted question-day cutoff is 07:00.
+activity_day_cutoff = "23:59:59"

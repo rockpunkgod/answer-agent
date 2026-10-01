@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "english-helpdesk"
+version = "0.1.0"
+description = "Phase-one local English helpdesk domain prototype; no real GUI sending"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+browser = ["playwright==1.60.0"]
+windows-test = ["Pillow==12.2.0"]
+
+[tool.setuptools.packages.find]
+include = ["helpdesk*"]
+
+[tool.setuptools.package-data]
+helpdesk = ["migrations/*.sql", "teaching/*.md", "static/*"]

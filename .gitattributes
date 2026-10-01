@@ -1,0 +1,2 @@
+# Preserve the verified source bytes and explicit CRLF payloads across clones.
+* -text whitespace=cr-at-eol,-blank-at-eof
