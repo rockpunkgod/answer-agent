@@ -19,8 +19,8 @@ ROOT=Path(__file__).resolve().parents[1]
 class ManualDeliveryHTTPTests(unittest.TestCase):
     def setUp(self):
         self.fx=registration_fixture.ManualDeliveryRegistrationTests()
-        self.fx.setUp()
         self.addCleanup(self.fx.doCleanups)
+        self.fx.setUp()
         self.server=DemoHTTPServer(('127.0.0.1',0),Path(self.fx.db.path),processing_mode='ACK_ONLY')
         self.thread=Thread(target=self.server.serve_forever,daemon=True)
         self.thread.start()

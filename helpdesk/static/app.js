@@ -70,7 +70,7 @@ function shortId(value){return value?String(value).slice(0,8):"—";}
 function renderRows(id, rows, people){const target=document.getElementById(id);target.replaceChildren();const heading=target.closest(".panel")?.querySelector("h3");if(heading){heading.querySelector(".count")?.remove();heading.append(el("span","count",Array.isArray(rows)?rows.length:0));}if(!Array.isArray(rows)||rows.length===0){target.append(el("div","empty","暂无记录"));return;}for(const row of rows){const item=el("div","entry");const grid=el("div","kv");if(id==="messages"||id==="outbox"){const person=people.get(row.binding_id);if(person){grid.append(el("div","key","学生"));grid.append(el("div","value",person));}}for(const key of visibleFields[id]||[]){const value=row[key];if(value===null||value===undefined||value==="")continue;const label=key==="current_version"?"当前题目版本":fieldNames[key]||key;grid.append(el("div","key",label));grid.append(el("div","value",["id","current_version","question_version"].includes(key)?shortId(value):display(value,key,row)));}item.append(grid);target.append(item);}}
 function deliverySummary(stats){const modes={AUTO:"自动发送",MANUAL:stats?.answer_review_required===false?"等你按发送":"人工审核后发送",DISABLED:"禁止发送"};const policy=stats?.delivery_policy;if(policy)return `当前阶段：${stats.delivery_stage_name||"已配置"} · 收到${modes[policy.ACK||"MANUAL"]} · 答案${modes[policy.ANSWER||"MANUAL"]}`;return stats?.manual_send_required?"由你按发送，程序不发送":"发送方式以当前阶段配置为准";}
 function renderHealth(value){const stats=value||{};if(ackOnly){document.getElementById("health").textContent=`${collectorStatus?.configured===false?"采集未配置":collectorStatus?.collection_kind==="NATIVE_CLIPBOARD_IMPORT"?"本机原文导入":"仅采集和排队收到"} · 待收到 ${collectorStatus?.pending_ack_count??0} · 待核验 ${collectorStatus?.held_ack_count??0} · ${stats.stopped?"发送已停止":deliverySummary(stats)}`;return;}const states=stats.outbox_by_state||{};document.getElementById("health").textContent=`${realMode?"真实已准备任务":"模拟环境"} · 活跃案例 ${stats.open_cases??0} · 待人工处理 ${stats.human_tasks??0} · ${stats.stopped?"发送已停止":deliverySummary(stats)} · 发送状态未知 ${states.SEND_UNKNOWN??0}`;}
-async function refresh(){const response=await fetch("/api/state",{cache:"no-store"});const data=await response.json();if(!response.ok)throw Error(data.error||"无法读取状态");csrfToken=data.csrf_token;configureMode(data);const board=data.dashboard||{};renderHealth(board.health);const people=new Map((board.bindings||[]).map(row=>[row.id,row.display_name]));for(const id of ["messages","questions","answers","outbox","human_tasks","reviews","runs"])renderRows(id,board[id],people);document.getElementById("updated").textContent=`已更新 ${new Date().toLocaleTimeString()}`;await refreshAnswerReviewPackets();if(questionAutoContinue)await refreshOperatorTasks();}
+async function refresh(){const response=await fetch("/api/state",{cache:"no-store"});const data=await response.json();if(!response.ok)throw Error(data.error||"无法读取状态");csrfToken=data.csrf_token;configureMode(data);const board=data.dashboard||{};renderHealth(board.health);const people=new Map((board.bindings||[]).map(row=>[row.id,row.display_name]));for(const id of ["messages","questions","answers","outbox","human_tasks","reviews","runs"])renderRows(id,board[id],people);document.getElementById("updated").textContent=`已更新 ${new Date().toLocaleTimeString()}`;await refreshAnswerReviewPackets();if(questionAutoContinue||sourceReviewEnabled)await refreshOperatorTasks();}
 async function act(action){if(busy)return;busy=true;document.querySelectorAll("button").forEach(button=>button.disabled=true);showStatus("正在执行任务…");try{const response=await fetch("/api/action",{method:"POST",headers:{"Content-Type":"application/json","X-CSRF-Token":csrfToken},body:JSON.stringify({action})});const data=await response.json();if(!response.ok)throw Error(data.error||"动作失败");await refresh();const resultState=data.result?.state||data.job?.result?.state||data.job?.state;showStatus(`${actionNames[action]||"动作"}已执行${resultState?` · ${display(resultState)}`:""}`);}catch(error){showStatus(error.message||"动作失败",true);try{await refresh();}catch{}}finally{busy=false;updateButtons();}}
 document.querySelectorAll("button[data-action]").forEach(button=>button.addEventListener("click",()=>act(button.dataset.action)));
 document.getElementById("refresh").addEventListener("click",async()=>{try{await refresh();showStatus("看板已刷新");}catch(error){showStatus(error.message,true);}});
@@ -170,6 +170,11 @@ function configureMode(data){
  answerReviewRequired=data.dashboard?.health?.answer_review_required!==false;
  questionAutoContinue=data.question_auto_continue===true;
  sourceReviewEnabled=data.source_review_enabled===true;
+ const teachingBlocked=typeof data.teaching_blocked_reason==='string'?data.teaching_blocked_reason:'';
+ let teachingNote='';
+ if(teachingBlocked.startsWith('ANSWER_REQUIRED_DEPENDENCIES_MISSING: '))teachingNote='ANSWER 缺少必需文件：'+teachingBlocked.slice('ANSWER_REQUIRED_DEPENDENCIES_MISSING: '.length)+'。';
+ else if(teachingBlocked.startsWith('ANSWER_SOURCE_REQUIRED'))teachingNote='当前为旧教学包，需要改用固定版本的 ANSWER 教学来源。';
+ else if(teachingBlocked)teachingNote='ANSWER 原文已核验，课程流程尚未完成受控样例验证。';
  ackOnly=data.processing_mode==="ACK_ONLY";collectorStatus=data.collector;
  realMode=data.simulation===false&&!ackOnly; allowedActions=new Set(data.allowed_actions||[]);
  testDeliveryAvailable=data.test_delivery_available===true; jobs=data.jobs||{};
@@ -199,6 +204,11 @@ function configureMode(data){
    document.getElementById('mode-label').textContent='本机工作台 · 原文与学生题面确认';
    document.getElementById('mode-description').textContent='原消息归属核验后，只确认一次题面。已核验的原群收到是后续排队前提；网页操作等待执行，答案仍由你发送。';
    document.getElementById('mode-footer').textContent='原消息题面确认 · 持久队列 · 本服务不操作桌面或自动发送答案';
+   if(teachingBlocked){
+    document.getElementById('mode-description').textContent=teachingNote+'自动生成暂停，可以核对原题、登记人工交付和导出日报。';
+    document.getElementById('question-review-description').textContent='只显示已归属并核验来源的学生原题。当前可以确认题面，自动生成暂停；人工实际交付后登记核验记录。';
+    document.getElementById('mode-footer').textContent='原消息题面确认 · 人工答疑与交付登记 · 自动生成暂停';
+   }
   }
   document.querySelector('.board-head h2').textContent="采集消息与待收到";
   const target=document.getElementById('collector-status');target.replaceChildren();
@@ -226,6 +236,7 @@ function configureMode(data){
   for(const job of Object.values(jobs))target.append(el("p","",`${actionNames[job.action]||job.action} · ${display(job.state,"state")} ${job.error||job.result?.reason||(job.result?.state?display(job.result.state,"state"):"")}`));
  }
  document.getElementById('operator-flow-note').textContent=questionAutoContinue?'核对完整材料、题干和选项后确认一次。后续步骤交给后台队列，无需再点冻结、生成或答案审批。':'核对完整材料、题干和选项后再批准。冻结只保存生成输入，尚未上传或提交 DeepSeek。';
+ if(teachingBlocked)document.getElementById('operator-flow-note').textContent=teachingNote+'自动生成暂停，已有任务和人工交付登记保留。';
  updateButtons();
 }
 const queueNames={WAITING_ACK:'题面已确认，等待收到确认',STOPPED:'已暂停，保留题面确认',READY_FOR_ENQUEUE:'题面已确认，正在排队',WAITING_DESKTOP_EXECUTOR:'已排队，等待 Luna 操作',READY_FOR_PREPARATION:'独立会话已就绪，等待上传材料',ATTACHMENTS_READY:'材料已上传，等待生成',GENERATED:'已生成，等你按发送',SESSION_CREATION_STARTED:'正在新建独立会话',PREPARATION_STARTED:'正在上传材料',GENERATION_STARTED:'正在生成讲解',EXECUTION_UNCERTAIN:'操作结果需核实，已暂停重试',NEEDS_ATTENTION:'题面已确认，准备条件需检查'};

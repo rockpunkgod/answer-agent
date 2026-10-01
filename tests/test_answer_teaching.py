@@ -8,10 +8,10 @@ import shutil
 import subprocess
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from helpdesk import answer_teaching as source
-from helpdesk.teaching_bundle import verify_bundle
+from helpdesk.teaching_bundle import TeachingBundleError, verify_bundle
 from helpdesk.teaching_routes import GRAMMAR, OBJECTIVE, ROUTES, WRITING
 from helpdesk.storage import Store
 from helpdesk.workflow import Workflow
@@ -74,6 +74,41 @@ class AnswerTeachingTests(unittest.TestCase):
 
     def write_manifest(self, path, manifest):
         path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
+
+    def test_real_generation_reports_required_missing_source_path(self):
+        path = self.bundle();before = path.read_bytes()
+        db = Store(self.base / 'source-gate.db');self.addCleanup(db.close)
+        adapter = Mock(identity='REAL_SOURCE_TEST', simulated=False)
+        with self.assertRaisesRegex(TeachingBundleError,
+                'ANSWER_REQUIRED_DEPENDENCIES_MISSING: gaokao-english/scripts/check_lesson.py'):
+            Workflow(db, teaching_manifest=path, generation_adapter=adapter)._skills()
+        adapter.generate.assert_not_called()
+        self.assertEqual(db.one('SELECT COUNT(*) FROM runs')[0], 0)
+        self.assertEqual(path.read_bytes(), before)
+        self.assertFalse(verify_bundle(path)['answer_generation_allowed_by_course'])
+
+    def test_complete_source_preview_cannot_be_used_as_generation_approval(self):
+        path = self.bundle('语法填空')
+        self.assertEqual(verify_bundle(path)['missing_dependencies'], [])
+        with self.assertRaisesRegex(TeachingBundleError, 'ANSWER_TEACHING_NOT_ACTIVATED'):
+            verify_bundle(path, for_generation=True)
+        with self.assertRaisesRegex(TeachingBundleError, 'ANSWER_SOURCE_CHECK_REQUIRED'):
+            verify_bundle(path, for_generation=True, check_sources=False)
+
+    def test_valid_answer_preview_keeps_manual_workbench_available_without_queue_or_desktop(self):
+        from helpdesk.demo_server import DemoHTTPServer
+        path = self.bundle()
+        with patch('helpdesk.mcp_transport.MCPProcess') as transport:
+            server = DemoHTTPServer(('127.0.0.1', 0), db_path=self.base / 'manual.db',
+                processing_mode='ACK_ONLY', source_review_manifest=path)
+            try:
+                self.assertTrue(server.source_review_enabled)
+                self.assertFalse(server.question_auto_continue)
+                self.assertIsNone(server.reviewed_queue_thread)
+                self.assertIn('gaokao-english/scripts/check_lesson.py', server.teaching_blocked_reason)
+                transport.assert_not_called()
+            finally:
+                server.server_close()
 
     def test_pin_rejects_another_repository_or_incomplete_commit(self):
         for overrides in ({'repository_url': 'https://example.invalid/OTHER.git'},

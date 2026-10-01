@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from helpdesk.domain import Intent, Option, Question, compare
 from helpdesk.mcp_generation import input_fingerprint
@@ -330,7 +331,9 @@ class ReferenceResolutionTests(unittest.TestCase):
         files = _files(snapshot, question_text_path=prepared['path'])
         self.assertEqual([f['kind'] for f in files], ['course', 'question_image', 'question_text'])
 
-    def test_confirmed_candidate_completes_strict_and_fast_preparation_for_text_and_images(self):
+    @patch('helpdesk.mcp_preparation.verify_frozen_teaching', return_value={})
+    @patch('helpdesk.mcp_generation.verify_frozen_teaching', return_value={})
+    def test_confirmed_candidate_completes_strict_and_fast_preparation_for_text_and_images(self, *_source_mocks):
         from helpdesk.mcp_generation import PreparedDeepSeekGenerator
         from helpdesk.mcp_preparation import DeepSeekSessionPreparer, question_text_fields
         from helpdesk.mcp_preparation_review import review_preparation, TEXT_REVIEW_STATEMENT

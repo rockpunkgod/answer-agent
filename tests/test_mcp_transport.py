@@ -5,8 +5,9 @@ import sys
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 
-from helpdesk.mcp_transport import MCPCallError, MCPProcess, MCPTimeout, MCPTransportError
+from helpdesk.mcp_transport import MCPCallError, MCPProcess, MCPTimeout, MCPTransportError, runtime_home, RUNTIME_HOME_ENV
 
 
 FAKE = r'''import json, sys, time
@@ -95,6 +96,39 @@ class MCPTransportTests(unittest.TestCase):
             self.assertEqual(result["content"][0]["text"], "Type")
             self.assertFalse(mcp.uncertain)
         self.assertEqual(self.counter.read_text(encoding="utf-8").splitlines(), ["Type"])
+
+    def test_configured_installation_runs_the_current_wrapper_instead_of_old_project_code(self):
+        install=self.root/'existing installation';install.mkdir()
+        calls=[]
+        def factory(command, **kwargs):
+            calls.append((command,kwargs))
+            return subprocess.Popen([sys.executable,str(self.fake),'ok',str(self.counter)],**kwargs)
+        with patch.dict('os.environ',{RUNTIME_HOME_ENV:str(install)}):
+            with MCPProcess(root=self.root,timeout=1,stderr_path=self.root/'stderr.log',process_factory=factory) as mcp:
+                self.assertEqual(mcp.call('DisplayInventory',{})['content'][0]['text'],'DisplayInventory')
+        command,settings=calls[0]
+        self.assertEqual(command,[str(install/'Scripts/python.exe'),'-u',str(self.root/'tools/windows_mcp_session.py')])
+        self.assertEqual(settings['env'][RUNTIME_HOME_ENV],str(install.resolve()))
+        self.assertEqual(settings['cwd'],str(self.root))
+        self.assertEqual(self.counter.read_text().splitlines(),['DisplayInventory'])
+
+    def test_explicit_python_keeps_test_embedding_while_server_home_is_fixed_at_startup(self):
+        install=self.root/'approved-installation'
+        with patch.dict('os.environ',{RUNTIME_HOME_ENV:str(install)}):
+            mcp=MCPProcess(sys.executable,root=self.root)
+        self.assertEqual(mcp.python,sys.executable)
+        self.assertEqual(mcp.runtime_home,install.resolve())
+
+    def test_invalid_runtime_configuration_stops_before_process_creation(self):
+        for value in ('','relative-installation',' https://invalid.example/tool ','\\\\server\\runtime','/tmp/runtime\ncommand'):
+            with self.subTest(value=value), patch.dict('os.environ',{RUNTIME_HOME_ENV:value}), \
+                    patch('subprocess.Popen') as spawn:
+                with self.assertRaisesRegex(MCPTransportError,'MCP_RUNTIME_HOME_INVALID'):
+                    MCPProcess(root=self.root)
+                spawn.assert_not_called()
+
+    def test_missing_config_keeps_repository_local_default_without_discovery_or_installation(self):
+        self.assertEqual(runtime_home(self.root,environ={}),self.root/'.venv-windows-mcp')
 
 
 if __name__ == "__main__":

@@ -42,8 +42,8 @@ class FixtureManualAdapter(ManualGroupDraft):
 class SharedSourceDeliveryIntegrationTests(unittest.TestCase):
     def setUp(self):
         self.fx = source_fixture.SourceQuestionTasksTests()
-        self.fx.setUp()
         self.addCleanup(self.fx.doCleanups)
+        self.fx.setUp()
         self.fx.message, self.fx.receipt, self.fx.outcome = self.fx.receive(
             'shared-source', sent='2026-09-30T23:10:00+08:00')
         self.db = self.fx.db

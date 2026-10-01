@@ -30,6 +30,11 @@ class OperatorTaskTests(unittest.TestCase):
             fixture_hashes[relative] = sha256(path.read_bytes()).hexdigest()
         for key, value in (('DEFAULT_SKILL_ROOT', self.skill_root), ('REVIEWED_SOURCE_SHA256', fixture_hashes)):
             contract = patch.object(teaching_module, key, value);contract.start();self.addCleanup(contract.stop)
+        # This local task fixture uses the legacy contract solely to exercise
+        # task freezing. The real sole-source gate is tested separately.
+        source = patch('helpdesk.workflow.verify_bundle',
+            side_effect=lambda path, **kwargs: teaching_module.verify_bundle(path))
+        source.start();self.addCleanup(source.stop)
         self.payload = {'passage': 'John went home to look after his mother.',
             'stem': 'Why did John go home?', 'number': '12', 'question_type': '阅读理解',
             'options': {'A': 'To visit a friend.', 'B': 'To take a holiday.',

@@ -26,6 +26,14 @@
 
 原消息题面入口使用配置中的 `[stage] source_review_manifest` 指向审核通过的本地教学包。新的教学来源仅使用 [ANSWER](https://github.com/rockpunkgod/ANSWER.git)；仓库不包含私人课程材料、登录状态或模型密钥。实际网页、模型或 Windows-MCP 操作才需要相应工具和登录，不是打开台账的依赖。
 
+Windows-MCP 已装在其他工作目录时，可在启动本项目的 PowerShell 中指定现有环境，不需要复制或重新安装：
+
+```powershell
+$env:HELPDESK_WINDOWS_MCP_HOME = 'E:\作业帮\.venv-windows-mcp'
+```
+
+网页准备、生成、受控交付和现有Worker入口统一使用这个目录中的 `Scripts/python.exe` 和 `Scripts/windows-mcp.exe`，执行的仍是**当前业务检出目录**的封装与保护逻辑。配置只对当前进程及其子进程生效，不修改系统设置；未配置时沿用仓库内 `.venv-windows-mcp/`。只接受本机绝对目录，不接受命令、网址或网络共享。工具缺失会停止，不自动安装或改用其他自动化。该配置本身不证明群聊持续采集已经接通。
+
 ## 教学来源与只读预览
 
 [config/teaching-source.toml](config/teaching-source.toml) 固定 ANSWER 提交 `57159d7a8b03a0743225ed27f3f1e6128bbcd45d`。不自动拉取、切换提交或改写教学文件。教学目录存在未提交改动时停止，保留原文件供本人审核；Windows 的 LF/CRLF 换行差异允许核对，预览使用 Git 提交的原始字节。
@@ -39,6 +47,10 @@ python -X utf8 -B -m tools.prepare_teaching_bundle --question-type 阅读理解 
 这是**本地原文预览**。工具按 ANSWER 的 README 分工选取当前题型完整文件，合成一个教学输入文件，并保存源文件、提交和哈希；同版本同题型复用缓存。语法使用旧版语法 Skill，写作使用 `gaokao-writing`，不混用主 Skill 内的同名题型文件。结果留在忽略的 `data/private/teaching-bundles/`。
 
 当前 ANSWER 客观题目录缺少 README 和 Agent 定义要求的 `gaokao-english/scripts/check_lesson.py`，预览会明确报告缺项；不借用语法目录的脚本。语法检查脚本虽然存在，本轮未执行课程定位与修稿流程。新预览包均保持 `answer_generation_allowed_by_course=false`，不能通过修改清单把它提升为已验证生成权限。
+
+新代码在生成、上传和中断后再次提交前检查 ANSWER 来源及冻结内容。旧本机教学包不能继续用于这些操作；旧消息、生成稿和交付记录仍可查看、核验。缺少来源绑定的旧任务需要重新核对并冻结输入，不能修改 JSON 冒充通过。
+
+有效的 ANSWER 预览包可以配置为 `source_review_manifest`，打开题面核对和人工工作台；页面显示缺项或尚未启用的原因，不启动自动生成队列。人工答疑后可登记实际交付并核对日报。客观题必需依赖缺失及课程流程未验证仍分别阻止自动生成；业务提示词不再自带英语教学判据，教学方法和讲解方式取自 ANSWER 对应原文。
 
 本轮没有迁移运行中的 `source_review_manifest`、启用新消息渠道或上传教学文件。旧包保留原有历史记录，不作为本次 ANSWER 固定版本验收的证据；新的教学生成需先完成对应课程检查与受控样例验证。停止使用预览命令即可保留当前运行配置；不要用清空数据或覆盖教学文件回退。
 

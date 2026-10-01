@@ -15,8 +15,8 @@ from tests import test_shared_source_delivery_integration as delivery_fixture
 class ManualDeliveryRegistrationTests(unittest.TestCase):
     def setUp(self):
         self.fixture = delivery_fixture.SharedSourceDeliveryIntegrationTests()
-        self.fixture.setUp()
         self.addCleanup(self.fixture.doCleanups)
+        self.fixture.setUp()
         self.fixture.generate()
         self.db, self.origin = self.fixture.db, self.fixture.row
         self.registry = ManualDeliveries(self.db)

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from helpdesk.mcp_generation import PreparedDeepSeekGenerator, input_fingerprint
 
@@ -47,6 +48,10 @@ class Transport:
 
 class PreparedGenerationTests(unittest.TestCase):
     def setUp(self):
+        # This fixture isolates the webpage contract. Real source rejection is
+        # exercised without this mock in test_teaching_bundle/test_answer_teaching.
+        source = patch('helpdesk.mcp_generation.verify_frozen_teaching', return_value={})
+        source.start();self.addCleanup(source.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.base = Path(self.tmp.name)
         course = self.base / 'course.md'

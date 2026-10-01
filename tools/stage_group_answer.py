@@ -31,7 +31,7 @@ def main():
         print(json.dumps({'status': 'SAVED_SOURCE_AND_PIN_VALID', 'desktop_actions': False,
             'answer_sent': False, 'live_group_verified': False}, ensure_ascii=False))
         return
-    with MCPProcess(ROOT / '.venv-windows-mcp/Scripts/python.exe') as transport:
+    with MCPProcess() as transport:
         draft.transport = transport
         result = draft.stage(args.packet)
     print(json.dumps(result, ensure_ascii=False))

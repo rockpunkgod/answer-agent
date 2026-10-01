@@ -15,6 +15,19 @@ _EOF = object()
 _MAX_LINE = 1024 * 1024
 GUARDED_INPUTS = frozenset({'Click', 'Type', 'Shortcut', 'Scroll', 'Move'})
 _INPUT_PROCESSES = frozenset({'WXWork', 'msedge'})
+RUNTIME_HOME_ENV = 'HELPDESK_WINDOWS_MCP_HOME'
+
+
+def runtime_home(root=ROOT, *, environ=None):
+    """One locally configured installation; no downloads, shell or GUI actions."""
+    value = (os.environ if environ is None else environ).get(RUNTIME_HOME_ENV)
+    if value is None:
+        return Path(root).resolve() / '.venv-windows-mcp'
+    if (not isinstance(value, str) or not value or value != value.strip() or len(value) > 2048
+            or any(ord(char) < 32 for char in value) or value.startswith(('\\\\','//'))
+            or not Path(value).is_absolute()):
+        raise MCPTransportError('MCP_RUNTIME_HOME_INVALID')
+    return Path(value).resolve()
 
 
 class MCPTransportError(RuntimeError):
@@ -32,13 +45,14 @@ class MCPTimeout(MCPTransportError):
 class MCPProcess:
     """Own one persistent stdio MCP session. Calls are serialized and never retried."""
 
-    def __init__(self, python: str | os.PathLike[str], *, root: str | os.PathLike[str] = ROOT,
+    def __init__(self, python: str | os.PathLike[str] | None = None, *, root: str | os.PathLike[str] = ROOT,
                  timeout: float = 60.0, stderr_path: str | os.PathLike[str] | None = None,
                  process_factory: Callable[..., Any] = subprocess.Popen,
                  response_queue: queue.Queue | None = None,
                  bound_input_process: str | None = None):
-        self.python = str(python)
         self.root = Path(root)
+        self.runtime_home = runtime_home(self.root)
+        self.python = str(python) if python is not None else str(self.runtime_home / 'Scripts/python.exe')
         self.timeout = timeout
         self.stderr_path = Path(stderr_path) if stderr_path else self.root / "data/private/windows-mcp/adapter-stderr.log"
         self._factory = process_factory
@@ -77,7 +91,8 @@ class MCPProcess:
         kwargs: dict[str, Any] = dict(stdin=subprocess.PIPE, stdout=subprocess.PIPE,
                                       stderr=self._stderr, cwd=str(self.root), text=True,
                                       encoding="utf-8", errors="replace", bufsize=1,
-                                      env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"})
+                                      env={**os.environ, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8",
+                                           RUNTIME_HOME_ENV: str(self.runtime_home)})
         if os.name == "nt":
             kwargs["creationflags"] = subprocess.CREATE_NO_WINDOW
         try:

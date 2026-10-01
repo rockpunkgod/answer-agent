@@ -15,6 +15,7 @@ from PIL import Image
 
 from .mcp_generation import input_fingerprint
 from .mcp_page_contract import DeepSeekPage, PageUnconfirmed, snapshot_text
+from .teaching_bundle import verify_frozen_teaching
 
 
 class PreparationUnconfirmed(RuntimeError):
@@ -107,6 +108,7 @@ class DeepSeekSessionPreparer:
 
     def __init__(self, transport, snapshot: dict, session_url: str, evidence_path,
                  controls: dict, *, poll_interval=2, timeout=120, store_path=None):
+        verify_frozen_teaching(snapshot)
         from .mcp_transport import MCPProcess
         if isinstance(transport, MCPProcess):
             transport.bound_input_process = 'msedge'

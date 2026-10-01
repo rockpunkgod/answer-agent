@@ -5,7 +5,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from helpdesk.mcp_generation import PreparedDeepSeekGenerator, input_fingerprint
 from helpdesk.mcp_preparation import DeepSeekSessionPreparer, prepare_question_text, question_text_fields
@@ -15,6 +15,10 @@ from tests.test_mcp_preparation import FakeDesktop, URL
 
 class TextPreparationTests(unittest.TestCase):
     def setUp(self):
+        # Anonymous upload/generation fixtures do not authorize real teaching.
+        for module in ('mcp_preparation', 'mcp_generation'):
+            source = patch('helpdesk.' + module + '.verify_frozen_teaching', return_value={})
+            source.start();self.addCleanup(source.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.base = Path(self.tmp.name)
         course = self.base / 'course.md'

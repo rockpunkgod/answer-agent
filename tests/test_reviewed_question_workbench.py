@@ -154,14 +154,15 @@ class ReviewedQuestionWorkbenchTests(unittest.TestCase):
             self.assertEqual(self.request('GET', '/api/operator-tasks')[1]['tasks'][0]['auto_queue']['phase'], 'WAITING_ACK')
             self.store.execute("UPDATE outbox SET simulated=0 WHERE message_id=? AND purpose='ACK'", (task['message_id'],))
             deadline = time.monotonic() + 4
+            listed = None
             while time.monotonic() < deadline:
                 run = self.store.one('SELECT run_id FROM operator_tasks WHERE id=?', (task['id'],))[0]
-                if run:
+                listed = self.request('GET', '/api/operator-tasks')[1]['tasks'][0]
+                if run and listed['auto_queue']['phase'] == 'WAITING_DESKTOP_EXECUTOR':
                     break
                 time.sleep(.02)
             self.assertIsNotNone(run)
-        listed = self.request('GET', '/api/operator-tasks')[1]['tasks'][0]
-        self.assertEqual(listed['auto_queue']['phase'], 'WAITING_DESKTOP_EXECUTOR')
+            self.assertEqual(listed['auto_queue']['phase'], 'WAITING_DESKTOP_EXECUTOR')
         self.assertTrue(listed['auto_queue']['enqueued'])
         self.assertEqual(self.store.one("SELECT COUNT(*) FROM audit WHERE event='OPERATOR_TEST_INPUT_REVIEWED'")[0], 1)
         self.assertEqual(self.store.one('SELECT COUNT(*) FROM runs')[0], 2)

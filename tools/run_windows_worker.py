@@ -58,7 +58,7 @@ def main(argv=None):
                 return 0
             from helpdesk.mcp_transport import MCPProcess
             try:
-                mcp=owned.enter_context(MCPProcess(Path(__file__).resolve().parents[1]/'.venv-windows-mcp/Scripts/python.exe'))
+                mcp=owned.enter_context(MCPProcess())
             except Exception:
                 print(json.dumps({'state':'NATIVE_METADATA_UNAVAILABLE','native_adapter_connected':False,
                                   'native_metadata_connected':False,'gui_ready_verified':False}),flush=True)

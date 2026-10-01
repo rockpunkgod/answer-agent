@@ -35,7 +35,7 @@ def main():
         if not args.inspect and row['state']!='PENDING':
             print(json.dumps({'outbox_id':args.outbox,'state':row['state'],'resubmitted':False}))
             return
-        with MCPProcess(ROOT/'.venv-windows-mcp/Scripts/python.exe') as mcp:
+        with MCPProcess() as mcp:
             flow=Workflow(store,desktop=MCPTestAnswerDesktop(mcp,pin,ROOT))
             result=flow.inspect_unknown(args.outbox) if args.inspect else flow.dispatch(args.outbox)
             print(json.dumps({'outbox_id':args.outbox,'state':result,'source_student_delivered':False}))

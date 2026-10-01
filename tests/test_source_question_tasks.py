@@ -45,7 +45,10 @@ class SourceQuestionTasksTests(unittest.TestCase):
             workflow_teaching_paths=[str(self.course)], files=[dict(snapshot_path=str(self.course),
             snapshot_sha256=sha256(self.course.read_bytes()).hexdigest())], reviewed_policy_id='fixture-policy')
         self.patches = [patch(name, return_value=self.manifest) for name in
-            ('helpdesk.operator_tasks.verify_bundle', 'helpdesk.workflow.verify_bundle', 'helpdesk.automatic_preparation.verify_bundle')]
+            ('helpdesk.operator_tasks.verify_bundle', 'helpdesk.workflow.verify_bundle',
+             'helpdesk.automatic_preparation.verify_bundle',
+             'helpdesk.mcp_preparation.verify_frozen_teaching',
+             'helpdesk.mcp_generation.verify_frozen_teaching')]
         for stub in self.patches:
             stub.start()
             self.addCleanup(stub.stop)

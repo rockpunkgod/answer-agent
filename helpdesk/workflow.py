@@ -230,7 +230,8 @@ class Workflow:
 
     def _skills(self):
         entries = []
-        manifest = verify_bundle(self.teaching_manifest) if self.teaching_manifest else None
+        manifest = verify_bundle(self.teaching_manifest,
+            for_generation=not self.generation_adapter.simulated) if self.teaching_manifest else None
         if manifest is not None and manifest['answer_generation_allowed_by_course'] is not True:
             raise ValueError("Teaching policy does not authorize answer generation")
         paths = [Path(p) for p in manifest['workflow_teaching_paths']] if manifest else self.teaching_paths
@@ -244,7 +245,8 @@ class Workflow:
             entries.append({"name": path.name, "path": str(path), "sha256": sha256(content).hexdigest(),
                             "content": content.decode("utf-8"),
                             "source": "verified_teaching_manifest" if manifest else "operator_allowlist",
-                            **({"reviewed_policy_id": manifest['reviewed_policy_id'],
+                            **({"manifest_path": str(self.teaching_manifest.resolve()),
+                                "reviewed_policy_id": manifest['reviewed_policy_id'],
                                 "question_type": manifest['question_type']} if manifest else {})})
         return entries
 

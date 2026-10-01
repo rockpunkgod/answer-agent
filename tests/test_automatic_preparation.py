@@ -19,6 +19,8 @@ from tests.test_mcp_preparation import FakeDesktop, URL
 
 class AutomaticPreparationTests(unittest.TestCase):
     def setUp(self):
+        source = patch('helpdesk.mcp_preparation.verify_frozen_teaching', return_value={})
+        source.start();self.addCleanup(source.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.base = Path(self.tmp.name)
         self.db = Store(self.base / 'business.db')

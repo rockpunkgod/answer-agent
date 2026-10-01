@@ -89,6 +89,7 @@ class MCPBoundInputTests(unittest.TestCase):
             with process:process.call('Click',{})
             self.assertEqual(self.requests(child)[0]['expected_foreground_process'],'msedge')
         finally:
+            fixture.doCleanups()
             fixture.tearDown()
 
     def test_wecom_delivery_and_ack_share_wxwork_binding(self):

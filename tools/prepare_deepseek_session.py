@@ -58,7 +58,7 @@ def main():
                 raise ValueError('Automatic task candidate must use its own preparation-candidate.json')
     if args.evidence.exists():
         raise FileExistsError(f'Preparation evidence already exists: {args.evidence}')
-    with MCPProcess(ROOT / '.venv-windows-mcp/Scripts/python.exe') as transport:
+    with MCPProcess() as transport:
         result = DeepSeekSessionPreparer(transport, snapshot, args.session_url,
                                          args.evidence, controls).run()
     preparation_path = None

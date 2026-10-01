@@ -52,7 +52,7 @@ class FastPreparationTests(unittest.TestCase):
                                            poll_interval=0, timeout=2).generate(self.snapshot)
         self.assertEqual(result['correct_option_id'], 'option-A')
         self.assertEqual(transport.calls.count('Shortcut'), 1)
-        self.assertIn('先实际读取本会话课程Skill附件', transport.prompt)
+        self.assertIn('先实际读取本会话固定版本的ANSWER教学Skill附件', transport.prompt)
         self.assertIn('同一次生成', transport.prompt)
         self.assertFalse(result['simulated'])
         self.assertFalse(result['model_readback_performed'])

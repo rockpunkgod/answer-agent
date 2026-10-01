@@ -365,7 +365,7 @@ def perform_real(store, action, config, *, generator=None, transport_factory=Non
     validate_test_copy(store, row)
     if transport_factory is None:
         from .mcp_transport import MCPProcess
-        transport_factory = lambda: MCPProcess(ROOT.parent / '.venv-windows-mcp/Scripts/python.exe')
+        transport_factory = MCPProcess
     if desktop_factory is None:
         desktop_factory = WorkbenchTestDesktop
     with transport_factory() as transport:
@@ -413,15 +413,22 @@ class DemoHTTPServer(ThreadingHTTPServer):
                 source_review_manifest = configured_manifest
         self.real_config = load_real_config(real_config) if real_config else None
         self.source_review_enabled = source_review_manifest is not None
+        self.teaching_blocked_reason = None
         if self.source_review_enabled:
             if processing_mode != 'ACK_ONLY':
                 raise ValueError('Source review manifest requires ACK_ONLY collection mode')
-            from .teaching_bundle import verify_bundle
+            from .teaching_bundle import TeachingBundleError, verify_bundle
             manifest = Path(source_review_manifest).resolve(strict=True)
             bundle = verify_bundle(manifest)
-            if bundle.get('answer_generation_allowed_by_course') is not True:
+            if (bundle.get('answer_generation_allowed_by_course') is not True
+                    and bundle.get('format_version') != 2):
                 raise ValueError('Source review requires an approved answer-generation teaching bundle')
             self.operator_config = {'manifest': manifest, 'auto_prepare_after_question_review': True}
+            try:
+                verify_bundle(manifest, for_generation=True)
+            except TeachingBundleError as error:
+                self.teaching_blocked_reason = str(error)
+                self.operator_config['auto_prepare_after_question_review'] = False
         else:
             self.operator_config = self.real_config
         self.question_auto_continue = bool(self.operator_config and
@@ -958,6 +965,7 @@ class DemoHandler(BaseHTTPRequestHandler):
                              "processing_mode": self.server.processing_mode, "collector": collector,
                              "performance_available": self.server.performance_available,
                              "source_review_enabled": self.server.source_review_enabled,
+                             "teaching_blocked_reason": self.server.teaching_blocked_reason,
                              "question_auto_continue": self.server.question_auto_continue,
                              "reviewed_queue": {"worker_alive": bool(self.server.reviewed_queue_thread
                                  and self.server.reviewed_queue_thread.is_alive()),

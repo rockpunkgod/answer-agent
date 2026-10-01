@@ -103,7 +103,7 @@ def main(argv=None):
                 pin = json.loads(args.pin.read_text(encoding="utf-8"))
                 if pin.get("outbox_id") != args.outbox:
                     raise ValueError("PIN_AND_TEST_ACK_MISMATCH")
-            with MCPProcess(ROOT / ".venv-windows-mcp/Scripts/python.exe") as mcp:
+            with MCPProcess() as mcp:
                 desktop = MCPTestAnswerDesktop(mcp, pin, ROOT)
                 flow = CollectorTestAckWorkflow(store, collector, desktop)
                 if args.command == "prepare-pin":

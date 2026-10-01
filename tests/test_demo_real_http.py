@@ -25,6 +25,9 @@ from helpdesk.workflow import Workflow
 
 class RealWorkbenchTests(unittest.TestCase):
     def setUp(self):
+        # HTTP jobs use anonymous synthetic course files, never real teaching.
+        source = patch('helpdesk.mcp_generation.verify_frozen_teaching', return_value={})
+        source.start();self.addCleanup(source.stop)
         self.tmp = tempfile.TemporaryDirectory()
         self.base = Path(self.tmp.name)
         self.db_path = self.base / 'real.db'

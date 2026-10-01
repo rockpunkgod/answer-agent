@@ -1,8 +1,8 @@
-"""Build a local, type-scoped teaching allowlist for Workflow.teaching_paths.
+"""Verify teaching snapshots and guard the sole source for real operations.
 
-This snapshots only the audited gaokao-english skill entry, its delivery/router
-contract, the explicitly selected module, and dependencies required for that
-request. It does not call DeepSeek, inspect the desktop, or send a message.
+Legacy snapshots remain available for history and anonymous tests. New real
+generation and uploads require a pinned ANSWER source and course authorization.
+This module does not call DeepSeek, inspect the desktop, or send a message.
 """
 from __future__ import annotations
 
@@ -187,13 +187,25 @@ def build_bundle(*, question_type: str, output_root: str | Path,
     return manifest_path
 
 
-def verify_bundle(manifest_path: str | Path, *, check_sources: bool = True) -> dict:
+def verify_bundle(manifest_path: str | Path, *, check_sources: bool = True,
+                  for_generation: bool = False) -> dict:
     """Reject altered snapshots, changed source files, or path redirection."""
+    if for_generation and not check_sources:
+        raise TeachingBundleError('ANSWER_SOURCE_CHECK_REQUIRED')
     path = Path(manifest_path).resolve(strict=True)
     manifest = json.loads(path.read_text(encoding='utf-8'))
     if manifest.get('format_version') == 2:
         from .answer_teaching import verify_answer_bundle
-        return verify_answer_bundle(manifest_path, check_sources=check_sources)
+        manifest = verify_answer_bundle(manifest_path, check_sources=check_sources)
+        if for_generation:
+            missing = manifest.get('missing_dependencies', [])
+            if missing:
+                raise TeachingBundleError('ANSWER_REQUIRED_DEPENDENCIES_MISSING: ' + ', '.join(missing))
+            if manifest.get('answer_generation_allowed_by_course') is not True:
+                raise TeachingBundleError('ANSWER_TEACHING_NOT_ACTIVATED: source preview is not generation approval')
+        return manifest
+    if for_generation:
+        raise TeachingBundleError('ANSWER_SOURCE_REQUIRED: legacy teaching bundles are read-only')
     if manifest.get('skill') != 'gaokao-english':
         raise TeachingBundleError('Manifest has unexpected skill')
     root = Path(manifest['skill_root'])
@@ -242,4 +254,28 @@ def verify_bundle(manifest_path: str | Path, *, check_sources: bool = True) -> d
             source_bytes = source.read_bytes()
             if len(source_bytes) != item['bytes'] or sha256(source_bytes).hexdigest() != item['source_sha256']:
                 raise TeachingBundleError(f'Source hash mismatch: {relative}')
+    return manifest
+
+
+def verify_frozen_teaching(snapshot: dict) -> dict:
+    """Recheck the sole source before an upload or resumed generation."""
+    skills = snapshot.get('teaching_skills')
+    if not isinstance(skills, list) or not skills or any(not isinstance(s, dict) for s in skills):
+        raise TeachingBundleError('ANSWER_SOURCE_UNBOUND: re-freeze the reviewed question')
+    paths = [s.get('manifest_path') for s in skills]
+    if any(not isinstance(p, str) or not p.strip() for p in paths) or len(set(paths)) != 1:
+        raise TeachingBundleError('ANSWER_SOURCE_UNBOUND: re-freeze the reviewed question')
+    manifest = verify_bundle(paths[0], for_generation=True)
+    if [s.get('path') for s in skills] != manifest['workflow_teaching_paths']:
+        raise TeachingBundleError('ANSWER_FROZEN_FILES_CHANGED')
+    hashes = {entry['snapshot_path']: entry['snapshot_sha256'] for entry in manifest['files']}
+    for skill in skills:
+        if (skill.get('source') != 'verified_teaching_manifest'
+                or skill.get('reviewed_policy_id') != manifest['reviewed_policy_id']
+                or skill.get('question_type') != manifest['question_type']
+                or skill.get('sha256') != hashes.get(skill['path'])):
+            raise TeachingBundleError('ANSWER_FROZEN_SOURCE_CHANGED')
+        content = Path(skill['path']).read_bytes()
+        if sha256(content).hexdigest() != skill['sha256'] or content.decode('utf-8') != skill.get('content'):
+            raise TeachingBundleError('ANSWER_FROZEN_CONTENT_CHANGED')
     return manifest

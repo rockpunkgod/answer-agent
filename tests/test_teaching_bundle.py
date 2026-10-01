@@ -1,17 +1,18 @@
 import json
+from copy import deepcopy
 import shutil
 from hashlib import sha256
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from helpdesk import teaching_bundle as bundle_module
 from helpdesk.storage import Store
 from helpdesk.workflow import Workflow
 from helpdesk.teaching_bundle import (BASE_FILES, COURSE_EVIDENCE, EVIDENCE_GAPS,
                                       TYPE_MODULES, TeachingBundleError,
-                                      build_bundle, verify_bundle)
+                                      build_bundle, verify_bundle, verify_frozen_teaching)
 
 
 class TeachingBundleTests(unittest.TestCase):
@@ -158,6 +159,73 @@ class TeachingBundleTests(unittest.TestCase):
             Workflow(db, teaching_manifest=path)._skills()
         with self.assertRaisesRegex(ValueError, 'not both'):
             Workflow(db, teaching_manifest=path, teaching_paths=[self.skill / 'SKILL.md'])
+
+    def test_reviewed_legacy_bundle_is_readable_but_cannot_start_real_generation(self):
+        hashes = {relative: sha256((self.skill / relative).read_bytes()).hexdigest()
+                  for relative in bundle_module.REVIEWED_SOURCE_SHA256}
+        db = Store(self.base / 'source-gate.db');self.addCleanup(db.close)
+        adapter = Mock(identity='REAL_SOURCE_TEST', simulated=False)
+        with patch.object(bundle_module, 'DEFAULT_SKILL_ROOT', self.skill), \
+                patch.object(bundle_module, 'REVIEWED_SOURCE_SHA256', hashes):
+            path = self.bundle();original = path.read_bytes()
+            self.assertTrue(verify_bundle(path)['answer_generation_allowed_by_course'])
+            with self.assertRaisesRegex(TeachingBundleError, 'ANSWER_SOURCE_REQUIRED'):
+                Workflow(db, teaching_manifest=path, generation_adapter=adapter)._skills()
+            self.assertEqual(path.read_bytes(), original)
+            self.assertEqual(db.one('SELECT COUNT(*) FROM runs')[0], 0)
+            adapter.generate.assert_not_called()
+
+    def test_legacy_frozen_input_cannot_upload_or_resume_and_is_preserved(self):
+        from helpdesk.mcp_generation import PreparedDeepSeekGenerator
+        from helpdesk.mcp_preparation import DeepSeekSessionPreparer
+        path = self.bundle();manifest = verify_bundle(path)
+        skill_path = manifest['workflow_teaching_paths'][0]
+        snapshot = {'teaching_skills': [{'path': skill_path, 'manifest_path': str(path),
+            'sha256': manifest['files'][0]['snapshot_sha256']}], 'run_id': '1234567890123456'}
+        original = deepcopy(snapshot);transport = Mock()
+        evidence = self.base / 'not-created' / 'candidate.json'
+        for operation in (
+            lambda: DeepSeekSessionPreparer(transport, snapshot,
+                'https://chat.deepseek.com/a/chat/s/source-test', evidence, {}),
+            lambda: PreparedDeepSeekGenerator(transport, self.base / 'absent.json',
+                self.base / 'not-created').generate(snapshot),
+        ):
+            with self.assertRaisesRegex(TeachingBundleError, 'ANSWER_SOURCE_REQUIRED'):
+                operation()
+        transport.call.assert_not_called()
+        self.assertEqual(snapshot, original)
+        self.assertFalse(evidence.parent.exists())
+
+    def test_unbound_old_snapshot_stops_before_any_external_action(self):
+        for skills in (None, [], [None], [{}], [{'manifest_path': ['not-a-path']}],
+                       [{'manifest_path': 'one'}, {'manifest_path': 'two'}]):
+            with self.subTest(skills=skills), self.assertRaisesRegex(TeachingBundleError, 'ANSWER_SOURCE_UNBOUND'):
+                verify_frozen_teaching({'teaching_skills': skills})
+
+    def test_frozen_source_version_and_upload_bytes_must_match_verified_contract(self):
+        path = self.skill / 'SKILL.md';content = path.read_bytes();digest = sha256(content).hexdigest()
+        manifest = {'workflow_teaching_paths': [str(path)],
+            'files': [{'snapshot_path': str(path), 'snapshot_sha256': digest}],
+            'reviewed_policy_id': 'ANSWER@' + 'a' * 40, 'question_type': '阅读理解'}
+        skill = {'path': str(path), 'manifest_path': str(self.base / 'approved-manifest.json'),
+            'sha256': digest, 'content': content.decode('utf-8'), 'source': 'verified_teaching_manifest',
+            'reviewed_policy_id': manifest['reviewed_policy_id'], 'question_type': '阅读理解'}
+        # An approved contract is mocked only for frozen-input validation.
+        # Actual pinned source and inactive previews are tested separately.
+        with patch.object(bundle_module, 'verify_bundle', return_value=manifest) as verifier:
+            self.assertEqual(verify_frozen_teaching({'teaching_skills': [skill]}), manifest)
+            verifier.assert_called_with(skill['manifest_path'], for_generation=True)
+            for changes, reason in (({'reviewed_policy_id': 'ANSWER@' + 'b' * 40}, 'SOURCE_CHANGED'),
+                                    ({'question_type': '语法填空'}, 'SOURCE_CHANGED'),
+                                    ({'sha256': '0' * 64}, 'SOURCE_CHANGED'),
+                                    ({'source': 'operator_allowlist'}, 'SOURCE_CHANGED'),
+                                    ({'path': str(self.base / 'other.md')}, 'FILES_CHANGED'),
+                                    ({'content': 'invented summary'}, 'CONTENT_CHANGED')):
+                with self.subTest(changes=changes), self.assertRaisesRegex(TeachingBundleError, reason):
+                    verify_frozen_teaching({'teaching_skills': [skill | changes]})
+            path.write_text('changed after freezing', encoding='utf-8')
+            with self.assertRaisesRegex(TeachingBundleError, 'CONTENT_CHANGED'):
+                verify_frozen_teaching({'teaching_skills': [skill]})
 
     def test_type_must_be_explicit_and_uncovered_answer_is_refused(self):
         with self.assertRaisesRegex(TeachingBundleError, 'Explicit supported question type'):

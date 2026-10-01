@@ -85,7 +85,7 @@ def _run_existing_locked(store, run_id, preparation_path, manifest, *,
         raise ValueError('Workflow is stopped')
     workflow._require_confirmed_ack(row['turn_id'])
     if transport_factory is None:
-        transport_factory = lambda: MCPProcess(ROOT / '.venv-windows-mcp/Scripts/python.exe')
+        transport_factory = MCPProcess
     try:
         with transport_factory() as transport:
             if preparation.get('window_name'):
@@ -131,7 +131,7 @@ def main():
             return
         Workflow(store)._require_confirmed_ack(args.turn)
         preparation = json.loads(args.preparation.read_text(encoding='utf-8'))
-        with MCPProcess(ROOT / '.venv-windows-mcp/Scripts/python.exe') as transport:
+        with MCPProcess() as transport:
             if preparation.get('window_name'):
                 transport.call('App', {'mode': 'switch', 'name': preparation['window_name']})
             generator = PreparedDeepSeekGenerator(transport, args.preparation,
