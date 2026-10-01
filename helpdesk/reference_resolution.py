@@ -66,6 +66,32 @@ def unresolved_input(store, current):
         (current['case_id'],)))
 
 
+def student_evidence(store, row, question):
+    """Display stored observations; image links reuse the existing verified route."""
+    evidence = {'source_message_id': row['student_source_message'], 'question_source': question['source'],
+        'raw_material': row['student_raw_material'], 'raw_stem': question['raw_stem'],
+        'raw_options': [{'label': option['label'], 'raw_text': option['raw_text'], 'source': option['source']}
+                        for option in question['options']],
+        'uncertain_fields': question.get('uncertain_fields', []),
+        'student_sent_at': row['student_sent_at'], 'collected_at': row['student_observed_at'],
+        'images': [], 'image_status': 'NOT_BOUND'}
+    if all(store.one("SELECT name FROM sqlite_master WHERE name=? AND type='table'", (name,))
+           for name in ('source_question_drafts', 'operator_drafts')):
+        draft = store.one('''SELECT d.id FROM source_question_drafts s JOIN operator_drafts d ON d.id=s.draft_id
+            WHERE s.message_id=? AND d.base_version=? AND d.label='SOURCE_MESSAGE' LIMIT 1''',
+            (row['student_source_message'], row['student_version']))
+        if draft:
+            from .source_question_tasks import draft_source_info
+            try:
+                source = draft_source_info(store, draft['id'])
+                evidence['images'] = [{'draft_id': draft['id'], 'index': index}
+                                      for index in range(source['image_count'])]
+                evidence['image_status'] = 'AVAILABLE' if evidence['images'] else 'NO_IMAGES'
+            except (ValueError, OSError, KeyError, TypeError):
+                evidence['image_status'] = 'UNAVAILABLE'
+    return evidence
+
+
 class ReferenceResolution:
     def __init__(self, store):
         self.db = store
@@ -148,9 +174,12 @@ class ReferenceResolution:
             return candidate_id, comparison
 
     def list(self, question_id=None):
-        rows = self.db.all('''SELECT r.*,qv.payload AS student_payload,mv.verified_text AS student_material
+        rows = self.db.all('''SELECT r.*,qv.payload AS student_payload,mv.verified_text AS student_material,
+                mv.raw_text AS student_raw_material,qv.source_message AS student_source_message,
+                m.source_sent_at AS student_sent_at,m.observed_at AS student_observed_at
             FROM reference_candidates r JOIN question_versions qv ON qv.id=r.student_version
             LEFT JOIN material_versions mv ON mv.id=qv.material_version
+            LEFT JOIN messages m ON m.id=qv.source_message
             WHERE (? IS NULL OR qv.question_id=?) ORDER BY r.rowid DESC LIMIT 100''', (question_id, question_id))
         result = []
         for row in rows:
@@ -159,6 +188,7 @@ class ReferenceResolution:
             view['question_id'] = q['id']
             view['student_question'] = json.loads(row['student_payload'])
             view['student_material'] = row['student_material']
+            view['student_evidence'] = student_evidence(self.db, row, view['student_question'])
             view['current_context_revision'] = q['context_revision']
             view['input_pending_review'] = unresolved_input(self.db, q)
             view['can_confirm'] = (not view['stale'] and not view['input_pending_review']

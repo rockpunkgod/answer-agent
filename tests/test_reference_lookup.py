@@ -282,10 +282,10 @@ class ReferenceLookupTests(unittest.TestCase):
         self.assertEqual(store.one("SELECT json_extract(comparison,'$.candidate.state') FROM reference_candidates")[0], 'MATCHED_CANDIDATE')
         self.assertEqual(app.context(outcome.turn_id)['references'], [])
         with self.assertRaises(ValueError):
-            lookup.apply(store, report['lookup_key'], reviewer='synthetic-reviewer')
+            lookup.apply(store, report['lookup_key'], reviewer='synthetic-reviewer', reason='匿名样例：核对题面与映射')
         apply = ReferenceLookup(replace(self.config, shadow=False))
-        apply.apply(store, report['lookup_key'], reviewer='synthetic-reviewer')
-        apply.apply(store, report['lookup_key'], reviewer='synthetic-reviewer')
+        apply.apply(store, report['lookup_key'], reviewer='synthetic-reviewer', reason='匿名样例：核对题面与映射')
+        apply.apply(store, report['lookup_key'], reviewer='synthetic-reviewer', reason='匿名样例：核对题面与映射')
         self.assertEqual(store.one('SELECT COUNT(*) FROM reference_candidates')[0], 1)
         self.assertEqual(store.one('SELECT source_sent_at FROM messages WHERE id=?', (outcome.message_id,))[0], self.snapshot['original_question_time'])
         self.assertEqual(store.one('SELECT COUNT(*) FROM answers')[0], 0)
@@ -302,7 +302,7 @@ class ReferenceLookupTests(unittest.TestCase):
         self.assertTrue(report['stale'])
         lookup.config = replace(lookup.config, shadow=False)
         with self.assertRaisesRegex(ValueError, 'stale'):
-            lookup.apply(store, report['lookup_key'], reviewer='synthetic-reviewer')
+            lookup.apply(store, report['lookup_key'], reviewer='synthetic-reviewer', reason='匿名样例：核对题面与映射')
         self.assertEqual(store.one('SELECT COUNT(*) FROM reference_candidates')[0], 0)
         self.assertTrue(lookup.reports(store)[0]['stale'])
 
@@ -367,7 +367,7 @@ class ReferenceLookupTests(unittest.TestCase):
             self.assertEqual(reused['next_action'], 'MANUAL_REVIEW')
             self.assertTrue(reused['evidence_expired_or_unavailable'])
             with self.assertRaises(ValueError):
-                lookup.apply(store, report['lookup_key'], reviewer='synthetic-reviewer')
+                lookup.apply(store, report['lookup_key'], reviewer='synthetic-reviewer', reason='匿名样例：核对题面与映射')
         app.correct_material(question['material_id'], outcome.message_id, 'Synthetic changed passage', 'Synthetic changed passage')
         self.assertTrue(lookup.reports(store)[0]['stale'])
         self.assertEqual(lookup.reports(store)[0]['next_action'], 'MANUAL_REVIEW')

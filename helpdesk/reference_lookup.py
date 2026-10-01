@@ -826,10 +826,13 @@ class ReferenceLookup:
             self._require_consumption_source(candidate_view(row))
         return ReferenceResolution(store).review(candidate_id, consume=consume, **review)
 
-    def apply(self, store, lookup_key, *, reviewer):
+    def apply(self, store, lookup_key, *, reviewer, reason=None):
         """Explicit existing-review consumption; adds reference only, never fills student fields."""
-        if not self.config.enabled or self.config.shadow or not isinstance(reviewer, str) or not reviewer.strip():
-            raise ValueError('Shadow reports cannot be consumed; explicit reviewer required')
+        if not self.config.enabled or self.config.shadow:
+            raise ValueError('Shadow reports cannot be consumed')
+        if (not isinstance(reviewer, str) or not 0 < len(reviewer.strip()) <= 80
+                or not isinstance(reason, str) or not 0 < len(reason.strip()) <= 2000):
+            raise ValueError('Explicit reviewer and actual review rationale required')
         if not isinstance(lookup_key, str) or not re.fullmatch('[0-9a-f]{64}', lookup_key):
             raise ValueError('Invalid lookup key')
         report = self._cache('verification', lookup_key)
@@ -851,7 +854,7 @@ class ReferenceLookup:
         if not match.get('candidate_id'):
             raise ValueError('Reference candidate storage is not approved')
         self.review_candidate(store, match['candidate_id'], question_version=report['question_version'],
-            context_revision=report['context_revision'], reviewer=reviewer, reason='人工核对来源与逐字段比较结果',
+            context_revision=report['context_revision'], reviewer=reviewer, reason=reason,
             decision='confirm')
         snapshot = student_snapshot(store, report['question_id'], report['question_version'], report['context_revision'])
         return compare('lookup:' + lookup_key, Question.from_dict(match['reference_question']), match['reference_material'],

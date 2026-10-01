@@ -11,6 +11,7 @@ from PIL import Image
 from helpdesk.collector_dispatch import CollectorDispatcher
 from helpdesk.collector_storage import CollectorStore
 from helpdesk.service import Helpdesk
+from helpdesk.reference_resolution import ReferenceResolution
 from helpdesk.source_question_tasks import SourceQuestionTasks
 from helpdesk.workflow import Workflow
 from tests import test_demo_real_http as http_fixture
@@ -82,6 +83,28 @@ class SourceQuestionHTTPTests(unittest.TestCase):
         result = response.status, dict(response.getheaders()), response.read()
         connection.close()
         return result
+
+    def test_reference_card_reuses_verified_source_preview_and_detects_changed_image(self):
+        app = Helpdesk(self.store)
+        context = app.context(self.outcome.turn_id)
+        resolution = ReferenceResolution(self.store)
+        resolution.add(context['question_version'], 'anonymous-reference', app.question(context['question_version']),
+            context['student_material'], 'SELF_AUTHORED_FIXTURE')
+        before = self.persisted()
+        view = resolution.list(context['question_id'])[0]
+        self.assertEqual(view['student_evidence']['images'], [{'draft_id': self.draft['id'], 'index': 0}])
+        self.assertEqual(view['student_evidence']['image_status'], 'AVAILABLE')
+        self.assertNotIn(str(self.photo), str(view['student_evidence']))
+        self.assertEqual(before, self.persisted())
+        code, headers, data = self.image_request('draft_id=' + self.draft['id'] + '&index=0')
+        self.assertEqual(code, 200)
+        self.assertEqual(sha256(data).hexdigest(), sha256(self.photo.read_bytes()).hexdigest())
+        self.photo.write_bytes(b'Changed anonymous image fixture')
+        evidence = resolution.list(context['question_id'])[0]['student_evidence']
+        self.assertEqual(evidence['images'], [])
+        self.assertEqual(evidence['image_status'], 'UNAVAILABLE')
+        self.assertEqual(self.image_request('draft_id=' + self.draft['id'] + '&index=0')[0], 404)
+        self.actor.assert_not_called()
 
     def test_get_original_source_and_image_mime_hash_are_readonly(self):
         before = self.persisted()

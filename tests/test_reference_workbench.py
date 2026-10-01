@@ -89,7 +89,8 @@ class ReferenceWorkbenchHTTPTests(unittest.TestCase):
         with closing(Store(self.server.db_path)) as store:
             report = self.server.reference_lookup.run_for_question(store, self.payload['question_id'],
                 self.payload['question_version'], self.payload['context_revision'], trigger='clean_copy', fixtures=['demo.html'])
-        apply = {'action': 'apply', 'lookup_key': report['lookup_key'], 'reviewer': 'synthetic-reviewer'}
+        apply = {'action': 'apply', 'lookup_key': report['lookup_key'], 'reviewer': 'synthetic-reviewer',
+                 'reason': '匿名样例：核对原文、题干和四个学生选项一致'}
         self.assertEqual(self.request('POST', '/api/reference-lookups', apply)[0], 400)
         self.server.reference_lookup.config = replace(self.config, shadow=False)
         self.assertEqual(self.request('POST', '/api/reference-lookups', apply)[0], 200)
@@ -109,6 +110,29 @@ class ReferenceWorkbenchHTTPTests(unittest.TestCase):
                         {**self.payload, 'question_id': 'not-a-real-question'},
                         {**self.payload, 'candidate_urls': ['https://example.org'] * 7}):
             self.assertEqual(self.request('POST', '/api/reference-lookups', payload)[0], 400)
+
+    def test_legacy_apply_requires_actual_review_reason_before_confirmation(self):
+        review = self.candidate_review()
+        self.server.reference_lookup.config = replace(self.config, shadow=False)
+        report = self.request('GET', '/api/reference-lookups')[1]['reports'][0]
+        payload = {'action': 'apply', 'lookup_key': report['lookup_key'], 'reviewer': '匿名核对人'}
+        for change in ({}, {'reason': ''}, {'reason': '   '}, {'reason': 42}, {'reason': 'x' * 2001}):
+            self.assertEqual(self.request('POST', '/api/reference-lookups', {**payload, **change})[0], 400)
+        with closing(Store(self.server.db_path)) as store:
+            candidate = json.loads(store.one('SELECT comparison FROM reference_candidates WHERE id=?',
+                (review['candidate_id'],))[0])['candidate']
+            self.assertEqual(candidate['state'], 'MATCHED_CANDIDATE')
+            self.assertIsNone(candidate['confirmed_by'])
+        reason = '人工逐项核对原文、否定条件、四个选项和学生字母映射'
+        self.assertEqual(self.request('POST', '/api/reference-lookups', {**payload, 'reason': reason})[0], 200)
+        self.assertEqual(self.request('POST', '/api/reference-lookups', {**payload, 'reason': '再次查看同一依据'})[0], 200)
+        with closing(Store(self.server.db_path)) as store:
+            candidate = json.loads(store.one('SELECT comparison FROM reference_candidates WHERE id=?',
+                (review['candidate_id'],))[0])['candidate']
+            self.assertEqual(candidate['confirmation_reason'], reason)
+            self.assertEqual(store.one("SELECT COUNT(*) FROM audit WHERE event='REFERENCE_CANDIDATE_CONFIRMED'")[0], 1)
+            self.assertEqual(store.one('SELECT COUNT(*) FROM answers')[0], 0)
+            self.assertEqual(store.one('SELECT COUNT(*) FROM performance_units')[0], 0)
 
     def test_broken_optional_config_does_not_stop_original_workbench(self):
         broken = self.root / 'broken.toml'
@@ -250,6 +274,11 @@ class ReferenceWorkbenchUITests(unittest.TestCase):
                 'source': '<img src=x onerror="window.injected=true">', 'source_url': 'https://fixtures.invalid/example',
                 'content_hash': 'a' * 64, 'can_confirm': True, 'can_reject': True, 'can_use': False,
                 'confidence_level': 'SECRET_CONFIDENCE', 'debug_log': 'NEVER_SHOW_TRACE',
+                'student_evidence': {'source_message_id': 'anonymous-message', 'question_source': 'anonymous-OCR',
+                    'raw_material': '<img src=x onerror="window.rawInjected=true">', 'raw_stem': 'OCR: NOT unclear',
+                    'student_sent_at': '2026-09-30T22:58:00+08:00', 'collected_at': '2026-09-30T23:05:00+08:00',
+                    'uncertain_fields': ['stem'], 'raw_options': [], 'images': [
+                        {'draft_id': 'a' * 32, 'index': 0}, {'draft_id': 'https://other.invalid', 'index': 0}]},
                 'comparison_result': {'relation': ['SAME_CONTENT'], 'evidence': [], 'field_differences': []}}
             data = {'enabled': True, 'shadow': True, 'questions': [{'question_id': 'question', 'question_version': 'version',
                 'context_revision': 2, 'label': '匿名学生'}], 'reports': [], 'reference_candidates': [candidate]}
@@ -278,10 +307,18 @@ class ReferenceWorkbenchUITests(unittest.TestCase):
             button.click();page.get_by_text('已人工确认', exact=True).wait_for()
             self.assertEqual(posts, [{'action': 'review_candidate', 'candidate_id': 'candidate', 'question_version': 'version',
                 'context_revision': 2, 'decision': 'confirm', 'reviewer': '匿名核对人', 'reason': '核对必要原文一致'}])
+            page.get_by_text('查看原始识别文本与消息出处', exact=True).click()
             body = page.locator('#reference-lookup-panel').inner_text()
             self.assertNotIn('SECRET_CONFIDENCE', body);self.assertNotIn('NEVER_SHOW_TRACE', body)
             self.assertEqual(page.locator('#reference-lookup-panel img').count(), 0)
             self.assertIsNone(page.evaluate('window.injected'))
+            self.assertIsNone(page.evaluate('window.rawInjected'))
+            self.assertIn('OCR: NOT unclear', body)
+            self.assertIn('学生原始发送时间：2026-09-30T22:58:00+08:00', body)
+            self.assertIn('采集时间：2026-09-30T23:05:00+08:00', body)
+            link = page.get_by_role('link', name='查看原图 1', exact=True)
+            self.assertEqual(link.count(), 1)
+            self.assertEqual(link.get_attribute('href'), '/api/source-question-image?draft_id=' + 'a' * 32 + '&index=0')
             self.assertEqual(page.get_by_role('button', name='用于答疑', exact=True).count(), 0)
 
 

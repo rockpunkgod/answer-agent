@@ -1050,8 +1050,8 @@ class DemoHandler(BaseHTTPRequestHandler):
                             reviewer=payload['reviewer'], reason=payload['reason'])
                         self._json(200, {'result': result})
                         return
-                    if payload.get('action') == 'apply' and set(payload) == {'action', 'lookup_key', 'reviewer'}:
-                        comparison = lookup.apply(store, payload['lookup_key'], reviewer=payload['reviewer'])
+                    if payload.get('action') == 'apply' and set(payload) == {'action', 'lookup_key', 'reviewer', 'reason'}:
+                        comparison = lookup.apply(store, payload['lookup_key'], reviewer=payload['reviewer'], reason=payload['reason'])
                         self._json(200, {'result': {'reference_only': True, 'reason': comparison.reason}})
                         return
                     fields = {'action', 'question_id', 'question_version', 'context_revision', 'trigger', 'candidate_urls'}

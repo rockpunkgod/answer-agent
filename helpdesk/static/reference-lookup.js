@@ -50,6 +50,25 @@
       if(difference.reference_value!=null)item.append(text('pre',`参考：${difference.reference_value}`));
     }
   }
+  function observation(item,source){
+    if(!source)return;
+    const detail=text('details','');detail.append(text('summary','查看原始识别文本与消息出处'),
+      text('p','原始识别或录入文本仅供核对，不等于已核验题面。'),
+      text('p',`来源消息：${source.source_message_id||'未取得'} · 题面出处：${source.question_source||'未取得'}`),
+      text('p',`学生原始发送时间：${source.student_sent_at||'待核验'}\n采集时间：${source.collected_at||'未取得'}`),
+      text('pre',`${source.raw_material||'材料原文未取得'}\n\n${source.raw_stem||'题干原文未取得'}\n`
+        +(source.raw_options||[]).map(o=>`${o.label}. ${o.raw_text||'未取得'}（出处：${o.source||'未取得'}）`).join('\n')));
+    if(source.uncertain_fields?.length)detail.append(text('p','尚未核验：'+source.uncertain_fields.join('、')));
+    for(const image of source.images||[]){
+      if(!/^[0-9a-f]{32}$/.test(image.draft_id)||!Number.isInteger(image.index)||image.index<0||image.index>=20)continue;
+      const link=text('a',`查看原图 ${image.index+1}`);
+      link.href='/api/source-question-image?'+new URLSearchParams({draft_id:image.draft_id,index:image.index});
+      link.target='_blank';link.rel='noopener';detail.append(link,text('br',''));
+    }
+    if(!source.images?.length)detail.append(text('p',source.image_status==='NO_IMAGES'
+      ?'该来源消息没有原图。':'原图尚不能在此处可靠预览，请在题面入口核对来源。'));
+    item.append(detail);
+  }
   function candidateCard(candidate){
     const item=text('article','');item.className='entry';
     item.append(text('strong',label(candidate.state)),text('p',label(candidate.resolution_status)),
@@ -63,6 +82,7 @@
       text('pre','学生题：\n'+questionText(candidate.student_question,candidate.student_material)),
       text('pre','候选参考：\n'+questionText(candidate.reference_question,candidate.reference_material)));
     evidence(detail,candidate.comparison_result||{});item.append(detail);
+    observation(item,candidate.student_evidence);
     if(candidate.confirmed_by)item.append(text('p',`核对人：${candidate.confirmed_by} · ${candidate.confirmed_at}\n依据：${candidate.confirmation_reason}`));
     if(candidate.state==='CONFIRMED')item.append(text('p',candidate.consumption_enabled?'已允许辅助当前版本答疑。':'已保存确认；Shadow 模式中尚未用于答疑。'));
     if(candidate.can_confirm||candidate.can_reject||candidate.can_use){

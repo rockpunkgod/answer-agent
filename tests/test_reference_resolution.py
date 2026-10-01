@@ -232,6 +232,32 @@ class ReferenceResolutionTests(unittest.TestCase):
         self.assertNotIn('CONDITION_CHANGED', comparison.relation)
         self.assertNotIn('NOT_DIFFERENCE', comparison.relation)
 
+    def test_candidate_exposes_original_observation_without_promoting_raw_OCR(self):
+        raw_question = replace(self.student, raw_stem='OCR: not clearly identified',
+            verified_stem=None, uncertain_fields=('stem',))
+        outcome = self.app.ingest(Incoming(self.binding, '匿名补图请求', Intent.NEW,
+            source='anonymous-fixture', verified_question=raw_question,
+            raw_material='OCR observation only', verified_material=None,
+            source_sent_at='2026-09-30T22:58:00+08:00', observed_at='2026-09-30T23:05:00+08:00',
+            source_time_evidence={'source': 'operator_verified_original', 'message_locator': 'anonymous-ocr-fixture',
+                                  'evidence': 'Explicit synthetic boundary time; no real message modified'}))
+        version = self.db.one('SELECT current_version FROM questions WHERE id=?', (outcome.question_id,))[0]
+        candidate, comparison = self.resolution.add(version, 'reference-ocr', self.student, self.material,
+            'SELF_AUTHORED_FIXTURE', provenance=self.provenance)
+        tables = ('messages', 'question_versions', 'material_versions', 'audit')
+        before = {table: [tuple(row) for row in self.db.all('SELECT * FROM ' + table)] for table in tables}
+        view = self.resolution.list(outcome.question_id)[0]
+        evidence = view['student_evidence']
+        self.assertEqual(evidence['source_message_id'], outcome.message_id)
+        self.assertEqual(evidence['raw_material'], 'OCR observation only')
+        self.assertEqual(evidence['raw_stem'], raw_question.raw_stem)
+        self.assertEqual(evidence['student_sent_at'], '2026-09-30T22:58:00+08:00')
+        self.assertEqual(evidence['collected_at'], '2026-09-30T23:05:00+08:00')
+        self.assertEqual(evidence['images'], [])
+        self.assertEqual(comparison.resolution_status, 'INCOMPLETE')
+        self.assertFalse(view['can_confirm'])
+        self.assertEqual(before, {table: [tuple(row) for row in self.db.all('SELECT * FROM ' + table)] for table in tables})
+
     def test_blank_material_and_ambiguous_options_do_not_match(self):
         self.assertEqual(compare('r', self.student, '', 's', self.student, '').resolution_status, 'INCOMPLETE')
         reference = replace(self.student, options=tuple(Option.confirmed(label, 'Repeated identical answer.', i, 'r')

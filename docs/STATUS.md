@@ -158,6 +158,18 @@
 
 仍有的范围缺口：精确匹配仅支持完整材料与四选项客观题；本地抓取支持UTF-8文本/HTML，网页结构提取尚未做真实站点验证；Crawl4AI浏览器抓取没有接入。联网题库命中、固定ANSWER下真实DeepSeek上传/生成、真实群交付仍未验收。默认检索关闭与Shadow保留，不将模拟通过显示为完整闭环上线。
 
+## 题目身份确认依据与原始出处补齐（2026-10-02）
+
+基线为`e38c5846036ce4f8e848bc68c8f7f0fd4f608544`。上一轮只读审计后，新匿名HTTP用例实际复现：旧`apply`只接受核对人、自动填写固定确认理由，未提供具体依据仍返回成功。本批要求该兼容入口显式提供`reason`，先校验再复用现有候选审核；无依据或格式无效不进入确认。重复登记保留首次核对人、时间与理由，未创建答案或绩效。未改动候选状态、精确比较和来源使用许可。
+
+现有候选卡增加只读原始出处：版本对应的原始材料、题干、各选项出处、来源消息、原始发送时间与采集时间。原始识别/录入文本与已核验字段分开显示，缺项仍为INCOMPLETE，不能凭原始OCR或候选补齐。当前版本原图复用已有`source-question-image`入口，先核验来源与附件哈希，只提供草稿ID和索引；浏览器不取得本机路径，不下载外站图片。无绑定或原图变化时显示不能可靠预览。预览仍遵守原有题面入口开关，不新增真实采集能力或上传权限。
+
+相关命令：`python -X utf8 -B -m unittest tests.test_reference_resolution tests.test_reference_providers tests.test_reference_lookup tests.test_reference_fetch tests.test_reference_workbench tests.test_core tests.test_source_question_http tests.test_source_question_tasks tests.test_manual_delivery_registration`。实际176项通过、0失败、0跳过，30.524秒。新增用例覆盖无依据确认被拒绝、原始OCR不提升为确认题面、22:58原始时间与23:05采集时间分开显示，以及源图片哈希变化后不可预览；既有串题、旧版本拦截和交付回流回归继续通过。UI用例中折叠证据需展开后读取可见文本，修正操作后保留原有安全与审核断言。
+
+验证分层：匿名SQLite、Mock抓取/桌面、本机HTTP及无界面浏览器通过；本批无跳过。真实ANSWER工作树仍为干净提交`57159d7a8b03a0743225ed27f3f1e6128bbcd45d`，客观题必需检查脚本缺项未变。本轮Luna medium独立只读执行三项Windows-MCP元数据调用，全部返回；屏幕2企业微信主窗口仍无法唯一确认，`VISIBLE_SCREEN2_WECOM_MAIN_WINDOW_UNAVAILABLE`。MCP子进程关闭后实际退出；没有读取聊天内容、输入、上传或发送。真实题库检索、固定ANSWER下DeepSeek生成与真实交付仍未验收。
+
+本批未新增依赖、数据库表或迁移，未修改ANSWER规则、绩效规则、真实时间及8767运行配置。原有未提交的`manual_delivery.py`与`source_question_tasks.py`改动保留，未作为本批提交；上述相关结果属于当前本地工作树，不将其声称为远端完整闭环验收。后续继续完成已采集老师回复的实际交付关联，再补真实自动采集与网页链路。
+
 ## 已可使用
 
 - 一个 PowerShell 入口启动本地工作台，缺可选采集配置或讲解目录仍能查看台账；复用服务不会自动恢复暂停。
