@@ -37,7 +37,7 @@ def _normalize(value):
 
 def _frozen_files(snapshot, evidence_directory=None):
     try:
-        text = prepare_question_text(snapshot, evidence_directory, create=False) if not snapshot['attachments'] else None
+        text = prepare_question_text(snapshot, evidence_directory, create=False) if not snapshot['attachments'] or snapshot.get('references') else None
         return _files(snapshot, question_text_path=text['path'] if text else None)
     except (ValueError, OSError) as exc:
         raise PreparationReviewError(str(exc)) from exc
@@ -188,6 +188,9 @@ def review_preparation(snapshot: dict, candidate_path, review_path, output_path,
     active_window = re.search(r'window "([^\n]+)"', active_tree)
     _require(active_window is not None, 'Reviewed Edge window title is missing')
     preparation['window_name'] = active_window[1]
+    text_file = next((x for x in files if x['kind'] == 'question_text'), None)
+    if text_file:
+        preparation['question_text_file'] = text_file
     if not images:
         preparation.update(reviewed_question_text=review['reviewed_question_text'],
             reviewed_input_fingerprint=review['reviewed_input_fingerprint'],

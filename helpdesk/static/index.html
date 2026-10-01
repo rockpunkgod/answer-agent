@@ -7,6 +7,7 @@
   <link rel="stylesheet" href="/style.css">
   <script src="/app.js" defer></script>
   <script src="/worker-control.js" defer></script>
+  <script src="/reference-lookup.js" defer></script>
 </head>
 <body>
   <header class="hero">
@@ -18,6 +19,24 @@
     </div>
   </header>
   <main class="wrap">
+    <section id="reference-lookup-panel" class="card" hidden>
+      <div class="section-title"><div><h2>原题核对</h2><p>仅在模糊、缺页或版本疑点时查找。候选原题不替换学生版本，不代表完成答疑。</p></div></div>
+      <div id="reference-lookup-mode" role="status"></div>
+      <button id="reference-lookup-refresh" type="button" class="secondary">刷新题目与报告</button>
+      <form id="reference-lookup-form">
+        <label for="reference-question">待核对题目</label><select id="reference-question" required></select>
+        <label for="reference-trigger">核对原因</label><select id="reference-trigger">
+          <option value="blurred">局部模糊</option><option value="missing_material">缺页或漏拍</option>
+          <option value="clean_copy">寻找干净题面</option><option value="version_difference">版本疑点</option>
+          <option value="manual_source">人工查找来源</option>
+        </select>
+        <label for="reference-urls">候选网页（可选，每行一个）</label><textarea id="reference-urls" rows="3" maxlength="18000"></textarea>
+        <label><input id="reference-retry" type="checkbox">已核对失败或过期原因，重新执行检索</label>
+        <button type="submit">生成内部核对报告</button>
+      </form>
+      <div id="reference-lookup-status" role="status" aria-live="polite"></div>
+      <div id="reference-lookup-reports"></div>
+    </section>
     <section id="answer-review-panel" class="card" hidden>
       <div class="section-title"><div><h2>DeepSeek 讲解</h2><p>保留完整原文供查看或复制；交付方式以当前阶段为准。</p></div></div>
       <div id="answer-review-packets"></div>

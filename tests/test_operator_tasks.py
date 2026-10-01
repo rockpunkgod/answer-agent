@@ -10,6 +10,7 @@ from helpdesk.operator_tasks import OperatorTasks
 from helpdesk.service import Helpdesk
 from helpdesk.storage import Store
 from helpdesk.teaching_bundle import build_bundle
+from helpdesk import teaching_bundle as teaching_module
 
 
 class OperatorTaskTests(unittest.TestCase):
@@ -18,6 +19,17 @@ class OperatorTaskTests(unittest.TestCase):
         self.base = Path(self.tmp.name)
         self.db = Store(self.base / 'local.db')
         self.intake = OperatorTasks(self.db)
+        # Test only the manifest consumer here. No mutable personal Skill path
+        # or real ANSWER rules are fixtures for an operator-entry unit test.
+        self.skill_root = self.base / 'anonymous-course-fixture'
+        fixture_hashes = {}
+        for relative in (*teaching_module.BASE_FILES, teaching_module.EVIDENCE_GAPS,
+                         teaching_module.TYPE_MODULES['阅读理解'], teaching_module.TYPE_MODULES['语法填空']):
+            path = self.skill_root / relative;path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('# Anonymous course contract fixture: ' + relative + '\n', encoding='utf-8')
+            fixture_hashes[relative] = sha256(path.read_bytes()).hexdigest()
+        for key, value in (('DEFAULT_SKILL_ROOT', self.skill_root), ('REVIEWED_SOURCE_SHA256', fixture_hashes)):
+            contract = patch.object(teaching_module, key, value);contract.start();self.addCleanup(contract.stop)
         self.payload = {'passage': 'John went home to look after his mother.',
             'stem': 'Why did John go home?', 'number': '12', 'question_type': '阅读理解',
             'options': {'A': 'To visit a friend.', 'B': 'To take a holiday.',
@@ -142,7 +154,7 @@ class OperatorTaskTests(unittest.TestCase):
         self.assertEqual(self.db.one('SELECT COUNT(*) FROM messages')[0], 2)
 
     def test_manifest_type_mismatch_rejects_before_freezing(self):
-        manifest = build_bundle(question_type='语法填空', output_root=self.base / 'bundles')
+        manifest = build_bundle(question_type='语法填空', skill_root=self.skill_root, output_root=self.base / 'bundles')
         task = self.review(self.intake.create_draft(self.payload))
         with self.assertRaisesRegex(ValueError, 'question type differs'):
             self.intake.freeze(task['id'], teaching_manifest=manifest,
@@ -150,7 +162,7 @@ class OperatorTaskTests(unittest.TestCase):
         self.assertEqual(self.db.one('SELECT COUNT(*) FROM runs')[0], 0)
 
     def test_freeze_verified_manifest_only_no_generator_or_desktop_calls(self):
-        manifest = build_bundle(question_type='阅读理解', output_root=self.base / 'bundles')
+        manifest = build_bundle(question_type='阅读理解', skill_root=self.skill_root, output_root=self.base / 'bundles')
         task = self.review(self.intake.create_draft(self.payload))
         config = dict(teaching_manifest=manifest, preparation_path=self.base / 'future-preparation.json',
                       evidence_dir=self.base / 'future-evidence')

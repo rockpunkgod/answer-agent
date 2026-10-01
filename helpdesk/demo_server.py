@@ -377,7 +377,7 @@ def perform_real(store, action, config, *, generator=None, transport_factory=Non
 class DemoHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, address: tuple[str, int], db_path: Path, *, real_config=None, real_generator=None, transport_factory=None, desktop_factory=None, native_archive_root=None, collector_config=None, processing_mode="COMPATIBILITY", collector_source_factory=None, answer_review_root=None, worker_boundary=False, worker_policy=None, worker_token_env='HELPDESK_WORKER_TOKEN', performance_enabled=None, source_review_manifest=None):
+    def __init__(self, address: tuple[str, int], db_path: Path, *, real_config=None, real_generator=None, transport_factory=None, desktop_factory=None, native_archive_root=None, collector_config=None, processing_mode="COMPATIBILITY", collector_source_factory=None, answer_review_root=None, worker_boundary=False, worker_policy=None, worker_token_env='HELPDESK_WORKER_TOKEN', performance_enabled=None, source_review_manifest=None, reference_lookup_config=None):
         if address[0] != "127.0.0.1":
             raise ValueError("演示服务只允许绑定 127.0.0.1")
         if processing_mode not in {"COMPATIBILITY", "ACK_ONLY"}:
@@ -387,6 +387,14 @@ class DemoHTTPServer(ThreadingHTTPServer):
         if performance_enabled is not None and type(performance_enabled) is not bool:
             raise ValueError("performance_enabled must be a boolean")
         self.processing_mode = processing_mode
+        from .reference_lookup import LookupConfig, ReferenceLookup
+        self.reference_lookup_error = None
+        try:
+            self.reference_lookup = ReferenceLookup(LookupConfig.load(reference_lookup_config)
+                if reference_lookup_config else LookupConfig())
+        except (ValueError, OSError):
+            self.reference_lookup = ReferenceLookup(LookupConfig())
+            self.reference_lookup_error = 'CONFIG_UNAVAILABLE_OR_INVALID'
         self.worker_boundary = bool(worker_boundary)
         self.worker_token_worker_id = None
         # Credentials stay in the process environment, not DB/logs/HTTP state.
@@ -886,6 +894,25 @@ class DemoHandler(BaseHTTPRequestHandler):
             self._json(200, {"records": records, "count": len(records),
                              "coverage_complete": False, "formal_statistics_eligible": False})
             return
+        if route == '/api/reference-lookups':
+            lookup = self.server.reference_lookup
+            with _store(self.server.db_path) as store:
+                reports = lookup.reports(store) if lookup.config.enabled else []
+                candidates = lookup.candidates(store) if lookup.config.enabled else []
+                questions = []
+                if lookup.config.enabled:
+                    for row in store.all('''SELECT q.id,q.current_version,q.context_revision,b.display_name,qv.payload,mv.verified_text
+                        FROM questions q JOIN cases c ON c.id=q.case_id JOIN bindings b ON b.id=c.binding_id
+                        JOIN question_versions qv ON qv.id=q.current_version
+                        LEFT JOIN material_versions mv ON mv.id=qv.material_version ORDER BY q.rowid DESC LIMIT 100'''):
+                        question = json.loads(row['payload'])
+                        questions.append({'question_id': row['id'], 'question_version': row['current_version'],
+                            'context_revision': row['context_revision'], 'label': row['display_name'] + ' · 第' + question['number'] + '题',
+                            'student_question': question, 'student_material': row['verified_text']})
+            self._json(200, {'enabled': lookup.config.enabled, 'shadow': lookup.config.shadow,
+                'network_enabled': lookup.config.network_enabled, 'error': self.server.reference_lookup_error,
+                'reports': reports, 'questions': questions, 'reference_candidates': candidates})
+            return
         if route == "/api/performance":
             from datetime import datetime
             from .performance import PerformanceLedger
@@ -933,6 +960,7 @@ class DemoHandler(BaseHTTPRequestHandler):
             return
         files = {"/": ("index.html", "text/html; charset=utf-8"),
                  "/worker-control.js": ("worker-control.js", "text/javascript; charset=utf-8"),
+                 "/reference-lookup.js": ("reference-lookup.js", "text/javascript; charset=utf-8"),
                  "/app.js": ("app.js", "text/javascript; charset=utf-8"),
                  "/style.css": ("style.css", "text/css; charset=utf-8")}
         selected = files.get(route)
@@ -951,7 +979,7 @@ class DemoHandler(BaseHTTPRequestHandler):
         if route.startswith('/api/worker/'):
             self._worker_post(route)
             return
-        if route not in ("/api/action", "/api/operator-tasks"):
+        if route not in ("/api/action", "/api/operator-tasks", '/api/reference-lookups'):
             self._json(404, {"error": "接口不存在"})
             return
         expected_origin = f"http://127.0.0.1:{self.server.server_port}"
@@ -966,9 +994,45 @@ class DemoHandler(BaseHTTPRequestHandler):
             return
         try:
             size = int(self.headers.get("Content-Length", "0"))
-            if not 0 < size <= (65536 if route == '/api/operator-tasks' else 1024):
+            if not 0 < size <= (65536 if route in ('/api/operator-tasks', '/api/reference-lookups') else 1024):
                 raise ValueError("请求大小无效")
             payload = json.loads(self.rfile.read(size))
+            if route == '/api/reference-lookups':
+                lookup = self.server.reference_lookup
+                if not lookup.config.enabled:
+                    self._json(409, {'error': '原题检索未启用，原答疑流程继续使用'})
+                    return
+                if not isinstance(payload, dict):
+                    raise ValueError('原题核对请求格式无效')
+                with _store(self.server.db_path) as store:
+                    review_fields = {'action', 'candidate_id', 'question_version', 'context_revision', 'decision', 'reviewer', 'reason'}
+                    if payload.get('action') == 'review_candidate':
+                        if (set(payload) != review_fields or type(payload.get('context_revision')) is not int
+                                or any(not isinstance(payload.get(key), str) or not 0 < len(payload[key]) <= 128
+                                       for key in ('candidate_id', 'question_version'))):
+                            raise ValueError('候选审核仅接受已有候选、当前版本、核对人和具体依据')
+                        result = lookup.review_candidate(store, payload['candidate_id'], question_version=payload['question_version'],
+                            context_revision=payload['context_revision'], decision=payload['decision'],
+                            reviewer=payload['reviewer'], reason=payload['reason'])
+                        self._json(200, {'result': result})
+                        return
+                    if payload.get('action') == 'apply' and set(payload) == {'action', 'lookup_key', 'reviewer'}:
+                        comparison = lookup.apply(store, payload['lookup_key'], reviewer=payload['reviewer'])
+                        self._json(200, {'result': {'reference_only': True, 'reason': comparison.reason}})
+                        return
+                    fields = {'action', 'question_id', 'question_version', 'context_revision', 'trigger', 'candidate_urls'}
+                    if set(payload) not in (fields, fields | {'retry'}) or payload['action'] != 'lookup':
+                        raise ValueError('原题核对只接受已有题目、版本、触发原因和候选网页')
+                    if (type(payload['context_revision']) is not int or type(payload.get('retry', False)) is not bool
+                            or any(not isinstance(payload[key], str) or len(payload[key]) > 128 for key in ('question_id', 'question_version', 'trigger'))
+                            or not isinstance(payload['candidate_urls'], list)
+                            or len(payload['candidate_urls']) > 6
+                            or any(not isinstance(url, str) or len(url) > 3000 for url in payload['candidate_urls'])):
+                        raise ValueError('原题核对请求超出范围')
+                    result = lookup.run_for_question(store, payload['question_id'], payload['question_version'], payload['context_revision'],
+                        trigger=payload['trigger'], candidate_urls=payload['candidate_urls'], retry=payload.get('retry', False))
+                self._json(200, {'result': result})
+                return
             if self.server.processing_mode == "ACK_ONLY":
                 source_review = (route == '/api/operator-tasks' and self.server.source_review_enabled
                                  and isinstance(payload, dict) and payload.get('action') == 'review')
@@ -1113,6 +1177,7 @@ def main():
                         help="打开本地日报入口；已有stage显式开关优先，不启用答疑或发送")
     parser.add_argument("--source-review-manifest", type=Path,
                         help="本人已审核的教学清单；只开放原消息题面确认和持久排队，不需要旧题生成记录")
+    parser.add_argument('--reference-lookup-config', type=Path, help='可选原题核对TOML；默认关闭，不开启发送权限')
     parser.add_argument("--processing-mode", choices=("COMPATIBILITY", "ACK_ONLY"), default="COMPATIBILITY")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument('--worker-boundary',action='store_true',help='后台禁止直接操作桌面，采用固定Worker业务接口')
@@ -1128,7 +1193,8 @@ def main():
         collector_config=args.collector_config, processing_mode=args.processing_mode,
         answer_review_root=args.answer_review_root,worker_boundary=args.worker_boundary,
         worker_policy=args.worker_policy,worker_token_env=args.worker_token_env,
-        performance_enabled=args.enable_performance, source_review_manifest=args.source_review_manifest)
+        performance_enabled=args.enable_performance, source_review_manifest=args.source_review_manifest,
+        reference_lookup_config=args.reference_lookup_config)
     print(f"{'消息采集 · 仅排队收到' if server.processing_mode == 'ACK_ONLY' else '真实已准备任务' if server.real_config else '模拟演示'}：http://127.0.0.1:{server.server_port}/", flush=True)
     try:
         if args.auto_start_collector:

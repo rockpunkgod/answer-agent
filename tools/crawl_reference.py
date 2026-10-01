@@ -1,205 +1,122 @@
-"""Capture one public reference page with Crawl4AI for local inspection.
+"""Capture one admitted reference as a candidate, never as a confirmed answer.
 
-This is deliberately not a question-ingestion workflow: output is reference
-material only and never modifies student prompts or application data.
+The previous browser capture is not enabled here: it did not share the source
+admission, pinned network and complete deadline checks. This entry now reuses
+the local/HTTP providers from the on-demand lookup, without a Crawl4AI install.
 """
-
 from __future__ import annotations
 
 import argparse
-import asyncio
-from datetime import datetime, timezone
-import hashlib
-import ipaddress
-from importlib.metadata import version as package_version
+from datetime import datetime
 import json
 from pathlib import Path
-import socket
 import sys
-import uuid
 from urllib.parse import urlsplit
+import uuid
+
+from helpdesk.reference_fetch import Budget, LookupFailure, ReferenceFetcher, canonical_url, resolve_public
+from helpdesk.reference_lookup import LookupConfig, ReferenceLookup, ROOT, approved_path
+from helpdesk.reference_providers import HttpProvider, LocalProvider
+from helpdesk.storage import Store
 
 
-ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_OUTPUT_ROOT = ROOT / "data" / "private" / "reference-crawl"
-MAX_BODY_CHARS = 1_500_000
+DEFAULT_OUTPUT_ROOT = ROOT / 'data/private/reference-crawl'
 
 
-def validate_public_url(url: str, *, expected_host: str | None = None) -> str:
-    """Validate one HTTP(S) public hostname; reject local/private targets."""
-    try:
-        parsed = urlsplit(url)
-        port = parsed.port
-    except ValueError as exc:
-        raise ValueError(f"invalid URL: {exc}") from exc
-    if parsed.scheme.lower() not in {"http", "https"}:
-        raise ValueError("only http:// and https:// URLs are allowed")
-    if parsed.username is not None or parsed.password is not None:
-        raise ValueError("URLs containing credentials are not allowed")
-    host = (parsed.hostname or "").rstrip(".").lower()
-    if not host:
-        raise ValueError("URL must include a hostname")
-    if port is not None and not (1 <= port <= 65535):
-        raise ValueError("invalid port")
-    if expected_host is not None and host != expected_host:
-        raise ValueError("cross-host navigation/resource blocked")
+def validate_public_url(url, *, expected_host=None):
+    url = canonical_url(url)
+    parsed = urlsplit(url)
+    if expected_host is not None and parsed.hostname != expected_host:
+        raise ValueError('Cross-host reference request blocked')
+    resolve_public(parsed.hostname, 443 if parsed.scheme == 'https' else 80, 5)
+    return parsed.hostname
 
-    if host == "localhost" or host.endswith((".localhost", ".local", ".internal")):
-        raise ValueError("local hostnames are not allowed")
-    try:
-        ip = ipaddress.ip_address(host)
-    except ValueError:
-        ip = None
-    if ip is not None:
-        if not ip.is_global:
-            raise ValueError("non-public IP addresses are not allowed")
-    else:
+
+def _offline_self_test():
+    # URL syntax/IP checks only; does not make an external request or resolve DNS.
+    assert canonical_url('https://8.8.8.8/path') == 'https://8.8.8.8/path'
+    for blocked in ('file:///etc/passwd', 'http://localhost/', 'http://127.0.0.1/',
+                    'http://10.1.2.3/', 'http://169.254.10.20/', 'https://user:pass@example.com/'):
         try:
-            addresses = {item[4][0] for item in socket.getaddrinfo(host, port or (443 if parsed.scheme == "https" else 80), type=socket.SOCK_STREAM)}
-        except OSError as exc:
-            raise ValueError(f"hostname did not resolve: {exc}") from exc
-        if not addresses:
-            raise ValueError("hostname did not resolve")
-        for address in addresses:
-            resolved = ipaddress.ip_address(address.split("%", 1)[0])
-            if not resolved.is_global:
-                raise ValueError("hostname resolves to a non-public IP address")
-    return host
-
-
-def _offline_self_test() -> None:
-    # A public literal IP keeps this check independent of DNS/network access.
-    assert validate_public_url("https://8.8.8.8/path") == "8.8.8.8"
-    for blocked in (
-        "file:///etc/passwd",
-        "http://localhost/",
-        "http://127.0.0.1/",
-        "http://10.1.2.3/",
-        "http://169.254.10.20/",
-        "https://user:pass@example.com/",
-    ):
-        try:
-            validate_public_url(blocked)
-        except ValueError:
+            canonical_url(blocked)
+        except LookupFailure:
             continue
-        raise AssertionError(f"expected rejection: {blocked}")
-    try:
-        validate_public_url("https://example.net/", expected_host="example.com")
-    except ValueError:
-        pass
-    else:
-        raise AssertionError("expected cross-host rejection")
-    print("offline self-test passed: public URL accepted; local/private/credential/cross-host URLs rejected")
+        raise AssertionError('Unsafe URL was accepted')
+    print('offline URL safety checks passed; no network, browser or business database')
 
 
-async def crawl_one(url: str, output_dir: Path) -> int:
-    source_host = validate_public_url(url)
-    try:
-        from crawl4ai import AsyncWebCrawler, BrowserConfig, CacheMode, CrawlerRunConfig
-    except ImportError as exc:
-        raise RuntimeError("Crawl4AI is not installed in this Python environment") from exc
-    crawl4ai_version = package_version("crawl4ai")
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-    config = BrowserConfig(browser_type="chromium", headless=True, verbose=False)
-    run_config = CrawlerRunConfig(
-        cache_mode=CacheMode.DISABLED,
-        check_robots_txt=True,
-        word_count_threshold=1,
-        page_timeout=45_000,
-        exclude_external_links=True,
-        remove_overlay_elements=True,
-    )
-
-    async with AsyncWebCrawler(config=config) as crawler:
-        # Constrain all browser requests and navigations to the explicitly
-        # supplied host. This also prevents third-party resources from being
-        # fetched during this single-page capture.
-        async def same_public_host_only(page, context=None, config=None, **kwargs):
-            async def guard(route):
-                try:
-                    validate_public_url(route.request.url, expected_host=source_host)
-                except ValueError:
-                    await route.abort()
-                    return
-                await route.continue_()
-            await page.route("**/*", guard)
-
-        crawler.crawler_strategy.set_hook("on_page_context_created", same_public_host_only)
-        result = await crawler.arun(url, config=run_config)
-
-    final_url = getattr(result, "url", None) or url
-    try:
-        validate_public_url(final_url, expected_host=source_host)
-        final_url_allowed = True
-    except ValueError:
-        final_url_allowed = False
-
-    markdown = (result.markdown or "").strip()
-    if not markdown:
-        markdown = (result.cleaned_html or "").strip()
-    # Never persist content if the browser ended at an address outside the
-    # validated public host boundary.
-    if not final_url_allowed:
-        markdown = ""
-    markdown = markdown[:MAX_BODY_CHARS]
-    body_text = markdown + ("" if markdown.endswith("\n") else "\n")
-    digest = hashlib.sha256(body_text.encode("utf-8")).hexdigest()
-    crawl_success = bool(result.success and final_url_allowed)
-
-    metadata = {
-        "requested_url": url,
-        "final_url": final_url,
-        "final_url_allowed": final_url_allowed,
-        "captured_at_utc": datetime.now(timezone.utc).isoformat(),
-        "crawl4ai_version": crawl4ai_version,
-        "success": crawl_success,
-        "status_code": getattr(result, "status_code", None),
-        "title": getattr(result, "title", None),
-        "body_file": "reference-crawl.md",
-        "body_chars": len(markdown),
-        "body_sha256": digest,
-        "source_hash": digest,
-        "reference_only": True,
-        "student_content_uploaded": False,
-        "robots_txt_checked": True,
-        "automatically_followed_links": False,
-        "body_truncated": len(markdown) >= MAX_BODY_CHARS,
-        "error": (
-            "final URL rejected by public-host restriction"
-            if not final_url_allowed
-            else getattr(result, "error_message", None)
-        ),
-    }
-
-    (output_dir / "reference-crawl.md").write_text(body_text, encoding="utf-8")
-    (output_dir / "reference-crawl.json").write_text(
-        json.dumps(metadata, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-    )
-    print(json.dumps(metadata, ensure_ascii=False, indent=2))
-    return 0 if crawl_success else 2
+def capture_candidate(config, *, url=None, local_file=None):
+    if bool(url) == bool(local_file):
+        raise ValueError('Choose one candidate URL or approved local file')
+    if not config.enabled:
+        raise ValueError('Reference capture is disabled')
+    budget = Budget(config.total_seconds)
+    if local_file:
+        return LocalProvider(config.fixture_root).capture(local_file, budget)
+    fetcher = ReferenceFetcher(timeout=config.timeout_seconds, interval=config.request_interval_seconds,
+                               retries=config.retries)
+    return HttpProvider(config, fetcher).capture(url, budget)
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--url", help="one public HTTP(S) URL; no crawling of linked pages")
-    parser.add_argument("--out-dir", type=Path, help="exact output directory; default creates a unique dated subdirectory")
-    parser.add_argument("--self-test", action="store_true", help="run offline URL-safety assertions")
+    parser.add_argument('--config', type=Path, default=ROOT / 'config/reference-lookup.example.toml')
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument('--url', help='One admitted HTTP(S) page; no browser or linked-page crawl')
+    source.add_argument('--local-file', help='UTF-8 HTML/text in the configured approved directory')
+    parser.add_argument('--db', type=Path, help='Existing business database; creates a candidate only')
+    parser.add_argument('--question-id')
+    parser.add_argument('--question-version')
+    parser.add_argument('--context-revision', type=int)
+    parser.add_argument('--out-dir', type=Path, help='Metadata only, under data/private/reference-crawl')
+    parser.add_argument('--self-test', action='store_true')
     args = parser.parse_args(argv)
     if args.self_test:
         _offline_self_test()
         return 0
-    if not args.url:
-        parser.error("--url is required unless --self-test is used")
+    if not args.url and not args.local_file:
+        parser.error('--url or --local-file is required')
+    store = None
     try:
-        output_dir = args.out_dir.resolve() if args.out_dir else (
-            DEFAULT_OUTPUT_ROOT / f"{datetime.now().strftime('%Y%m%d-%H%M%S')}-{uuid.uuid4().hex[:8]}"
-        )
-        return asyncio.run(crawl_one(args.url, output_dir))
-    except Exception as exc:
-        print(f"crawl failed: {type(exc).__name__}: {exc}", file=sys.stderr)
+        config = LookupConfig.load(args.config)
+        if args.db:
+            if (not args.db.is_file() or not args.question_id or not args.question_version
+                    or args.context_revision is None):
+                parser.error('Existing database, question, version and context are required together')
+            store = Store(args.db)
+            report = ReferenceLookup(config).run_for_question(store, args.question_id, args.question_version,
+                args.context_revision, trigger='manual_source', candidate_urls=[args.url] if args.url else [],
+                fixtures=[args.local_file] if args.local_file else [])
+            metadata = {'reference_only': True, 'candidate_only': True, 'confirmation_performed': False,
+                'retrieval_status': report['retrieval_status'], 'match_status': report['match_status'],
+                'candidate_ids': [m['candidate_id'] for m in report.get('matches', []) if m.get('candidate_id')],
+                'explanation': report.get('explanation')}
+        else:
+            if args.question_id or args.question_version or args.context_revision is not None:
+                parser.error('Question identity requires an existing --db')
+            captured = capture_candidate(config, url=args.url, local_file=args.local_file)
+            metadata = {key: captured[key] for key in ('source', 'url', 'retrieved_time', 'hash')}
+            metadata.update(reference_only=True, candidate_only=True, confirmed=False,
+                content_chars=len(captured['content']), content_saved=False, state='DISCOVERED',
+                explanation='只读抓取元数据；提供已有题目身份后才会建立候选并比较。')
+        if args.out_dir:
+            # Export never stores third-party page bodies or writes outside the approved directory.
+            output = approved_path(ROOT, DEFAULT_OUTPUT_ROOT)
+            output.mkdir(parents=True, exist_ok=True)
+            output = approved_path(output, args.out_dir)
+            output.mkdir(parents=True, exist_ok=True)
+            path = output / ('candidate-' + datetime.now().strftime('%Y%m%d-%H%M%S') + '-' + uuid.uuid4().hex[:8] + '.json')
+            with path.open('x', encoding='utf-8') as stream:
+                json.dump(metadata, stream, ensure_ascii=False, indent=2)
+        print(json.dumps(metadata, ensure_ascii=False, indent=2))
+        return 0
+    except (ValueError, OSError) as exc:
+        print(json.dumps({'status': 'CAPTURE_UNAVAILABLE', 'error_type': type(exc).__name__}, ensure_ascii=False), file=sys.stderr)
         return 2
+    finally:
+        if store:
+            store.close()
 
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     raise SystemExit(main())

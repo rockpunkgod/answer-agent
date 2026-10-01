@@ -20,12 +20,14 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from helpdesk.mcp_window_probe import (FOREGROUND_COMMAND, parse_foreground_process,
                                        screen2_caption_command, parse_screen2_caption,
-                                       WECOM_SCREEN2_CAPTION_COMMAND)
+                                       WECOM_SCREEN2_CAPTION_COMMAND, WECOM_SCREEN2_WINDOW_COMMAND,
+                                       parse_wecom_window_location, verify_wecom_switch_snapshot)
 from helpdesk.windows_worker_probe import DESKTOP_STATUS_COMMAND, parse_desktop_status
 
 ALLOWED = {"Screenshot", "Snapshot", "Click", "Type", "Scroll", "Move", "Shortcut", "Wait", "WaitFor", "DisplayInventory", "App", "Clipboard", "PowerShell"}
 SCREEN2_ACTIVATE = 'ActivateEdgeOnScreen2'  # Local entry; native operation is Click.
 SCREEN2_ACTIVATIONS = {SCREEN2_ACTIVATE: 'msedge', 'ActivateWeComOnScreen2': 'WXWork'}
+SCREEN2_APP_ACTIVATION = 'ActivateWeComOnScreen2ByApp'
 
 
 GUARDED_INPUTS = {"Click", "Type", "Shortcut", "Scroll", "Move"}
@@ -37,7 +39,7 @@ def fixed_readonly_probe(arguments):
     return (isinstance(arguments, dict) and set(arguments) == {'command', 'timeout'}
             and type(arguments['timeout']) is int and arguments['timeout'] == 10
             and arguments['command'] in (FOREGROUND_COMMAND, DESKTOP_STATUS_COMMAND,
-                                          WECOM_SCREEN2_CAPTION_COMMAND))
+                                          WECOM_SCREEN2_CAPTION_COMMAND, WECOM_SCREEN2_WINDOW_COMMAND))
 
 
 def audit_arguments(tool, arguments):
@@ -48,7 +50,8 @@ def audit_arguments(tool, arguments):
     value = {'sha256': sha256(raw).hexdigest(), 'bytes': len(raw)}
     if tool == 'PowerShell' and fixed_readonly_probe(arguments):
         value['probe'] = {FOREGROUND_COMMAND: 'FOREGROUND', DESKTOP_STATUS_COMMAND: 'DESKTOP_STATUS',
-                         WECOM_SCREEN2_CAPTION_COMMAND: 'WECOM_SCREEN2_CAPTION'}[arguments['command']]
+                         WECOM_SCREEN2_CAPTION_COMMAND: 'WECOM_SCREEN2_CAPTION',
+                         WECOM_SCREEN2_WINDOW_COMMAND: 'WECOM_SCREEN2_WINDOW'}[arguments['command']]
     return value
 
 
@@ -111,7 +114,7 @@ async def check_foreground(client, expected, attempt, attempt_path, *, pointer_l
     save()
 
 
-async def check_screen2_activation(client, loc, attempt, attempt_path, *, target_process='msedge'):
+async def check_screen2_activation(client, loc, attempt, attempt_path, *, target_process='msedge', by_app=False):
     preflight = {'status': 'PROBE_UNCONFIRMED'}
     attempt['screen2_activation_preflight'] = preflight
     def save():
@@ -127,14 +130,27 @@ async def check_screen2_activation(client, loc, attempt, attempt_path, *, target
         if not status.unlocked or status.remote is not False:
             raise ValueError('DESKTOP_NOT_AVAILABLE')
         preflight['desktop_available'] = True
-        result = await client.call_tool('PowerShell', {'command': screen2_caption_command(loc, target_process=target_process), 'timeout': 10},
+        # App uses the cached exact window, so inspect only display 2 first.
+        # It does not click a title bar; a covered caption is irrelevant here.
+        if by_app:
+            snapshot = await client.call_tool('Snapshot', {'use_vision': False, 'use_dom': False,
+                'use_annotation': False, 'use_ui_tree': True, 'display': [1]}, timeout=45, raise_on_error=False)
+            snapshot_record = {'tool': 'Snapshot', 'is_error': snapshot.is_error,
+                'content': [{'type': item.type, **({'text': item.text} if item.type == 'text' else {})}
+                            for item in snapshot.content]}
+            preflight['snapshot_sha256'] = sha256(json.dumps(snapshot_record, ensure_ascii=False,
+                sort_keys=True).encode('utf-8')).hexdigest()
+        command = WECOM_SCREEN2_WINDOW_COMMAND if by_app else screen2_caption_command(loc, target_process=target_process)
+        result = await client.call_tool('PowerShell', {'command': command, 'timeout': 10},
                                        timeout=15, raise_on_error=False)
         record = {'tool': 'PowerShell', 'is_error': result.is_error,
                   'content': [{'type': item.type, **({'text': item.text} if item.type == 'text' else {})}
                               for item in result.content]}
         preflight['probe_record'] = record
-        target = parse_screen2_caption(record, loc, target_process=target_process)
-        preflight.update(status='SCREEN2_EDGE_CAPTION_VERIFIED' if target_process == 'msedge'
+        target = parse_wecom_window_location(record) if by_app else parse_screen2_caption(record, loc, target_process=target_process)
+        if by_app:
+            verify_wecom_switch_snapshot(snapshot_record, target)
+        preflight.update(status='SCREEN2_WECOM_WINDOW_VERIFIED' if by_app else 'SCREEN2_EDGE_CAPTION_VERIFIED' if target_process == 'msedge'
                          else 'SCREEN2_WECOM_CAPTION_VERIFIED', target=target)
         save()
         return target
@@ -182,6 +198,9 @@ async def main():
                             or any(type(value) is not int for value in pointer_loc)):
                         raise ValueError('EXPLICIT_WECOM_POINTER_LOCATION_REQUIRED')
                 activation_loc = None
+                by_app = name == SCREEN2_APP_ACTIVATION
+                if by_app and (set(request) != {'tool', 'arguments'} or request['arguments'] != {}):
+                    raise ValueError('INVALID_SCREEN2_ACTIVATION')
                 if name in SCREEN2_ACTIVATIONS:
                     if (set(request) != {'tool', 'arguments'} or not isinstance(request['arguments'], dict)
                             or set(request['arguments']) != {'loc'}):
@@ -192,7 +211,7 @@ async def main():
                     tools = await client.list_tools()
                     print(json.dumps({"tools": [{"name": t.name, "schema": t.inputSchema} for t in tools]}), flush=True)
                     continue
-                if name not in ALLOWED and name not in SCREEN2_ACTIVATIONS:
+                if name not in ALLOWED and name not in SCREEN2_ACTIVATIONS and not by_app:
                     raise ValueError("Tool outside explicit desktop allowlist")
                 if name == "PowerShell" and not fixed_readonly_probe(request.get("arguments", {})):
                     raise ValueError("Only reviewed fixed read-only probes are allowed")
@@ -212,36 +231,43 @@ async def main():
                     # Serial requests: this probe is the final MCP call before input.
                     await check_foreground(client, expected, attempt, attempt_path, pointer_loc=pointer_loc)
                 target = None
-                if activation_loc is not None:
+                if activation_loc is not None or by_app:
                     target = await check_screen2_activation(client, activation_loc, attempt, attempt_path,
-                                                           target_process=SCREEN2_ACTIVATIONS[name])
-                native_name = 'Click' if activation_loc is not None else name
-                native_arguments = ({'loc': activation_loc, 'button': 'left', 'clicks': 1}
-                                    if activation_loc is not None else request.get('arguments', {}))
+                                                           target_process='WXWork' if by_app else SCREEN2_ACTIVATIONS[name], by_app=by_app)
+                native_name = 'App' if by_app else 'Click' if activation_loc is not None else name
+                native_arguments = ({'mode': 'switch', 'name': '企业微信'} if by_app else
+                    {'loc': activation_loc, 'button': 'left', 'clicks': 1} if activation_loc is not None else request.get('arguments', {}))
                 result = await client.call_tool(native_name, native_arguments, timeout=45, raise_on_error=False)
                 if target is not None and not result.is_error:
-                    attempt['native_click_returned'] = True
+                    attempt['native_app_returned' if by_app else 'native_click_returned'] = True
+                    postflight = {'status': 'PROBE_UNCONFIRMED'}
+                    attempt['screen2_activation_postflight'] = postflight
                     attempt_path.write_text(json.dumps(attempt, ensure_ascii=False, indent=2), encoding='utf-8')
                     try:
                         after = await client.call_tool('PowerShell', {'command': FOREGROUND_COMMAND, 'timeout': 10},
                                                        timeout=15, raise_on_error=False)
-                        observed = parse_foreground_process({'tool': 'PowerShell', 'is_error': after.is_error,
+                        postflight['probe_record'] = {'tool': 'PowerShell', 'is_error': after.is_error,
                             'content': [{'type': item.type, **({'text': item.text} if item.type == 'text' else {})}
-                                        for item in after.content]})
+                                        for item in after.content]}
+                        observed = parse_foreground_process(postflight['probe_record'])
+                        postflight['observed'] = observed
                         if observed['process'] != target['process'] or observed['handle'] != target['handle']:
                             raise ValueError('ACTIVATION_TARGET_CHANGED')
-                        attempt['screen2_activation_postflight'] = {'status': 'TARGET_FOREGROUND_VERIFIED',
-                                                                    'observed': observed}
+                        if by_app and (observed['left'] != target['window_left'] or observed['top'] != target['window_top']
+                                or observed['width'] != target['window_right'] - target['window_left']
+                                or observed['height'] != target['window_bottom'] - target['window_top']):
+                            raise ValueError('ACTIVATION_WINDOW_MOVED')
+                        postflight['status'] = 'TARGET_FOREGROUND_VERIFIED'
                     except Exception as exc:
-                        attempt.update(status='ACTIVATION_RESULT_UNCONFIRMED',
-                            screen2_activation_postflight={'status': 'UNCONFIRMED', 'error_type': type(exc).__name__})
+                        attempt['status'] = 'ACTIVATION_RESULT_UNCONFIRMED'
+                        postflight.update(status='UNCONFIRMED', error_type=type(exc).__name__)
                         attempt_path.write_text(json.dumps(attempt, ensure_ascii=False, indent=2), encoding='utf-8')
                         raise ValueError('SCREEN2_ACTIVATION_UNCONFIRMED') from exc
                 stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
                 output = []
                 # Input acknowledgements may echo the supplied text. They are
                 # not source observations and cannot serve as business proof.
-                input_result = name in GUARDED_INPUTS or name in SCREEN2_ACTIVATIONS or name == 'Clipboard' and request.get('arguments', {}).get('mode') != 'get'
+                input_result = name in GUARDED_INPUTS or name in SCREEN2_ACTIVATIONS or by_app or name == 'Clipboard' and request.get('arguments', {}).get('mode') != 'get'
                 for i, item in enumerate(result.content if not result.is_error and not input_result else []):
                     if item.type == "image":
                         ext = ".png" if item.mimeType == "image/png" else ".jpg"
@@ -259,7 +285,7 @@ async def main():
                 attempt_path.write_text(json.dumps(attempt, ensure_ascii=False, indent=2), encoding="utf-8")
                 print(json.dumps(record), flush=True)
             except Exception as exc:
-                print(json.dumps({"tool": name if isinstance(name, str) and (name in ALLOWED or name == 'list' or name in SCREEN2_ACTIVATIONS) else None, "error": type(exc).__name__, "detail": error_code(exc),
+                print(json.dumps({"tool": name if isinstance(name, str) and (name in ALLOWED or name == 'list' or name in SCREEN2_ACTIVATIONS or name == SCREEN2_APP_ACTIVATION) else None, "error": type(exc).__name__, "detail": error_code(exc),
                                   "attempt_path": str(attempt_path) if attempt_path else None,
                                   "automatic_retry_allowed": False}), flush=True)
 

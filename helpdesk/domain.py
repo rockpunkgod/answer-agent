@@ -95,15 +95,97 @@ class Comparison:
     differences: tuple[Difference, ...]
     option_mapping: tuple[tuple[str, str], ...]
     reason: str
+    relation: tuple[str, ...] = ()
+    evidence: tuple[dict, ...] = ()
+    field_differences: tuple[dict, ...] = ()
+    resolution_status: str = "UNKNOWN"
+
+
+CONDITION_PATTERN = (r"\b(?:not|except|least|most|only|always|never|all|some|before|after|between|within|"
+                     r"more|less|under|above|below|if|unless|must|\d+(?:\.\d+)?%?)\b")
+
+
+def _conditions(text):
+    return sorted(re.findall(CONDITION_PATTERN, (text or '').casefold()))
+
+
+def _negations(text):
+    return sorted(re.findall(r'\b(?:not|except|never|neither|without)\b', (text or '').casefold()))
 
 
 def compare(reference_version: str, reference: Question, reference_material: str | None,
-            student_version: str, student: Question, student_material: str | None) -> Comparison:
+            student_version: str, student: Question, student_material: str | None,
+            *, student_raw_material: str | None = None) -> Comparison:
     """Conservative exact-content mapping; similarity never establishes equivalence."""
     def result(diffs, reason, mapping=()):
-        return Comparison(reference_version, student_version, tuple(diffs), tuple(mapping), reason)
+        evidence, changed, relations = [], [], []
+        fields = [('passage', reference_material, student_material),
+                  ('stem', reference.verified_stem, student.verified_stem)]
+        ref_labels = {o.label: o for o in reference.options}
+        stu_labels = {o.label: o for o in student.options}
+        mapped = {student_id: reference_id for reference_id, student_id in mapping}
+        ref_ids = {o.id: o for o in reference.options}
+        for label in sorted(set('ABCD') | set(stu_labels) | set(ref_labels)):
+            stu_option = stu_labels.get(label)
+            ref_option = ref_ids[mapped[stu_option.id]] if stu_option and stu_option.id in mapped else ref_labels.get(label)
+            fields.append(('option:' + label, ref_option.verified_text if ref_option else None,
+                           stu_option.verified_text if stu_option else None))
+        if reference.visual_evidence or student.visual_evidence or reference.visual_evidence is None or student.visual_evidence is None:
+            fields.append(('visual_evidence', reference.visual_evidence, student.visual_evidence))
+        for name, ref_text, stu_text in fields:
+            observed = ref_text is not None and stu_text is not None and bool(ref_text.strip()) and bool(stu_text.strip())
+            equal = observed and normalize(ref_text) == normalize(stu_text)
+            item = {'field': name, 'reference_value': ref_text, 'student_value': stu_text,
+                    'relation': 'EQUAL' if equal else 'DIFFERENT' if observed else 'UNKNOWN'}
+            if name.startswith('option:') and mapping:
+                option = next(o for o in student.options if o.label == name.split(':', 1)[1])
+                item['reference_label'] = ref_ids[mapped[option.id]].label
+                item['student_label'] = option.label
+            evidence.append(item)
+            if not observed:
+                changed.append({**item, 'kind': 'UNVERIFIED_FIELD'})
+            elif not equal and not mapping:
+                critical = _conditions(ref_text) != _conditions(stu_text)
+                negation = _negations(ref_text) != _negations(stu_text)
+                number = sorted(re.findall(r'\b\d+(?:\.\d+)?\b', ref_text)) != sorted(re.findall(r'\b\d+(?:\.\d+)?\b', stu_text))
+                same_frame = normalize(re.sub(CONDITION_PATTERN, '', ref_text.casefold())) == normalize(re.sub(CONDITION_PATTERN, '', stu_text.casefold()))
+                changed.append({**item, 'kind': 'KEY_CONDITION_CONFLICT' if negation or number or critical and same_frame else 'CONTENT_DIFFERENCE'})
+                if name == 'stem':
+                    relations.append('STEM_CHANGED')
+                if critical:
+                    relations.append('CONDITION_CHANGED')
+                if negation:
+                    relations.append('NOT_DIFFERENCE')
+        complete = (reference.complete and student.complete and bool(reference_material and reference_material.strip())
+                    and bool(student_material and student_material.strip()))
+        if not complete:
+            # Raw OCR is evidence of an observation, never a verified condition.
+            relations = ['UNKNOWN']
+            changed = [{**item, 'kind': 'UNVERIFIED_FIELD' if item['relation'] == 'UNKNOWN' else 'OBSERVED_DIFFERENCE'}
+                       for item in changed]
+            if (student.verified_stem and reference.verified_stem
+                    and normalize(student.verified_stem) == normalize(reference.verified_stem)
+                    or student_raw_material and reference_material
+                    and normalize(student_raw_material) in normalize(reference_material)):
+                relations.append('PARTIAL_OBSERVATION')
+        elif mapping:
+            relations = ['SAME_CONTENT']
+        elif reference_material is not None and student_material is not None and normalize(reference_material) == normalize(student_material):
+            relations.append('SAME_PASSAGE_DIFFERENT_QUESTION' if Difference.UNCERTAIN not in diffs else 'UNKNOWN')
+        else:
+            relations.append('DIFFERENT_QUESTION')
+        if Difference.NUMBER in diffs:
+            relations.append('QUESTION_NUMBER_CHANGED')
+            changed.append({'field': 'number', 'kind': 'NUMBER_ONLY', 'reference_value': reference.number, 'student_value': student.number})
+        if Difference.ORDER in diffs:
+            relations.append('OPTION_REORDER')
+            changed.append({'field': 'options', 'kind': 'OPTION_ORDER', 'mapping': [list(pair) for pair in mapping]})
+        status = 'INCOMPLETE' if not complete else 'MATCH_CANDIDATE' if mapping else 'UNKNOWN' if Difference.UNCERTAIN in diffs else 'MISMATCH'
+        return Comparison(reference_version, student_version, tuple(diffs), tuple(mapping), reason,
+                          tuple(dict.fromkeys(relations)), tuple(evidence), tuple(changed), status)
 
-    if not reference.complete or not student.complete or reference_material is None or student_material is None:
+    if (not reference.complete or not student.complete or not reference_material or not reference_material.strip()
+            or not student_material or not student_material.strip()):
         return result([Difference.UNCERTAIN], "Unverified fields; keep candidate completion separate")
     material_equal = normalize(reference_material) == normalize(student_material)
     stem_equal = normalize(reference.verified_stem) == normalize(student.verified_stem)

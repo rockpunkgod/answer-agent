@@ -231,6 +231,33 @@ class LiveGenerationBoundaryTests(unittest.TestCase):
             queue_test_answer(self.db, source_id, recipient)
         self.assertEqual(self.db.one("SELECT state FROM outbox WHERE id=?", (copy_id,))[0], "PENDING")
 
+    def test_reference_revocation_stops_test_copy_before_transport(self):
+        from helpdesk.reference_resolution import ReferenceResolution
+        question = self.app.context(self.turn)
+        resolution = ReferenceResolution(self.db)
+        candidate, _ = resolution.add(question['question_version'], 'anonymous-reference',
+            self.app.question(question['question_version']), question['student_material'], 'SELF_AUTHORED_FIXTURE',
+            provenance={'source_policy': {'kind': 'SELF_AUTHORED_OFFLINE', 'business_record_storage_allowed': True}})
+        review = dict(question_version=question['question_version'], context_revision=question['context_revision'],
+            reviewer='匿名核对人', reason='匿名题面逐字段一致')
+        resolution.review(candidate, decision='confirm', consume=True, **review)
+        source, copy, recipient = self.approved_test_copy()
+        resolution.review(candidate, decision='reject', **(review | {'reason': '撤销匿名候选使用'}))
+        with self.assertRaisesRegex(ValueError, 'REFERENCE_CONFIRMATION_CHANGED'):
+            queue_test_answer(self.db, source, recipient)
+        with self.assertRaisesRegex(ValueError, 'REFERENCE_CONFIRMATION_CHANGED'):
+            validate_test_copy(self.db, self.db.one('SELECT * FROM outbox WHERE id=?', (copy,)))
+        class NeverSend:
+            simulated = False
+            test_only = True
+            test_answer_transport = True
+            lock_path = str(self.base / 'never-send.lock')
+            def authorize(self, bound):
+                raise AssertionError('Revoked reference must not reach the desktop')
+        self.assertEqual(Workflow(self.db, desktop=NeverSend()).dispatch(copy), 'STALE')
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM delivery_checks')[0], 0)
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM performance_units')[0], 0)
+
     def test_student_correction_invalidates_queued_test_copy(self):
         flow, run_id = self.start(StubAdapter())
         snapshot = json.loads(self.db.one("SELECT input_json FROM runs WHERE id=?", (run_id,))[0])

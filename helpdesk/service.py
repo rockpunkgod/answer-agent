@@ -413,21 +413,15 @@ class Helpdesk:
                 self.db.execute("UPDATE questions SET status='REVIEW' WHERE id=?", (q["id"],))
             return [q["id"] for q in affected]
 
-    def add_reference(self, student_version, reference_version, reference: Question, material, source):
-        if not source or not reference_version:
-            raise ValueError("Reference provenance and version required")
-        with self.db.transaction():
-            row = self.db.one("""SELECT mv.verified_text FROM question_versions qv
-                LEFT JOIN material_versions mv ON mv.id=qv.material_version WHERE qv.id=?""", (student_version,))
-            if not row:
-                raise ValueError("Unknown student version")
-            comparison = compare(reference_version, reference, material, student_version, self.question(student_version), row[0])
-            self.db.execute("INSERT INTO reference_candidates VALUES(?,?,?,?,?,?,?,?)",
-                            (new_id(), student_version, reference_version, encode(reference.to_dict()), material,
-                             encode(asdict(comparison)), source, now()))
-            return comparison
+    def add_reference(self, student_version, reference_version, reference: Question, material, source,
+                      *, expected_context_revision=None, idempotent=False, provenance=None):
+        from .reference_resolution import ReferenceResolution
+        _, comparison = ReferenceResolution(self.db).add(student_version, reference_version, reference, material,
+            source, expected_context_revision=expected_context_revision, provenance=provenance)
+        return comparison
 
     def context(self, turn_id):
+        from .reference_resolution import confirmed_references
         turn = self.db.one("SELECT * FROM turns WHERE id=?", (turn_id,))
         if not turn or not turn["question_version"]:
             raise ValueError("No confirmed question context")
@@ -450,7 +444,7 @@ class Helpdesk:
                 "student_question": q.to_dict(), "student_material": material["verified_text"],
                 "student_words": message["raw_text"], "intent": turn["intent"],
                 "requires_recheck": turn["intent"] == Intent.DISPUTE,
-                "references": [dict(r) for r in self.db.all("SELECT * FROM reference_candidates WHERE student_version=?", (turn["question_version"],))],
+                "references": confirmed_references(self.db, turn["question_version"]),
                 "previous_sent_answer": history[-1]["body"] if history else None,
                 "sent_history": history, "previous_delivery_simulated": history[-1]["simulated"] if history else None,
                 "confirmed_evidence": {"material_source": material["source_message"], "question_source": q.source},

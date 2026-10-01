@@ -4,7 +4,10 @@ from datetime import datetime, timezone
 import importlib.util
 import io
 import json
+import os
 from pathlib import Path
+import shutil
+import subprocess
 import sys
 import tempfile
 from types import ModuleType, SimpleNamespace
@@ -13,7 +16,8 @@ from unittest.mock import patch
 
 from helpdesk.mcp_window_probe import (FOREGROUND_COMMAND, parse_screen2_caption,
                                        screen2_caption_command, WECOM_SCREEN2_CAPTION_COMMAND,
-                                       parse_wecom_caption_location)
+                                       parse_wecom_caption_location, WECOM_SCREEN2_WINDOW_COMMAND,
+                                       parse_wecom_window_location, verify_wecom_switch_snapshot)
 from helpdesk.windows_worker_probe import DESKTOP_STATUS_COMMAND
 from tests.test_mcp_window_probe import result as foreground_result
 
@@ -28,16 +32,35 @@ def caption_result(**changes):
         {'type': 'text', 'text': 'Response: ' + json.dumps(value) + '\nStatus Code: 0'}]}
 
 
+def window_result(**changes):
+    value = dict(device=r'\\.\DISPLAY2', process='WXWork', title='企业微信', handle=123,
+        screen_left=0, screen_top=-1440, screen_right=2560, screen_bottom=0,
+        window_left=0, window_top=-1440, window_right=1200, window_bottom=-400)
+    value.update(changes)
+    return {'tool': 'PowerShell', 'is_error': False, 'content': [
+        {'type': 'text', 'text': 'Response: ' + json.dumps(value) + '\nStatus Code: 0'}]}
+
+
+def switch_snapshot(rows='企业微信 2 Normal 1200 1040 123', focused='ChatGPT 1 Normal 1000 1000 8'):
+    text = (r'Visible Displays: 1:\\.\DISPLAY2 (0,-1440,2560,0)' + '\n'
+        'Selected Displays: 1\nScreenshot Region: (0,-1440,2560,0)\n'
+        'Focused Window:\nName Depth Status Width Height Handle\n' + focused +
+        '\nOpened Windows:\nName Depth Status Width Height Handle\n' + rows +
+        '\nUI Tree:\nwindow "untrusted UI content"\n企业微信 99 Normal 999 999 99\n')
+    return {'tool': 'Snapshot', 'is_error': False, 'content': [{'type': 'text', 'text': json.dumps([text])}]}
+
+
 class Screen2ActivationTests(unittest.TestCase):
     def request(self, **changes):
         value = {'tool': 'ActivateEdgeOnScreen2', 'arguments': {'loc': [893, -1417]}}
         value.update(changes)
         return value
 
-    def exercise(self, request=None, *, caption=None, desktop=None, click=None, after=None):
+    def exercise(self, request=None, *, caption=None, desktop=None, click=None, after=None, app_snapshot=None):
         calls = []
         request = request or self.request()
-        target_process = 'WXWork' if request['tool'] == 'ActivateWeComOnScreen2' else 'msedge'
+        by_app = request['tool'] == 'ActivateWeComOnScreen2ByApp'
+        target_process = 'WXWork' if request['tool'] in {'ActivateWeComOnScreen2', 'ActivateWeComOnScreen2ByApp'} else 'msedge'
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             class Client:
@@ -57,16 +80,22 @@ class Screen2ActivationTests(unittest.TestCase):
                             record = {'is_error': False, 'content': [{'type': 'text',
                                 'text': 'Response: '+json.dumps(value)+'\nStatus Code: 0'}]}
                         elif args['command'] == FOREGROUND_COMMAND:
-                            record = after or foreground_result(process=target_process)
+                            record = after or foreground_result(process=target_process, **(
+                                dict(left=0, top=-1440, width=1200, height=1040) if by_app else {}))
                         else:
                             if isinstance(caption, Exception): raise caption
-                            record = caption or caption_result(process=target_process)
+                            record = caption or (window_result() if by_app else caption_result(process=target_process))
                         return SimpleNamespace(is_error=record['is_error'],
                             content=[SimpleNamespace(**item) for item in record['content']])
-                    self_outer.assertEqual(tool, 'Click')
+                    if tool == 'Snapshot' and by_app:
+                        self_outer.assertEqual(args, {'use_vision': False, 'use_dom': False,
+                            'use_annotation': False, 'use_ui_tree': True, 'display': [1]})
+                        record = app_snapshot or switch_snapshot()
+                        return SimpleNamespace(is_error=record['is_error'], content=[SimpleNamespace(**item) for item in record['content']])
+                    self_outer.assertEqual(tool, 'App' if by_app else 'Click')
                     attempt = json.loads(next((root/'data/private/windows-mcp').glob('attempt-*.json')).read_bytes())
                     self_outer.assertEqual(attempt['screen2_activation_preflight']['status'],
-                                           'SCREEN2_EDGE_CAPTION_VERIFIED' if target_process == 'msedge'
+                                           'SCREEN2_WECOM_WINDOW_VERIFIED' if by_app else 'SCREEN2_EDGE_CAPTION_VERIFIED' if target_process == 'msedge'
                                            else 'SCREEN2_WECOM_CAPTION_VERIFIED')
                     self_outer.assertEqual(attempt['status'], 'OUTCOME_UNCONFIRMED')
                     if isinstance(click, Exception): raise click
@@ -95,6 +124,52 @@ class Screen2ActivationTests(unittest.TestCase):
         self.assertEqual(attempts[0]['screen2_activation_postflight']['status'], 'TARGET_FOREGROUND_VERIFIED')
         self.assertFalse(attempts[0]['automatic_retry_allowed'])
         self.assertEqual(output[-1]['content'], [])
+
+    def test_app_switch_uses_exact_cached_screen2_window_without_a_caption_click(self):
+        calls, attempts, output = self.exercise({'tool': 'ActivateWeComOnScreen2ByApp', 'arguments': {}})
+        self.assertEqual([tool for tool, _ in calls], ['PowerShell', 'Snapshot', 'PowerShell', 'App', 'PowerShell'])
+        self.assertEqual(calls[2][1], {'command': WECOM_SCREEN2_WINDOW_COMMAND, 'timeout': 10})
+        self.assertEqual(calls[3][1], {'mode': 'switch', 'name': '企业微信'})
+        self.assertEqual(attempts[0]['status'], 'TOOL_RETURNED')
+        self.assertEqual(attempts[0]['screen2_activation_postflight']['status'], 'TARGET_FOREGROUND_VERIFIED')
+        self.assertFalse(attempts[0]['automatic_retry_allowed'])
+        self.assertNotIn('untrusted UI content', json.dumps(attempts))
+        self.assertEqual(output[-1]['content'], [])
+
+    def test_app_switch_rejects_missing_ambiguous_changed_or_other_screen_windows(self):
+        for snapshot, target in ((switch_snapshot(rows='企业微信 2 Normal 1200 1040 124'), window_result()),
+                (switch_snapshot(rows='企业微信 2 Normal 1200 1040 123\n企业微信 3 Normal 1200 1040 124'), window_result()),
+                (switch_snapshot(rows='Not企业微信 2 Normal 1200 1040 123'), window_result()),
+                (switch_snapshot(rows='No windows found', focused='企业微信 2 Normal 1200 1040 123'), window_result()),
+                (switch_snapshot(rows='Chrome 2 Normal 1200 1040 456', focused='企业微信 2 Normal 1200 1040 123'), window_result()),
+                (switch_snapshot(), window_result(window_top=-1430)),
+                (switch_snapshot(), window_result(device=r'\\.\DISPLAY1')),
+                (switch_snapshot(), window_result(window_left=-1))):
+            with self.subTest(snapshot=snapshot, target=target):
+                calls, attempts, _ = self.exercise({'tool': 'ActivateWeComOnScreen2ByApp', 'arguments': {}},
+                    caption=target, app_snapshot=snapshot)
+                self.assertFalse(any(tool in {'App', 'Click'} for tool, _ in calls))
+                self.assertEqual(attempts[0]['status'], 'INPUT_BLOCKED_BY_SCREEN2_GUARD')
+
+    def test_app_switch_forbids_arbitrary_target_arguments_and_locked_desktop(self):
+        for arguments in ({'name': '微信'}, {'mode': 'launch'}, {'loc': [0, 0]}, []):
+            calls, attempts, _ = self.exercise({'tool': 'ActivateWeComOnScreen2ByApp', 'arguments': arguments})
+            self.assertEqual(calls, []); self.assertEqual(attempts, [])
+        calls, attempts, _ = self.exercise({'tool': 'ActivateWeComOnScreen2ByApp', 'arguments': {}}, desktop={'session_flags': 0})
+        self.assertEqual([tool for tool, _ in calls], ['PowerShell'])
+        self.assertEqual(attempts[0]['status'], 'INPUT_BLOCKED_BY_SCREEN2_GUARD')
+
+    def test_app_timeout_and_postflight_change_stop_without_another_action(self):
+        for outcome, after in ((TimeoutError('private error'), None),
+                (None, foreground_result(process='WXWork', handle=124)),
+                (None, foreground_result(process='WXWork', left=0, top=0, width=1200, height=1040))):
+            with self.subTest(outcome=type(outcome).__name__, after=after):
+                calls, attempts, output = self.exercise({'tool': 'ActivateWeComOnScreen2ByApp', 'arguments': {}},
+                    click=outcome, after=after)
+                self.assertEqual(sum(tool == 'App' for tool, _ in calls), 1)
+                self.assertNotEqual(attempts[0]['status'], 'TOOL_RETURNED')
+                self.assertFalse(attempts[0]['automatic_retry_allowed'])
+                self.assertNotIn('private error', json.dumps(output))
         self.assertNotIn('INPUT_ECHO', json.dumps(output))
 
     def test_wecom_activates_directly_without_an_edge_window_or_business_input(self):
@@ -168,6 +243,9 @@ class Screen2ActivationTests(unittest.TestCase):
                 self.assertEqual([tool for tool, _ in calls].count('Click'), 1)
                 self.assertEqual(attempts[0]['status'], 'ACTIVATION_RESULT_UNCONFIRMED')
                 self.assertTrue(attempts[0]['native_click_returned'])
+                self.assertEqual(attempts[0]['screen2_activation_postflight']['observed']['handle'], changes['handle'])
+                self.assertEqual(attempts[0]['screen2_activation_postflight']['observed']['process'], changes['process'])
+                self.assertEqual(attempts[0]['screen2_activation_postflight']['probe_record']['tool'], 'PowerShell')
                 self.assertFalse(attempts[0]['automatic_retry_allowed'])
                 self.assertEqual(output[-1]['detail'], 'SCREEN2_ACTIVATION_UNCONFIRMED')
 
@@ -219,6 +297,95 @@ class Screen2ActivationTests(unittest.TestCase):
         calls, attempts, _ = self.exercise({'tool': 'PowerShell', 'arguments': {
             'command': WECOM_SCREEN2_CAPTION_COMMAND + '\nGet-Clipboard', 'timeout': 10}})
         self.assertEqual(calls, []); self.assertEqual(attempts, [])
+
+    @unittest.skipUnless(os.name == 'nt' and shutil.which('powershell.exe'), 'Windows PowerShell required')
+    def test_caption_locator_filters_other_displays_hidden_minimized_and_spanning_windows(self):
+        # Execute the production PowerShell against invented windows. This type
+        # replaces every native call and contains no DllImport or desktop input.
+        fixture = r'''
+$ErrorActionPreference='Stop'
+Add-Type -TypeDefinition @'
+using System;
+using System.Collections.Generic;
+using System.Runtime.InteropServices;
+public static class HelpdeskScreen2CaptionProbe {
+ [StructLayout(LayoutKind.Sequential)] public struct Point { public int X,Y; }
+ [StructLayout(LayoutKind.Sequential)] public struct Rect { public int Left,Top,Right,Bottom; }
+ [StructLayout(LayoutKind.Sequential,CharSet=CharSet.Unicode)] public struct MonitorInfo {
+  public int Size; public Rect Monitor,Work; public uint Flags;
+  [MarshalAs(UnmanagedType.ByValTStr,SizeConst=32)] public string Device;
+ }
+ public static Dictionary<int,Rect> Rows=new Dictionary<int,Rect>();
+ public static Dictionary<int,string> Titles=new Dictionary<int,string>();
+ public static HashSet<int> Hidden=new HashSet<int>(),Minimized=new HashSet<int>();
+ public static IntPtr SetThreadDpiAwarenessContext(IntPtr value) { return new IntPtr(99); }
+ public static bool IsWindowVisible(IntPtr value) { return !Hidden.Contains(value.ToInt32()); }
+ public static bool IsIconic(IntPtr value) { return Minimized.Contains(value.ToInt32()); }
+ public static bool GetWindowRect(IntPtr value,out Rect rect) { return Rows.TryGetValue(value.ToInt32(),out rect); }
+ public static string WindowTitle(IntPtr value) { return Titles[value.ToInt32()]; }
+ public static string WindowClass(IntPtr value) { return "FixtureWeComWindow"; }
+ public static IntPtr[] ApplicationRoots(uint[] ids) {
+  var windows=new List<IntPtr>(); foreach(var key in Rows.Keys) {
+   if (!Hidden.Contains(key) && !Minimized.Contains(key)) windows.Add(new IntPtr(key));
+  } return windows.ToArray();
+ }
+ public static IntPtr MonitorFromPoint(Point value,uint flags) { return new IntPtr(value.Y<0?2:1); }
+ public static bool GetMonitorInfo(IntPtr value,ref MonitorInfo info) {
+  info.Device=value.ToInt32()==2?@"\\.\DISPLAY2":@"\\.\DISPLAY1";
+  info.Monitor=new Rect {Left=0,Top=value.ToInt32()==2?-1440:0,Right=2560,Bottom=value.ToInt32()==2?0:1440};
+  return true;
+ }
+ public static IntPtr WindowFromPoint(Point value) { return new IntPtr(1); }
+ public static IntPtr GetAncestor(IntPtr value,uint flags) { return value; }
+ public static IntPtr SendMessageTimeout(IntPtr window,uint message,UIntPtr wp,IntPtr lp,uint flags,uint timeout,out UIntPtr result) {
+  result=new UIntPtr(2); return new IntPtr(1);
+ }
+}
+'@
+$script:FixtureApps=@()
+foreach ($row in (Get-Content -LiteralPath (Join-Path $PSScriptRoot 'windows.json') -Raw | ConvertFrom-Json)) {
+ $rect=New-Object HelpdeskScreen2CaptionProbe+Rect
+ $rect.Left=$row.rect[0]; $rect.Top=$row.rect[1]; $rect.Right=$row.rect[2]; $rect.Bottom=$row.rect[3]
+ [HelpdeskScreen2CaptionProbe]::Rows.Add([int]$row.id,$rect)
+ [HelpdeskScreen2CaptionProbe]::Titles.Add([int]$row.id, $(if ($row.title) {$row.title} else {'企业微信'}))
+ if ($row.hidden) { [void][HelpdeskScreen2CaptionProbe]::Hidden.Add([int]$row.id) }
+ if ($row.minimized) { [void][HelpdeskScreen2CaptionProbe]::Minimized.Add([int]$row.id) }
+ $script:FixtureApps += [pscustomobject]@{Id=$row.id;MainWindowHandle=[IntPtr]99;MainWindowTitle='图片'}
+}
+function Get-Process { [CmdletBinding()] param([string]$Name) $script:FixtureApps }
+'''
+        selected = {'id': 1, 'rect': [0, -1440, 2560, -60]}
+        excluded = [
+            {'id': 2, 'rect': [0, 0, 2560, 1440]},
+            {'id': 3, 'rect': [0, -1440, 1000, -800], 'hidden': True},
+            {'id': 4, 'rect': [0, -1440, 1000, -800], 'minimized': True},
+            {'id': 5, 'rect': [-1, -1440, 2560, 0]},
+            {'id': 7, 'rect': [800, -1300, 1600, -100], 'title': '图片'},
+        ]
+        cases = [([selected, *excluded], None),
+                 ([selected, *[{'id': index, 'rect': [0, -1440, 1000, -800], 'hidden': True}
+                               for index in range(10, 35)]], None),
+                 ([selected, {'id': 6, 'rect': [10, -1400, 1000, -800]}], 'WECOM_SCREEN2_MAIN_WINDOW_AMBIGUOUS'),
+                 (excluded, 'VISIBLE_SCREEN2_WECOM_MAIN_WINDOW_UNAVAILABLE')]
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            script = root / 'fixture.ps1'
+            script.write_text(fixture + '\ntry {\n' + WECOM_SCREEN2_CAPTION_COMMAND +
+                '\n} catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }', encoding='utf-8-sig')
+            for rows, expected_error in cases:
+                with self.subTest(expected_error=expected_error):
+                    (root / 'windows.json').write_text(json.dumps(rows), encoding='utf-8-sig')
+                    result = subprocess.run(['powershell.exe', '-NoProfile', '-NonInteractive', '-File', str(script)],
+                        capture_output=True, timeout=20, creationflags=subprocess.CREATE_NO_WINDOW)
+                    if expected_error:
+                        self.assertEqual(result.returncode, 1)
+                        self.assertIn(expected_error, result.stderr.decode('utf-8', errors='replace'))
+                    else:
+                        self.assertEqual(result.returncode, 0, result.stderr.decode('utf-8', errors='replace'))
+                        proof = json.loads(result.stdout)
+                        self.assertEqual(proof['handle'], 1)
+                        self.assertEqual(proof['device'], r'\\.\DISPLAY2')
+                        self.assertEqual(proof['hit_test'], 2)
 
 
 if __name__ == '__main__':

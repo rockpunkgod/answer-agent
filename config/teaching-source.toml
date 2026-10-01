@@ -1,0 +1,5 @@
+# Audited source; change this pin explicitly after reviewing a new commit.
+# No automatic pull, installation, login or upload happens when reading it.
+repository_url = "https://github.com/rockpunkgod/ANSWER.git"
+commit = "57159d7a8b03a0743225ed27f3f1e6128bbcd45d"
+repository = ".tools/ANSWER-reference"

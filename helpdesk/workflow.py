@@ -333,6 +333,11 @@ class Workflow:
             current = self.db.one("SELECT * FROM questions WHERE id=?", (run["question_id"],))
             stale = run["state"] == "STALE" or (current["current_version"], current["context_revision"]) != (run["question_version"], run["context_revision"])
             error = result.get("error")
+            from .reference_resolution import validate_reference_snapshot
+            try:
+                validate_reference_snapshot(self.db, snapshot)
+            except ValueError:
+                error = error or 'REFERENCE_CONFIRMATION_CHANGED'
             if result.get("complete") is not True or not str(result.get("text", "")).strip():
                 error = error or "INCOMPLETE_OUTPUT"
             if result.get("uploads_confirmed") is not True:

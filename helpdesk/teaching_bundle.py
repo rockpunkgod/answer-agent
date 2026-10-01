@@ -191,6 +191,9 @@ def verify_bundle(manifest_path: str | Path, *, check_sources: bool = True) -> d
     """Reject altered snapshots, changed source files, or path redirection."""
     path = Path(manifest_path).resolve(strict=True)
     manifest = json.loads(path.read_text(encoding='utf-8'))
+    if manifest.get('format_version') == 2:
+        from .answer_teaching import verify_answer_bundle
+        return verify_answer_bundle(manifest_path, check_sources=check_sources)
     if manifest.get('skill') != 'gaokao-english':
         raise TeachingBundleError('Manifest has unexpected skill')
     root = Path(manifest['skill_root'])

@@ -5,7 +5,8 @@ param(
     [string]$CollectorConfig = 'data/private/windows-native-demo/collector.local.toml',
     [string]$AnswerReviewRoot = 'data/private/answer-review-packets',
     [string]$SourceReviewManifest = '',
-    [switch]$NoAutoCollect
+    [switch]$NoAutoCollect,
+    [string]$ReferenceLookupConfig = ''
 )
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
@@ -24,6 +25,9 @@ if ($null -ne $ExistingState) {
     # Opening the workbench must not undo a deliberate pause or retry a blocked source.
     if ($SourceReviewManifest -and -not $ExistingState.source_review_enabled) {
         throw 'The existing workbench has source review disabled. Stop that service before enabling the reviewed teaching manifest; no duplicate was started.'
+    }
+    if ($ReferenceLookupConfig) {
+        throw 'Reference lookup config is read at service startup. Stop the existing service or choose another port; its configuration was not changed.'
     }
     Write-Output "Current demo is available: $LocalUrl/"
     if (-not $ExistingState.collector.control.worker_alive) {
@@ -48,6 +52,9 @@ if (Test-Path -LiteralPath $AnswerReviewRoot -PathType Container) {
 }
 if ($SourceReviewManifest) {
     $LaunchArgs += @('--source-review-manifest', $SourceReviewManifest)
+}
+if ($ReferenceLookupConfig) {
+    $LaunchArgs += @('--reference-lookup-config', $ReferenceLookupConfig)
 }
 python @LaunchArgs
 if ($LASTEXITCODE -ne 0) {

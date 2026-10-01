@@ -38,6 +38,10 @@ def validate_source_answer(store, row, *, approval=True):
     context = Helpdesk(store).context(row["turn_id"])
     if (context["question_version"], context["context_revision"]) != (row["question_version"], row["context_revision"]):
         raise ValueError("STALE_VERSION")
+    run = store.one('SELECT input_json FROM runs WHERE id=?', (row['run_id'],))
+    if run:
+        from .reference_resolution import validate_reference_snapshot
+        validate_reference_snapshot(store, json.loads(run['input_json']))
     answer = store.one("SELECT * FROM answers WHERE id=?", (row["answer_id"],))
     evidence = store.one("SELECT * FROM answer_evidence WHERE answer_id=?", (row["answer_id"],))
     if (not answer or answer["state"] != "GENERATED" or answer["text"] != row["body"]

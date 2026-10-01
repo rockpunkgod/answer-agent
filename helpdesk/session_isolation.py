@@ -34,6 +34,8 @@ def claim_deepseek_chat(snapshot, session_url, *, store_path=None, reserve=True)
                     or row['binding_id'] != snapshot.get('binding_id', row['case_binding'])
                     or frozen != snapshot):
                 raise ValueError('SESSION_OWNERSHIP_MISMATCH')
+            from .reference_resolution import validate_reference_snapshot
+            validate_reference_snapshot(store, snapshot)
             existing = store.one('SELECT session_id FROM deepseek_chats WHERE session_url=?', (session_url,))
             if existing and existing['session_id'] != row['session_id']:
                 raise ValueError('DEEPSEEK_CHAT_ALREADY_OWNED')

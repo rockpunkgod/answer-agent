@@ -1,0 +1,81 @@
+# Internal evidence only. Copy into data/private and review before enabling.
+[lookup]
+enabled = false
+shadow = true
+network_enabled = false
+provider = "brave"
+key_env = "BRAVE_SEARCH_API_KEY"
+cache_root = "data/private/reference-lookup"
+fixture_root = "tests/fixtures/reference_lookup"
+max_search_requests = 6
+max_pages = 6
+timeout_seconds = 15
+total_seconds = 120
+request_interval_seconds = 10
+retries = 1
+cache_seconds = 3600
+phrase_words = 16
+
+# Browsing review on 2026-10-01 is not automatic-fetch authorization.
+# Each hostname is separate; aliases below are explicit, not wildcard subdomains.
+[[sources]]
+domain = "jyeoo.com"
+aliases = ["www.jyeoo.com"]
+automatic_enabled = false
+terms_status = "REVIEWED_NOT_APPROVED"
+terms_url = "https://www.jyeoo.com/home/note"
+robots_status = "UNAVAILABLE_VIA_REVIEW_TOOL"
+checked_at = "2026-10-01T15:29:00+00:00"
+allowed_paths = []
+retention_seconds = 0
+business_record_storage_allowed = false
+restrictions = "条款限制资源传播、技术抓取及付费限制规避；本轮没有取得自动访问和保存许可。"
+
+[[sources]]
+domain = "shuajuanzi.com"
+aliases = ["www.shuajuanzi.com"]
+automatic_enabled = false
+terms_status = "UNVERIFIED"
+robots_status = "UNAVAILABLE_VIA_REVIEW_TOOL"
+checked_at = "2026-10-01T15:29:00+00:00"
+
+[[sources]]
+domain = "zy.21cnjy.com"
+automatic_enabled = false
+terms_status = "UNVERIFIED"
+robots_status = "UNAVAILABLE_VIA_REVIEW_TOOL"
+checked_at = "2026-10-01T15:29:00+00:00"
+restrictions = "首页可查看课程资源；题面页面与自动访问、保存范围尚未核验。"
+
+[[sources]]
+domain = "zujuan.com"
+aliases = ["www.zujuan.com"]
+automatic_enabled = false
+terms_status = "UNVERIFIED"
+robots_status = "UNAVAILABLE_VIA_REVIEW_TOOL"
+checked_at = "2026-10-01T15:29:00+00:00"
+restrictions = "本轮根页面读取失败；不据名称认定属于其他组卷服务。"
+
+[[sources]]
+domain = "chujuan.cn"
+aliases = ["www.chujuan.cn"]
+automatic_enabled = false
+terms_status = "UNVERIFIED"
+robots_status = "UNAVAILABLE_VIA_REVIEW_TOOL"
+checked_at = "2026-10-01T15:29:00+00:00"
+
+[[sources]]
+domain = "zybang.com"
+aliases = ["www.zybang.com"]
+automatic_enabled = false
+terms_status = "UNVERIFIED_FOR_QUESTION_PAGES"
+robots_status = "DENIED_WILDCARD"
+checked_at = "2026-10-01T15:29:00+00:00"
+restrictions = "www.zybang.com/robots.txt 对 User-agent: * 设置 Disallow: /；家长版条款不能当成全站授权。"
+
+[[sources]]
+domain = "easylearn.baidu.com"
+automatic_enabled = false
+terms_status = "UNVERIFIED"
+robots_status = "UNAVAILABLE_VIA_REVIEW_TOOL"
+checked_at = "2026-10-01T15:29:00+00:00"
