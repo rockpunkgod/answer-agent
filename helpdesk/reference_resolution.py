@@ -99,9 +99,27 @@ class ReferenceResolution:
                 raise ValueError('Reference result belongs to a stale question/context')
             comparison = compare(reference_version, reference, material, student_version,
                                  Question.from_dict(json.loads(row['payload'])), row['verified_text'])
-            existing = self.db.one('''SELECT id FROM reference_candidates WHERE student_version=?
+            existing = self.db.one('''SELECT * FROM reference_candidates WHERE student_version=?
                 AND json_extract(comparison,'$.candidate.identity')=?''', (student_version, identity))
             if existing:
+                saved = json.loads(existing['comparison'])
+                meta = saved['candidate']
+                stored_reference = Question.from_dict(json.loads(existing['payload']))
+                if (meta.get('rule_version') != RULE_VERSION
+                        or content_fingerprint(stored_reference, existing['material_text']) != meta.get('content_fingerprint')):
+                    raise ValueError('Stored candidate evidence changed; manual review required')
+                refreshed = asdict(compare(existing['reference_version'], stored_reference, existing['material_text'],
+                    student_version, Question.from_dict(json.loads(row['payload'])), row['verified_text']))
+                previous = {key: value for key, value in saved.items() if key != 'candidate'}
+                if encode(previous) != encode(refreshed):
+                    if meta.get('state') == 'CONFIRMED':
+                        raise ValueError('Confirmed reference comparison changed; manual review required')
+                    meta.update(resolution_status=refreshed['resolution_status'], comparison_recomputed_at=now())
+                    self._event(row['question_id'], existing['id'], 'REFERENCE_CANDIDATE_COMPARISON_REFRESHED',
+                        {'previous_comparison': previous, 'comparison_result': refreshed,
+                         'state_preserved': meta['state'], 'rule_version': RULE_VERSION})
+                    self.db.execute('UPDATE reference_candidates SET comparison=? WHERE id=?',
+                        (encode({**refreshed, 'candidate': meta}), existing['id']))
                 return existing['id'], comparison
             candidate_id = new_id()
             meta = {'schema_version': 1, 'candidate_id': candidate_id, 'identity': identity,

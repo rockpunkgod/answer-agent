@@ -21,7 +21,7 @@ from .reference_providers import HttpProvider, LocalProvider
 from .storage import encode, now
 
 
-VERSION = 'reference-lookup-v2'
+VERSION = 'reference-lookup-v3'
 TRIGGERS = {'blurred', 'missing_material', 'clean_copy', 'version_difference', 'manual_source'}
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -448,7 +448,7 @@ class ReferenceLookup:
                         raise LookupFailure('ACCESS_RESTRICTED', 'CACHE_FILE_REDIRECTED')
                     item = json.loads(path.read_text(encoding='utf-8'))
                     legacy_external = (namespace == 'page' or namespace == 'verification' and item.get('value', {}).get('network_verified'))
-                    if item['version'] in ('reference-lookup-v1', VERSION) and (item['expires'] <= time.time() or legacy_external) and digest(item['value']) == item['sha256']:
+                    if item['version'] in ('reference-lookup-v1', 'reference-lookup-v2', VERSION) and (item['expires'] <= time.time() or legacy_external) and digest(item['value']) == item['sha256']:
                         path.unlink()  # Only this module's expired cache file.
                 except FileNotFoundError:
                     continue

@@ -115,11 +115,14 @@ class ReferenceResolutionTests(unittest.TestCase):
 
     def test_06_numeric_and_scope_changes_require_reconfirmation(self):
         for before, after in (('How many blankets were needed: 12?', 'How many blankets were needed: 21?'),
-                              ('Choose a value above ten.', 'Choose a value below ten.')):
+                              ('Choose a value above ten.', 'Choose a value below ten.'),
+                              ('Which value is between 10 and 20?', 'Which value is between 20 and 10?'),
+                              ('Did 12 students use 21 blankets?', 'Did 21 students use 12 blankets?')):
             reference = replace(self.student, raw_stem=before, verified_stem=before)
             student = replace(self.student, raw_stem=after, verified_stem=after)
             comparison = compare('r', reference, self.material, 's', student, self.material)
             self.assertIn('CONDITION_CHANGED', comparison.relation)
+            self.assertTrue(any(d['kind'] == 'KEY_CONDITION_CONFLICT' for d in comparison.field_differences))
             self.assertFalse(comparison.option_mapping)
 
     def test_07_wrong_candidate_is_rejected_and_cannot_be_overridden(self):
@@ -147,6 +150,46 @@ class ReferenceResolutionTests(unittest.TestCase):
                 db.close()
         with ThreadPoolExecutor(max_workers=2) as pool:
             self.assertEqual(list(pool.map(lambda _: add_concurrently(), range(2))), [first, first])
+
+    def test_retrieval_refreshes_legacy_rejection_evidence_without_confirming_it(self):
+        import re
+        from helpdesk.domain import CONDITION_PATTERN
+        self.student = replace(self.student, raw_stem='Did 21 students use 12 blankets?',
+                               verified_stem='Did 21 students use 12 blankets?')
+        self.first = self.ingest(self.student)
+        self.version = self.current()['current_version']
+        reference = replace(self.student, raw_stem='Did 12 students use 21 blankets?',
+                            verified_stem='Did 12 students use 21 blankets?')
+        with patch('helpdesk.domain._conditions',
+                   lambda text: sorted(re.findall(CONDITION_PATTERN, (text or '').casefold()))):
+            candidate, previous = self.add(reference)
+        refreshed, _ = self.add(reference)
+        view = self.resolution.list()[0]
+        self.assertEqual(refreshed, candidate)
+        self.assertTrue(any(d['kind'] == 'KEY_CONDITION_CONFLICT'
+                            for d in view['comparison_result']['field_differences']))
+        self.assertEqual(view['state'], 'REJECTED')
+        self.assertFalse(view['can_confirm'])
+        self.assertFalse(view['consumption_enabled'])
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM reference_candidates')[0], 1)
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM performance_units')[0], 0)
+        event = self.db.one("SELECT details FROM audit WHERE event='REFERENCE_CANDIDATE_COMPARISON_REFRESHED'")
+        evidence = json.loads(event['details'])
+        self.assertEqual(evidence['previous_comparison']['field_differences'], list(previous.field_differences))
+        self.add(reference)
+        self.assertEqual(self.db.one("SELECT COUNT(*) FROM audit WHERE event='REFERENCE_CANDIDATE_COMPARISON_REFRESHED'")[0], 1)
+
+    def test_duplicate_reference_does_not_replace_a_confirmed_comparison(self):
+        candidate, comparison = self.add()
+        original = self.review(candidate, consume=True)
+        with patch('helpdesk.reference_resolution.compare',
+                   return_value=replace(comparison, reason='Anonymous changed comparison rule')):
+            with self.assertRaisesRegex(ValueError, 'Confirmed reference comparison changed'):
+                self.add()
+        current = self.resolution.list()[0]
+        self.assertEqual(current['confirmed_by'], original['confirmed_by'])
+        self.assertEqual(current['comparison_result'], original['comparison_result'])
+        self.assertEqual(self.db.one("SELECT COUNT(*) FROM audit WHERE event='REFERENCE_CANDIDATE_COMPARISON_REFRESHED'")[0], 0)
 
     def test_09_manual_confirmation_records_original_actor_and_does_not_consume_shadow(self):
         candidate, _ = self.add()
@@ -214,6 +257,8 @@ class ReferenceResolutionTests(unittest.TestCase):
         self.db.execute('UPDATE reference_candidates SET payload=? WHERE id=?', (encode(changed), candidate))
         with self.assertRaisesRegex(ValueError, 'content changed'):
             self.review(candidate, consume=True)
+        with self.assertRaisesRegex(ValueError, 'Stored candidate evidence changed'):
+            self.add()
 
     def test_content_tampering_after_confirmation_stops_generation_context(self):
         candidate, _ = self.add()
@@ -221,6 +266,8 @@ class ReferenceResolutionTests(unittest.TestCase):
         self.db.execute('UPDATE reference_candidates SET material_text=? WHERE id=?', ('Different material.', candidate))
         with self.assertRaisesRegex(ValueError, 'content changed'):
             self.app.context(self.first.turn_id)
+        with self.assertRaisesRegex(ValueError, 'Stored candidate evidence changed'):
+            self.add()
 
     def test_immutable_student_version_and_altered_frozen_input_are_rejected(self):
         candidate, _ = self.add()

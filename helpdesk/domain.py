@@ -106,7 +106,8 @@ CONDITION_PATTERN = (r"\b(?:not|except|least|most|only|always|never|all|some|bef
 
 
 def _conditions(text):
-    return sorted(re.findall(CONDITION_PATTERN, (text or '').casefold()))
+    # Preserve order: swapping the same numbers can change their roles or a range.
+    return re.findall(CONDITION_PATTERN, (text or '').casefold())
 
 
 def _negations(text):

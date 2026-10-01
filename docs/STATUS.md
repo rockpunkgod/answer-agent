@@ -138,6 +138,26 @@
 
 验证分层：匿名SQLite、模拟网页/桌面、本机HTTP及无界面浏览器通过；真实本地Git/文件来源检查通过；真实MCP启动与DisplayInventory通过。群原消息读取、固定ANSWER下真实DeepSeek上传/生成、真实交付和正式日报提交仍未验证。3项跳过为官方存档SDK未提供、教学符号链接权限不足、浏览器目录符号链接权限不足，不算通过、不要求管理员权限。当前全计划仍未完成。
 
+## 题目身份增量审计与条件顺序修正（2026-10-02）
+
+本批基线为已提交的`106335adcda633e0dd51ce439e5aab0d8a03a34f`，对照最新题目身份确认要求重新检查现有代码。`ReferenceResolution`已复用原候选表和审计表，保存五个候选状态、来源与内容哈希、逐字段证据和具名人工确认；`domain.compare()`仍是唯一比较入口。工作台Shadow、候选拒绝、确认后显式消费以及上传/生成/批准/发送前版本复核已接通，无需重复模型或新增迁移。
+
+匿名复现发现，原`_conditions()`对数字和条件词排序，导致“12名学生使用21条毯子”改为“21名学生使用12条毯子”、范围端点10与20互换时，只标记普通题干差异。原实现已经拒绝匹配，不存在这两项被自动确认为同题的结果。本批保留条件出现顺序，将其明确显示为`CONDITION_CHANGED`及`KEY_CONDITION_CONFLICT`；不改变精确同题与选项映射的准入条件，不自动建立新题或绩效单元。
+
+检索模块由`reference-lookup-v2`更新为`reference-lookup-v3`，新查询不复用旧报告，过期v2缓存仍按原受控规则清理。兼容性测试验证重新计算生成两份检索记录，仍仅有一个候选、零个绩效单元。已有确认与原始题面记录不覆盖，候选确认规则版本继续为`question-compare-v1`，本次只增强此前已拒绝内容的差异标记。
+
+第二个匿名复现发现，重复检索的去重分支没有将新比较结论回流到已存候选，Shadow仍会显示旧的普通差异。`ReferenceResolution.add()`现在先核验原候选内容，以原候选ID和版本重新比较；未确认且结论变化时，旧/新比较写入现有审计表，再更新差异标记，保留候选原状态、来源、取得时间和人工决定。已确认结论变化或内容篡改时停止，不自动改写授权。再次重算不重复增加审计事件、候选或绩效。
+
+修改文件为`domain.py`、`reference_lookup.py`、`reference_resolution.py`、两个现有参考测试、README与本进度文件。没有新增依赖、表、迁移、消息通道或Agent，没有修改ANSWER、真实消息时间、原数据库与8767运行配置。ANSWER本地仍为干净提交`57159d7a8b03a0743225ed27f3f1e6128bbcd45d`，客观题必需的`gaokao-english/scripts/check_lesson.py`仍缺失；受影响自动教学分支继续停止。
+
+测试记录：修改前现有参考/准备回归85项通过，选项映射7项通过。补充数字角色/范围端点、历史候选回流用例后，两项目标测试分别实际失败；修正生产代码后通过，没有删除关键断言。最终相关命令`python -X utf8 -B -m unittest tests.test_reference_resolution tests.test_reference_providers tests.test_reference_lookup tests.test_reference_workbench tests.test_mcp_preparation_text tests.test_mcp_fast_preparation tests.test_core.MappingTests`，95项通过、0失败、0跳过，8.863秒。这些为匿名SQLite、获准本地样例及Mock网页/桌面，不属于真实账号或外发验证。
+
+补充历史候选回流前的全量`20261002-reference-condition-order`为1038项、1035通过、0失败、3跳过，205.201秒，运行期间源码未变化；该结果不代替本批最终版本验证。最终命令`python -X utf8 -B -m tools.verify_project --output artifacts/verification/20261002-reference-condition-order-final`：1040项、1037通过、0失败、3跳过，206.490秒，退出码0，运行期间源码未变化。源码快照`sha256:a72098ce7e18b0a97fdcb2cedde0570d02a4308424b5d7fed5c4481cb4e4d49f`与最终源码一致，日志哈希及证据验证通过；原始结果保存在忽略的验证目录，不上传业务材料。
+
+3项跳过为官方存档SDK未提供、教学依赖符号链接与浏览器目录符号链接在当前环境无法创建，均不算通过。真实本地检查仅核对ANSWER提交、干净工作树和缺项；没有用本轮模拟结果冒充真实站点抓取、网页上传、学生消息或交付验收。
+
+仍有的范围缺口：精确匹配仅支持完整材料与四选项客观题；本地抓取支持UTF-8文本/HTML，网页结构提取尚未做真实站点验证；Crawl4AI浏览器抓取没有接入。联网题库命中、固定ANSWER下真实DeepSeek上传/生成、真实群交付仍未验收。默认检索关闭与Shadow保留，不将模拟通过显示为完整闭环上线。
+
 ## 已可使用
 
 - 一个 PowerShell 入口启动本地工作台，缺可选采集配置或讲解目录仍能查看台账；复用服务不会自动恢复暂停。

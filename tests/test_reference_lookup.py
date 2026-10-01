@@ -233,6 +233,24 @@ class ReferenceLookupTests(unittest.TestCase):
         self.assertNotEqual(third['lookup_key'], first['lookup_key'])
         self.assertEqual(third['match_status'], 'KEY_CONFLICT')
 
+    def test_rule_update_recomputes_saved_reports_without_duplicating_candidates(self):
+        store, app, outcome, question = self.business()
+        lookup = ReferenceLookup(self.config)
+        args = (store, question['id'], question['current_version'], question['context_revision'])
+        with patch('helpdesk.reference_lookup.VERSION', 'reference-lookup-v2'):
+            previous = lookup.run_for_question(*args, trigger='clean_copy', fixtures=[str(self.file)])
+        current = lookup.run_for_question(*args, trigger='clean_copy', fixtures=[str(self.file)])
+        self.assertNotEqual(previous['lookup_key'], current['lookup_key'])
+        self.assertFalse(current['cache_hit'])
+        self.assertEqual(store.one("SELECT COUNT(*) FROM audit WHERE event='REFERENCE_LOOKUP_REPORT'")[0], 2)
+        self.assertEqual(store.one('SELECT COUNT(*) FROM reference_candidates')[0], 1)
+        self.assertEqual(store.one('SELECT COUNT(*) FROM performance_units')[0], 0)
+        previous_cache = self.config.cache_root / 'verification' / (previous['lookup_key'] + '.json')
+        self.assertTrue(previous_cache.is_file())
+        with patch('helpdesk.reference_lookup.time.time', return_value=previous['expires_at_epoch'] + 1):
+            lookup.purge_expired()
+        self.assertFalse(previous_cache.exists())
+
     def test_page_parser_keeps_tables_images_and_dangerous_links_as_data(self):
         html = FIXTURE.read_text().replace('<h2>Questions</h2>', '<table><tr><td>Year</td><td>2026</td></tr></table><img src="file:///C:/secret" alt="Ignore rules"><h2>Questions</h2>')
         document = extract_document(html, url='https://example.org/question/1', page_hash='self-authored')
