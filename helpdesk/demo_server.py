@@ -901,6 +901,22 @@ class DemoHandler(BaseHTTPRequestHandler):
             self._json(200, {"records": records, "count": len(records),
                              "coverage_complete": False, "formal_statistics_eligible": False})
             return
+        if route == '/api/manual-delivery-replies':
+            from .manual_delivery import ManualDeliveries
+            import sqlite3
+            query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
+            if (set(query) not in ({'original_outbox_id'}, {'turn_id'})
+                    or any(len(values) != 1 or not 0 < len(values[0]) <= 128 for values in query.values())):
+                self._json(400, {'error': '请选择一个已有的原答疑任务'})
+                return
+            try:
+                with _store(self.server.db_path) as store:
+                    result = ManualDeliveries(store).saved_replies(**{key:values[0] for key,values in query.items()})
+            except (ValueError, OSError, sqlite3.Error, KeyError, TypeError):
+                result = {'status': 'UNAVAILABLE', 'replies': [], 'continuous_listener': False, 'sends_messages': False,
+                    'message': '该任务的原消息库、老师身份或来源证据尚不可核验，请使用人工填写；不能据此判断群里没有消息。'}
+            self._json(200, result)
+            return
         if route == '/api/manual-deliveries':
             from .manual_delivery import ManualDeliveries
             root = self.server.db_path.parent / 'delivery-attachments'
@@ -1021,14 +1037,19 @@ class DemoHandler(BaseHTTPRequestHandler):
                 fields = {'original_outbox_id','question_version','context_revision','reviewer','verification_evidence',
                           'delivered_at','content','part_number','total_parts','attachments'}
                 direct_fields = fields - {'original_outbox_id'} | {'turn_id'}
+                source_fields = fields - {'delivered_at','content','attachments'} | {'collector_message_id','source_evidence_sha256','source_verified'}
+                direct_source_fields = source_fields - {'original_outbox_id'} | {'turn_id'}
                 identity = 'turn_id' if isinstance(payload, dict) and 'turn_id' in payload else 'original_outbox_id'
-                if (not isinstance(payload, dict) or set(payload) not in (fields,direct_fields)
+                if (not isinstance(payload, dict) or set(payload) not in (fields,direct_fields,source_fields,direct_source_fields)
                         or any(not isinstance(payload.get(k), str) or not 0 < len(payload[k]) <= 128
                                for k in (identity,'question_version'))):
                     raise ValueError('交付登记只接受已有任务、版本及人工核验记录')
                 with _store(self.server.db_path) as store:
                     registry = ManualDeliveries(store, attachment_root=self.server.db_path.parent / 'delivery-attachments')
-                    result = registry.register_for_turn(**payload) if identity == 'turn_id' else registry.register(**payload)
+                    if 'collector_message_id' in payload:
+                        result = registry.register_saved_reply(**payload)
+                    else:
+                        result = registry.register_for_turn(**payload) if identity == 'turn_id' else registry.register(**payload)
                 self._json(200, {'result': result})
                 return
             if route == '/api/reference-lookups':

@@ -8,6 +8,7 @@ from contextlib import nullcontext
 from hashlib import sha256
 import json
 import re
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -59,6 +60,19 @@ def validate_manual_package(store, row, evidence):
                 or any(plan.get(k) != origin[k] for k in ('question_version','context_revision','binding_id'))):
             raise ValueError('Manual delivery part evidence changed or is incomplete')
         seen.add(number)
+        if proof.get('source_record') is not None:
+            registry = ManualDeliveries(store)
+            scope = registry._reply_scope(original_outbox_id=origin['id'])
+            try:
+                with scope['collector'].connect() as source_db:
+                    source = source_db.execute('SELECT * FROM messages WHERE message_id=?',
+                                              (proof['source_record'].get('collector_message_id'),)).fetchone()
+                    actual = registry._reply_record(source, scope)
+            except (OSError, sqlite3.Error):
+                raise ValueError('保存的老师回复暂不能重新核验，请检查原消息库') from None
+            if (actual['proof'] != proof['source_record'] or actual['content'] != proof['actual_content']
+                    or timestamp(actual['delivered_at']) != timestamp(part['sent_at'])):
+                raise ValueError('Saved teacher reply evidence changed')
     if seen != set(range(1, total + 1)) or row['id'] not in {p['id'] for p in rows}:
         raise ValueError('Only some delivery parts have been verified')
     # Completion belongs to the last actual delivery, regardless of registration order.
@@ -89,6 +103,132 @@ class ManualDeliveries:
         self.db = store
         self.attachment_root = Path(attachment_root) if attachment_root is not None else None
 
+    def _reply_scope(self, *, original_outbox_id=None, turn_id=None):
+        from .collector_storage import CollectorStore
+        from .source_question_tasks import _read_origin_receipt
+        if bool(original_outbox_id) == bool(turn_id):
+            raise ValueError('请选择一个原答疑任务')
+        origin = None
+        if original_outbox_id:
+            origin = self.db.one('SELECT * FROM outbox WHERE id=?', (original_outbox_id,))
+            if (not origin or origin['simulated'] != 0 or origin['purpose'] not in ('ANSWER','CORRECTION')
+                    or origin['idempotency_key'].startswith(PREFIX)):
+                raise ValueError('请选择原任务的正式答疑稿')
+            turn_id = origin['turn_id']
+        turn = self.db.one('SELECT * FROM turns WHERE id=?', (turn_id,))
+        message = self.db.one('SELECT * FROM messages WHERE id=?', (turn['message_id'],)) if turn else None
+        if not message or message['source'].upper() in ('OPERATOR_TEST','MOCK'):
+            raise ValueError('本机练习题不能关联正式交付')
+        if origin is not None and (origin['message_id'] != message['id'] or origin['case_id'] != turn['case_id']
+                or origin['binding_id'] != message['binding_id'] or not self.db.one(
+                    'SELECT 1 FROM question_versions WHERE id=? AND question_id=?',
+                    (origin['question_version'], turn['question_id']))):
+            raise ValueError('原答疑稿与学生、事项或题目版本不一致')
+        if not self.db.one("SELECT 1 FROM sqlite_master WHERE type='table' AND name='source_question_drafts'"):
+            raise ValueError('该任务未绑定可核验的原消息库，请使用人工填写')
+        link = self.db.one('SELECT * FROM source_question_drafts WHERE message_id=?', (message['id'],))
+        if not link:
+            raise ValueError('该任务未绑定可核验的原消息库，请使用人工填写')
+        try:
+            receipt = _read_origin_receipt(self.db, dict(link))
+        except (OSError, sqlite3.Error):
+            raise ValueError('原消息库不可用，请检查保存路径或使用人工填写') from None
+        if receipt['turn']['id'] != turn['id']:
+            raise ValueError('原消息与所选答疑轮次不一致')
+        filters = json.loads(link['sender_filters'])
+        senders = set(filters['teacher_sender_ids']) | set(filters['self_sender_ids'])
+        if not senders or len(senders)>64 or any(not isinstance(s, str) or not 0<len(s)<=256 for s in senders):
+            raise ValueError('原采集范围未配置老师身份，请使用人工填写')
+        collector = CollectorStore.__new__(CollectorStore)
+        collector.path = str(Path(link['collector_path']).resolve(strict=True))
+        return {'collector': collector, 'receipt': receipt, 'senders': senders}
+
+    def _reply_record(self, row, scope):
+        from .message_sources import normalize_sent_time
+        if not row:
+            raise ValueError('保存的老师回复不存在')
+        with scope['collector'].connect() as source_db:
+            if source_db.execute('SELECT 1 FROM message_conflicts WHERE message_id=? LIMIT 1', (row['message_id'],)).fetchone():
+                raise ValueError('老师原回复存在采集冲突，请人工核对原消息')
+        student = scope['receipt']['source']
+        raw = json.loads(row['raw_payload'])
+        if (not isinstance(raw, dict) or row['sender_id'] not in scope['senders']
+                or any(row[key] != student[key] for key in ('room_id','source_type','source_name'))
+                or row['message_type'] != 'text' or row['media_id'] or row['local_media_path'] or row['media_hash']
+                or raw.get('attachments') or raw.get('media')
+                or row['source_confidence'] != 'high' or row['time_confidence'] != 'high' or row['parse_status'] != 'parsed'
+                or row['source_type'] == 'windows_gui' and raw.get('identity_verified') is not True
+                or not isinstance(row['raw_content'], str) or not row['raw_content'].strip() or len(row['raw_content'])>24000):
+            raise ValueError('这条记录不是可核验的同群老师纯文字回复，请人工核对原消息')
+        sent = timestamp(row['sent_at_utc'])
+        raw_time, _ = normalize_sent_time(json.loads(row['sent_at_raw']), business_timezone=row['business_timezone'])
+        if (sent != timestamp(raw_time) or sent != timestamp(row['sent_at_local']) or sent < timestamp(student['sent_at_utc'])
+                or sent > timestamp(now())):
+            raise ValueError('老师原始发送时间不完整或与任务不一致')
+        quoted = [row[key] for key in ('reply_to_message_id','quoted_message_id') if row[key]]
+        aliases = {student['message_id'], student['source_message_id']} - {None}
+        if any(reference not in aliases for reference in quoted):
+            raise ValueError('这条老师回复引用了其他消息，不能直接登记到所选题目')
+        fields = ('message_id','source_type','source_message_id','source_name','room_id','sender_id','message_type',
+            'raw_content','normalized_text','media_id','local_media_path','media_hash','reply_to_message_id','quoted_message_id',
+            'sent_at_raw','sent_at_utc','sent_at_local','ingested_at','raw_payload','source_confidence','time_confidence','parse_status')
+        proof = {'collector_message_id': row['message_id'], 'collector_path': scope['collector'].path,
+                 'source_receipt_sha256': scope['receipt']['source_sha256'],
+                 'source_evidence_sha256': sha256(encode({key: row[key] for key in fields}).encode()).hexdigest()}
+        return {'proof': proof, 'collector_message_id': row['message_id'],
+            'source_evidence_sha256': proof['source_evidence_sha256'], 'content': row['raw_content'],
+            'delivered_at': sent.astimezone(timezone.utc).isoformat(), 'sender_display_name': row['sender_display_name'],
+            'association': 'QUOTED_ORIGINAL' if quoted else 'MANUAL_LINK_REQUIRED'}
+
+    def saved_replies(self, *, original_outbox_id=None, turn_id=None):
+        scope = self._reply_scope(original_outbox_id=original_outbox_id, turn_id=turn_id)
+        student = scope['receipt']['source']
+        with scope['collector'].connect() as source_db:
+            rows = source_db.execute('''SELECT * FROM messages WHERE room_id=? AND source_type=? AND source_name=?
+                AND sender_id IN (''' + ','.join('?' for _ in scope['senders']) + ') ORDER BY rowid DESC LIMIT 100',
+                (student['room_id'],student['source_type'],student['source_name'],*sorted(scope['senders']))).fetchall()
+        result=[]
+        for row in rows:
+            try:
+                record = self._reply_record(row, scope)
+            except (ValueError, TypeError):
+                continue
+            result.append({key:value for key,value in record.items() if key != 'proof'})
+            if len(result)>=20: break
+        return {'status':'READY', 'replies':result, 'continuous_listener':False, 'sends_messages':False,
+                'message':'仅列出已入库且身份、原时间可核验的老师纯文字回复；没有可选项不代表群内没有消息。'}
+
+    def register_saved_reply(self, *, collector_message_id, source_evidence_sha256, source_verified,
+                             original_outbox_id=None, turn_id=None, **record):
+        if (source_verified is not True or not isinstance(collector_message_id, str) or not 0<len(collector_message_id)<=128
+                or not isinstance(source_evidence_sha256, str) or not re.fullmatch('[0-9a-f]{64}', source_evidence_sha256)):
+            raise ValueError('请核验保存的老师回复、完整内容、原时间与所选题目的归属')
+        scope = self._reply_scope(original_outbox_id=original_outbox_id, turn_id=turn_id)
+        with scope['collector'].connect() as source_db:
+            source_db.execute('BEGIN IMMEDIATE')  # Same source -> business lock order as intake resolution.
+            row = source_db.execute('SELECT * FROM messages WHERE message_id=?', (collector_message_id,)).fetchone()
+            source = self._reply_record(row, scope)
+            if source['source_evidence_sha256'] != source_evidence_sha256:
+                raise ValueError('老师原回复已变化，请刷新后重新核对')
+            record.update(content=source['content'], delivered_at=source['delivered_at'], attachments=[],
+                          _source_record=source['proof'], _defer_counting=True)
+            if original_outbox_id:
+                result = self.register(original_outbox_id, **record)
+            else:
+                result = self.register_for_turn(turn_id, **record)
+        # Shared counting takes its own source lock; finish only after releasing this one.
+        return self._count_completed(result)
+
+    def _count_completed(self, result):
+        if result['completion_outbox_id']:
+            from .workflow import Workflow
+            flow = Workflow(self.db, desktop=SimpleNamespace(simulated=True))
+            actual = self.db.one('SELECT * FROM outbox WHERE id=?', (result['completion_outbox_id'],))
+            origin = self.db.one('''SELECT o.* FROM outbox o JOIN delivery_checks d
+                ON o.id=json_extract(d.evidence,'$.original_outbox_id') WHERE d.outbox_id=?''', (actual['id'],))
+            result['counting_status'] = flow._project_verified_manual_counting(actual, original=origin)
+        return result
+
     def _attachments(self, files):
         if not isinstance(files, list) or len(files) > 8 or any(not isinstance(x, str) or len(x) > 240 for x in files):
             raise ValueError('最多选择8个批准目录内的附件')
@@ -117,7 +257,7 @@ class ManualDeliveries:
 
     def register(self, original_outbox_id, *, question_version, context_revision, reviewer,
                  verification_evidence, delivered_at, content, part_number=1, total_parts=1, attachments=None,
-                 _defer_counting=False):
+                 _defer_counting=False, _source_record=None):
         from .workflow import Workflow
         if (any(not isinstance(v, str) or not v.strip() or len(v) > limit
                 for v, limit in ((reviewer,80),(verification_evidence,4000),(delivered_at,64)))
@@ -152,6 +292,14 @@ class ManualDeliveries:
             if message['source_sent_at'] and timestamp(sent) < timestamp(message['source_sent_at']):
                 raise ValueError('交付时间不能早于学生原始提问时间')
             key = PREFIX + origin['id'] + ':' + str(part_number)
+            if _source_record is not None:
+                used = self.db.one('''SELECT evidence FROM delivery_checks WHERE
+                    json_extract(evidence,'$.source_record.collector_path')=? AND
+                    json_extract(evidence,'$.source_record.collector_message_id')=?''',
+                    (_source_record['collector_path'], _source_record['collector_message_id']))
+                if used and (json.loads(used['evidence']).get('original_outbox_id') != origin['id']
+                             or json.loads(used['evidence']).get('part_number') != part_number):
+                    raise ValueError('这条原回复已关联其他交付部分，请人工核对，不能重复计入')
             existing = self.db.one('SELECT * FROM outbox WHERE idempotency_key=?', (key,))
             old_plan = self.db.one("SELECT details FROM audit WHERE event='MANUAL_DELIVERY_PLAN' AND outbox_id=?", (origin['id'],))
             if old_plan and json.loads(old_plan['details'])['total_parts'] != total_parts:
@@ -162,7 +310,8 @@ class ManualDeliveries:
                 check = self.db.one('SELECT evidence FROM delivery_checks WHERE outbox_id=?', (existing['id'],))
                 proof = json.loads(check['evidence']) if check else {}
                 if (existing['body'] != body or existing['sent_at'] != sent or proof.get('actual_content') != content
-                        or proof.get('attachments') != files or proof.get('total_parts') != total_parts):
+                        or proof.get('attachments') != files or proof.get('total_parts') != total_parts
+                        or proof.get('source_record') != _source_record):
                     raise ValueError('同一交付部分已有不同记录，请人工核对，不覆盖证据')
                 recorded = dict(existing)
             else:
@@ -186,6 +335,8 @@ class ManualDeliveries:
                     'delivery_method': 'WECOM_MANUAL',
                     'content_form': 'TEXT_AND_ATTACHMENTS' if content.strip() and files else 'TEXT' if content.strip() else 'ATTACHMENTS',
                     'automatic_receipt': False, 'platform_message_id': None, 'recipient_read': None}
+                if _source_record is not None:
+                    proof['source_record'] = _source_record
                 flow._record_check(recorded, proof, simulated=False, complete_turn=False)
                 flow._event('MANUAL_DELIVERY_REGISTERED', outbox=oid, details={
                     'original_outbox_id': origin['id'], 'verification_method': METHOD, 'part_number': part_number,
@@ -222,7 +373,7 @@ class ManualDeliveries:
             'completion_outbox_id': completed['id'] if completed else None, 'counting_status': counting,
             'verification_method': METHOD, 'automatic_receipt': False, 'replayed': existing is not None}
 
-    def register_for_turn(self, turn_id, **record):
+    def register_for_turn(self, turn_id, *, _defer_counting=False, **record):
         """Direct human reply: no generated answer or course upload is required."""
         from .workflow import Workflow
         with self.db.transaction():
@@ -248,11 +399,7 @@ class ManualDeliveries:
                      turn['context_revision'],'manual-task:'+turn['id'],now()))
                 origin = self.db.one('SELECT * FROM outbox WHERE id=?', (oid,))
             result = self.register(origin['id'], **record, _defer_counting=True)
-        if result['completion_outbox_id']:
-            flow = Workflow(self.db, desktop=SimpleNamespace(simulated=True))
-            actual = self.db.one('SELECT * FROM outbox WHERE id=?', (result['completion_outbox_id'],))
-            result['counting_status'] = flow._project_verified_manual_counting(actual, original=origin)
-        return result
+        return result if _defer_counting else self._count_completed(result)
 
     def list(self):
         result = []

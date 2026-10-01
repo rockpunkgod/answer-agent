@@ -28,6 +28,8 @@
         <label>总部分数<input id="manual-delivery-total" type="number" min="1" max="12" value="1" required></label>
         <label>当前第几部分<input id="manual-delivery-part" type="number" min="1" max="12" value="1" required></label>
         <label class="wide">这一部分实际发出的内容<textarea id="manual-delivery-content" rows="5" maxlength="24000"></textarea></label>
+        <label class="wide">实际交付来源<select id="manual-delivery-source"><option value="">手工填写实际交付</option></select></label>
+        <p id="manual-delivery-source-status" class="wide" role="status"></p>
         <label class="wide">实际交付附件（可选，仅列出批准目录内文件）<select id="manual-delivery-attachments" multiple></select></label>
         <label>实际交付时间（含时区）<input id="manual-delivery-time" placeholder="2026-10-01T10:00:00+08:00" maxlength="64" required></label>
         <label>核验人<input id="manual-delivery-reviewer" maxlength="80" required></label>

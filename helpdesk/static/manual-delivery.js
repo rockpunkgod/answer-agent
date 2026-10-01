@@ -6,11 +6,38 @@
   const status=document.getElementById('manual-delivery-status');
   const current=document.getElementById('manual-delivery-current');
   const field=name=>document.getElementById('manual-delivery-'+name);
-  let tasks=[],submitting=false;
+  let tasks=[],submitting=false,replies=[],sourceSerial=0;
   function text(tag,value){const node=document.createElement(tag);node.textContent=value;return node;}
   const key=row=>row.outbox_id||'turn:'+row.turn_id;
   function task(){return tasks.find(t=>key(t)===select.value);}
+  function reply(){return replies.find(r=>r.collector_message_id===field('source').value);}
+  function chooseSource(){
+    const selected=reply();
+    field('content').readOnly=Boolean(selected);field('time').readOnly=Boolean(selected);
+    field('attachments').disabled=Boolean(selected);field('attested').checked=false;
+    field('content').value=selected?.content||'';field('time').value=selected?.delivered_at||'';
+    if(selected)field('source-status').textContent=selected.association==='QUOTED_ORIGINAL'
+      ?'原回复引用了该提问；请人工核验完整内容、原时间和归属。':'原回复没有明确引用；必须人工核验它是否回答所选学生的这一题。';
+  }
+  async function loadSources(row,serial){
+    const identity=row.outbox_id?{original_outbox_id:row.outbox_id}:{turn_id:row.turn_id};
+    try{
+      const response=await fetch('/api/manual-delivery-replies?'+new URLSearchParams(identity),{cache:'no-store'});
+      const data=await response.json();
+      if(serial!==sourceSerial||select.value!==key(row))return;
+      if(!response.ok||data.status!=='READY')throw Error('source unavailable');
+      replies=data.replies||[];
+      for(const entry of replies){const option=text('option',`${entry.delivered_at} · ${entry.sender_display_name||'老师'} · ${entry.content.slice(0,72)}`);
+        option.value=entry.collector_message_id;field('source').append(option);}
+      field('source-status').textContent=data.message;
+    }catch(error){
+      if(serial===sourceSerial&&select.value===key(row))field('source-status').textContent='保存的老师回复暂不可核验，可继续人工填写；这不表示群里没有消息。';
+    }
+  }
   function show(){
+    const serial=++sourceSerial;replies=[];
+    field('source').replaceChildren(text('option','手工填写实际交付'));field('source').firstChild.value='';
+    chooseSource();field('source-status').textContent='正在检查所选任务已保存的老师回复。';
     const row=task();current.replaceChildren();
     if(!row)return;
     form.querySelector('button[type="submit"]').disabled=Boolean(row.completed);
@@ -31,6 +58,7 @@
       for(const attachment of part.attachments||[])block.append(text('p','附件：'+attachment.name));
       current.append(block);
     }
+    loadSources(row,serial);
   }
   async function refresh(){
     const response=await fetch('/api/manual-deliveries',{cache:'no-store'});
@@ -46,14 +74,16 @@
     show();
   }
   select.addEventListener('change',show);
+  field('source').addEventListener('change',chooseSource);
   field('total').addEventListener('change',()=>{field('part').max=field('total').value;});
   form.addEventListener('submit',async event=>{
     event.preventDefault();const row=task();if(submitting||!row||row.completed||!form.reportValidity()||!field('attested').checked)return;
     const payload={
       ...(row.outbox_id?{original_outbox_id:row.outbox_id}:{turn_id:row.turn_id}),question_version:row.question_version,context_revision:row.context_revision,
-      reviewer:field('reviewer').value,verification_evidence:field('evidence').value,delivered_at:field('time').value,
-      content:field('content').value,part_number:Number(field('part').value),total_parts:Number(field('total').value),
-      attachments:[...field('attachments').selectedOptions].map(o=>o.value)};
+      reviewer:field('reviewer').value,verification_evidence:field('evidence').value,
+      part_number:Number(field('part').value),total_parts:Number(field('total').value),
+      ...(reply()?{collector_message_id:reply().collector_message_id,source_evidence_sha256:reply().source_evidence_sha256,source_verified:true}:
+        {delivered_at:field('time').value,content:field('content').value,attachments:[...field('attachments').selectedOptions].map(o=>o.value)})};
     submitting=true;select.disabled=true;
     const buttons=panel.querySelectorAll('button');buttons.forEach(b=>b.disabled=true);
     try{

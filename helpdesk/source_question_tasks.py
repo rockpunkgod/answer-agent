@@ -69,7 +69,8 @@ def canonical_attachments(items):
     return result
 
 
-def _read_origin(store, link):
+def _read_origin_receipt(store, link):
+    """Verify immutable transport without requiring the historical turn to be current."""
     path = Path(link['collector_path']).resolve(strict=True)
     collector = CollectorStore.__new__(CollectorStore)
     collector.path = str(path)
@@ -90,6 +91,15 @@ def _read_origin(store, link):
     if link.get('source_sha256') and digest != link['source_sha256']:
         raise ValueError('Original source evidence changed after intake')
     origin['source_sha256'] = digest
+    return origin
+
+
+def _read_origin(store, link):
+    origin = _read_origin_receipt(store, link)
+    source, message = origin['source'], origin['message']
+    filters = json.loads(link['sender_filters'])
+    collector = CollectorStore.__new__(CollectorStore)
+    collector.path = str(Path(link['collector_path']).resolve(strict=True))
     origin['attachments'] = canonical_attachments(json.loads(message['attachments']))
     if source['message_type'] == 'image' and not origin['attachments']:
         raise ValueError('Original question media is not ready')

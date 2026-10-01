@@ -166,6 +166,7 @@ class ManualDeliveryUITests(unittest.TestCase):
             self.assertEqual(page.locator('#manual-delivery-content').input_value(),'')
             self.assertEqual(page.locator('#manual-delivery-current img').count(),0)
             self.assertIsNone(page.evaluate('window.manualInjection'))
+
             page.locator('#manual-delivery-content').fill(hostile)
             page.locator('#manual-delivery-time').fill('2026-10-01T10:00:00+08:00')
             page.locator('#manual-delivery-reviewer').fill('匿名核验人')
@@ -190,6 +191,67 @@ class ManualDeliveryUITests(unittest.TestCase):
             self.assertNotIn('target_group',posts[0])
             self.assertEqual(page.locator('#manual-delivery-current img').count(),0)
             self.assertIsNone(page.evaluate('window.manualInjection'))
+
+    def test_saved_reply_is_bound_to_selected_task_and_stale_fetch_does_not_mix_sources(self):
+        with self.browser.new_context() as context:
+            page=context.new_page();page.set_default_timeout(5000)
+            origin='http://127.0.0.1:49251';posts=[];delayed=[]
+            hostile='<img src=x onerror="window.replyInjection=true">'
+            tasks=[{'outbox_id':identity,'question_version':'version-'+identity,'context_revision':2,
+                    'label':'匿名任务'+identity,'draft':'Generated draft is not delivered','stale':False,
+                    'total_parts':None,'parts':[],'completed':False} for identity in ('first','second')]
+            def source(identity):
+                return {'status':'READY','message':'仅供人工核验的匿名原回复','replies':[
+                    {'collector_message_id':'teacher-'+identity,'source_evidence_sha256':'a'*64,
+                     'sender_display_name':'匿名老师','content':hostile if identity=='second' else 'Old first task reply',
+                     'delivered_at':'2026-10-01T02:00:00+00:00','association':'MANUAL_LINK_REQUIRED'}]}
+            def route(call):
+                path=call.request.url.removeprefix(origin)
+                if path=='/':
+                    call.fulfill(status=200,content_type='text/html',body=(ROOT/'helpdesk/static/index.html').read_text(encoding='utf-8'))
+                elif path=='/manual-delivery.js':
+                    call.fulfill(status=200,content_type='text/javascript',body=(ROOT/'helpdesk/static/manual-delivery.js').read_text(encoding='utf-8'))
+                elif path=='/api/manual-deliveries':
+                    if call.request.method=='POST':
+                        posts.append(json.loads(call.request.post_data));tasks[1]['completed']=True
+                        call.fulfill(status=200,content_type='application/json',body=json.dumps({'result':{'state':'SENT_UI_CONFIRMED','counting_status':'CONFIRMED'}}))
+                    else:
+                        call.fulfill(status=200,content_type='application/json',body=json.dumps({'tasks':tasks,'attachment_files':[]}))
+                elif path=='/api/manual-delivery-replies?original_outbox_id=first':
+                    delayed.append(call)
+                elif path=='/api/manual-delivery-replies?original_outbox_id=second':
+                    call.fulfill(status=200,content_type='application/json',body=json.dumps(source('second')))
+                elif path=='/api/state':
+                    call.fulfill(status=200,content_type='application/json',body='{"csrf_token":"synthetic-token"}')
+                else:
+                    call.fulfill(status=404,body='')
+            page.route('**/*',route);page.goto(origin+'/')
+            page.locator('#manual-delivery-form').wait_for(state='visible')
+            page.locator('#manual-delivery-task').select_option('second')
+            page.locator('#manual-delivery-source option[value="teacher-second"]').wait_for(state='attached')
+            self.assertEqual(len(delayed),1)
+            delayed[0].fulfill(status=200,content_type='application/json',body=json.dumps(source('first')))
+            page.wait_for_load_state('networkidle')
+            self.assertEqual(page.locator('#manual-delivery-source option[value="teacher-first"]').count(),0)
+            self.assertEqual(posts,[])
+            page.locator('#manual-delivery-source').select_option('teacher-second')
+            self.assertEqual(page.locator('#manual-delivery-content').input_value(),hostile)
+            self.assertTrue(page.locator('#manual-delivery-content').evaluate('(element)=>element.readOnly'))
+            page.locator('#manual-delivery-attested').check()
+            page.locator('#manual-delivery-source').select_option('')
+            self.assertFalse(page.locator('#manual-delivery-attested').is_checked())
+            self.assertFalse(page.locator('#manual-delivery-content').evaluate('(element)=>element.readOnly'))
+            page.locator('#manual-delivery-source').select_option('teacher-second')
+            page.locator('#manual-delivery-reviewer').fill('匿名核验人')
+            page.locator('#manual-delivery-evidence').fill('确认实际原回复对应第二项任务')
+            page.locator('#manual-delivery-attested').check()
+            page.get_by_role('button',name='保存人工核验记录',exact=True).click()
+            page.get_by_text('人工核验交付已回流，沿用原计量单元。',exact=True).wait_for()
+            self.assertEqual(posts,[{'original_outbox_id':'second','question_version':'version-second','context_revision':2,
+                'reviewer':'匿名核验人','verification_evidence':'确认实际原回复对应第二项任务','part_number':1,'total_parts':1,
+                'collector_message_id':'teacher-second','source_evidence_sha256':'a'*64,'source_verified':True}])
+            self.assertEqual(page.locator('#manual-delivery-panel img').count(),0)
+            self.assertIsNone(page.evaluate('window.replyInjection'))
 
 
 if __name__=='__main__':
