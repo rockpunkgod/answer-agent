@@ -121,7 +121,9 @@ class DeepSeekSessionPreparer:
         self.transport = transport
         self.store_path = store_path
         self.snapshot = snapshot
-        self.page = DeepSeekPage(session_url)
+        self.page = DeepSeekPage(session_url, display_index=controls.get('display_index'))
+        if isinstance(transport, MCPProcess) and self.page.display_index is None:
+            raise ValueError('Explicit display_index is required for real desktop preparation')
         from .session_isolation import claim_deepseek_chat
         claim_deepseek_chat(snapshot, self.page.url, store_path=store_path)
         self.evidence_path = Path(evidence_path)
@@ -188,6 +190,7 @@ class DeepSeekSessionPreparer:
                     raise ValueError('Invalid visual picker region')
         self.record = {
             'status': 'UPLOAD_NOT_STARTED', 'session_url': self.page.url,
+            'display_index': self.page.display_index,
             'run_id': snapshot['run_id'], 'input_fingerprint': input_fingerprint(snapshot),
             'uploaded_teaching_hashes': {x['path']: x['sha256'] for x in self.files if x['kind'] == 'course'},
             'files': self.files, 'controls': controls, 'events': [],
@@ -215,25 +218,36 @@ class DeepSeekSessionPreparer:
         return result
 
     def _snap(self, *, page=True, vision=False):
-        arguments = {'use_dom': page, 'use_vision': vision}
+        arguments = self.page.observation_arguments(dom=page, vision=vision)
         if vision:
             arguments['use_annotation'] = False
         result = self._call('Snapshot', arguments)
         tree = self.page.inspect(result) if page else snapshot_text(result)
+        if not page:
+            self.page.display_region(tree)
         return result, tree
 
     def _upload_button(self, tree):
         name = re.escape(self.controls['upload_button'])
-        return _unique_node(tree, rf'^.*?\((\d+),(\d+)\) 按钮 "{name}"[^\n]*$', 'upload button')
+        return _unique_node(tree, rf'^.*?\((-?\d+),(-?\d+)\) 按钮 "{name}"[^\n]*$', 'upload button')
+
+    def _image_region(self, text, screen):
+        sizes = re.findall(r'^Screenshot (?:Original Size|Size): \((\d+),(\d+)\)\s*$', text, re.M)
+        if sizes != [tuple(map(str, screen))]:
+            raise PreparationUnconfirmed('Visual screen dimensions changed')
+        region = self.page.display_region(text) or (0, 0, screen[0], screen[1])
+        if (region[2] - region[0], region[3] - region[1]) != tuple(screen):
+            raise PreparationUnconfirmed('Visual screenshot region dimensions changed')
+        return region
 
     def _visual_upload_point(self, observed, tree):
         pin = self.controls['visual_upload']
-        editors = re.findall(r'\((\d+),(\d+)\) 编辑 "给 DeepSeek 发送消息"([^\n]*)', tree)
+        editors = re.findall(r'\((-?\d+),(-?\d+)\) 编辑 "给 DeepSeek 发送消息"([^\n]*)', tree)
         if len(editors) != 1 or '[value:' in editors[0][2]:
             raise PreparationUnconfirmed('Visual upload editor anchor is ambiguous or occupied')
         if 'anchor_role' in pin:
             anchor = re.escape(pin['anchor_name'])
-            points = re.findall(rf'^.*?\((\d+),(\d+)\) {pin["anchor_role"]} "{anchor}"[^\n]*$', tree, re.M)
+            points = re.findall(rf'^.*?\((-?\d+),(-?\d+)\) {pin["anchor_role"]} "{anchor}"[^\n]*$', tree, re.M)
             if len(points) != 1:
                 raise PreparationUnconfirmed('Reviewed visual upload group anchor is ambiguous')
             anchor_xy = (int(points[0][0]), int(points[0][1]))
@@ -241,20 +255,19 @@ class DeepSeekSessionPreparer:
             anchor_xy = (int(editors[0][0]), int(editors[0][1]))
         screen = pin['screen_size']
         full_text = snapshot_text(observed)
-        if f'Screenshot Original Size: ({screen[0]},{screen[1]})' not in full_text:
-            raise PreparationUnconfirmed('Visual upload screen dimensions changed')
+        left, top, right, bottom = self._image_region(full_text, screen)
         images = [item for item in observed.get('content', []) if item.get('type') == 'image']
         if len(images) != 1 or not isinstance(images[0].get('path'), str):
             raise PreparationUnconfirmed('Fresh screenshot is missing or ambiguous')
         x = anchor_xy[0] + pin['editor_offset'][0]
         y = anchor_xy[1] + pin['editor_offset'][1]
-        if not (0 <= x < screen[0] and 0 <= y < screen[1]):
+        if not (left <= x < right and top <= y < bottom):
             raise PreparationUnconfirmed('Visual upload point is outside screen')
         with Image.open(images[0]['path']) as image:
             if list(image.size) != pin['screenshot_size']:
                 raise PreparationUnconfirmed('Visual upload screenshot dimensions changed')
-            sx = round(x * image.width / screen[0])
-            sy = round(y * image.height / screen[1])
+            sx = round((x - left) * image.width / screen[0])
+            sy = round((y - top) * image.height / screen[1])
             half_w, half_h = pin['crop_size'][0] // 2, pin['crop_size'][1] // 2
             box = (sx-half_w, sy-half_h, sx-half_w+pin['crop_size'][0], sy-half_h+pin['crop_size'][1])
             if box[0] < 0 or box[1] < 0 or box[2] > image.width or box[3] > image.height:
@@ -271,7 +284,7 @@ class DeepSeekSessionPreparer:
     def _upload_point(self, observed, tree):
         if 'visual_upload' in self.controls:
             return self._visual_upload_point(observed, tree)
-        return self._upload_button(tree)
+        return self.page.checked_point(snapshot_text(observed), self._upload_button(tree))
 
     def _picker(self, tree, role, name):
         # Native dialog must be first active window; reject page/no dialog.
@@ -281,21 +294,21 @@ class DeepSeekSessionPreparer:
         first = re.search(r'window "([^"\n]+)"', active[1])
         if not first or first[1] != self.controls['picker_window']:
             raise PreparationUnconfirmed('Reviewed native file picker is not foreground')
-        return _unique_node(active[1], rf'^.*?\((\d+),(\d+)\) {role} "{re.escape(name)}"[^\n]*$', 'file picker control')
+        point = _unique_node(active[1], rf'^.*?\((-?\d+),(-?\d+)\) {role} "{re.escape(name)}"[^\n]*$', 'file picker control')
+        return self.page.checked_point(tree, point)
 
     def _visual_picker_check(self):
         pin = self.controls['visual_picker']
         # The native picker can stall desktop UIA traversal. Screenshot is the
         # official image-only observation and retains its own tool identity.
-        observed = self._call('Screenshot', {'use_annotation': False})
+        arguments = {'use_annotation': False}
+        if self.page.display_index is not None:
+            arguments['display'] = [self.page.display_index]
+        observed = self._call('Screenshot', arguments)
         if observed.get('tool') != 'Screenshot' or observed.get('is_error') is not False:
             raise PreparationUnconfirmed('Visual picker screenshot tool failed')
-        text_parts = [c.get('text') for c in observed.get('content', []) if c.get('type') == 'text']
-        if len(text_parts) != 1 or not isinstance(text_parts[0], str):
-            raise PreparationUnconfirmed('Visual picker screenshot text missing')
-        tree = text_parts[0]
-        if f'Screenshot Original Size: ({pin["screen_size"][0]},{pin["screen_size"][1]})' not in tree:
-            raise PreparationUnconfirmed('Visual picker screen dimensions changed')
+        tree = snapshot_text(observed, tool='Screenshot')
+        left, top, right, bottom = self._image_region(tree, pin['screen_size'])
         images = [c for c in observed.get('content', []) if c.get('type') == 'image']
         if len(images) != 1 or not isinstance(images[0].get('path'), str):
             raise PreparationUnconfirmed('Visual picker screenshot missing or ambiguous')
@@ -313,7 +326,7 @@ class DeepSeekSessionPreparer:
                 checked[name] = digest
         for key in ('file_input_point', 'open_point'):
             x, y = pin[key]
-            if not (0 <= x < pin['screen_size'][0] and 0 <= y < pin['screen_size'][1]):
+            if not (left <= x < right and top <= y < bottom):
                 raise PreparationUnconfirmed('Visual picker action point outside screen')
         self.record['last_visual_picker_check'] = {'screenshot_path': images[0]['path'],
                                                     'region_hashes': checked}

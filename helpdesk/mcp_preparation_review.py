@@ -82,7 +82,10 @@ def review_preparation(snapshot: dict, candidate_path, review_path, output_path,
     _require(candidate.get('visible_attachment_names') == [x['name'] for x in files],
              'All frozen attachment names were not observed after upload')
     session_url = candidate['session_url']
-    page = DeepSeekPage(session_url)
+    controls = candidate.get('controls', {})
+    _require(isinstance(controls, dict) and candidate.get('display_index') == controls.get('display_index'),
+             'Candidate display scope differs from reviewed controls')
+    page = DeepSeekPage(session_url, display_index=candidate.get('display_index'))
     from .session_isolation import claim_deepseek_chat
     claim_deepseek_chat(snapshot, page.url, store_path=store_path)
     if fast:
@@ -173,6 +176,7 @@ def review_preparation(snapshot: dict, candidate_path, review_path, output_path,
         'question_id': snapshot['question_id'],
         'binding_id': snapshot.get('binding_id'),
         'session_url': session_url,
+        'display_index': page.display_index,
         'input_fingerprint': input_fingerprint(snapshot),
         'uploaded_teaching_hashes': {x['path']: x['sha256'] for x in courses},
         'reviewed_image_hashes': image_hashes,

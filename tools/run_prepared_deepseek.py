@@ -88,8 +88,6 @@ def _run_existing_locked(store, run_id, preparation_path, manifest, *,
         transport_factory = MCPProcess
     try:
         with transport_factory() as transport:
-            if preparation.get('window_name'):
-                transport.call('App', {'mode': 'switch', 'name': preparation['window_name']})
             generator.transport = transport
             result = generator.generate(snapshot)
             if not isinstance(result, dict):
@@ -130,10 +128,7 @@ def main():
             print(json.dumps({'existing_run': dict(prior), 'resubmitted': False}))
             return
         Workflow(store)._require_confirmed_ack(args.turn)
-        preparation = json.loads(args.preparation.read_text(encoding='utf-8'))
         with MCPProcess() as transport:
-            if preparation.get('window_name'):
-                transport.call('App', {'mode': 'switch', 'name': preparation['window_name']})
             generator = PreparedDeepSeekGenerator(transport, args.preparation,
                                                   ROOT / 'data/private/mcp-generation')
             workflow = Workflow(store, generation_adapter=generator, teaching_manifest=args.manifest)

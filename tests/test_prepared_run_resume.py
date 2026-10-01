@@ -84,6 +84,19 @@ class ResumeTests(unittest.TestCase):
                                         (finished['outbox_id'],))[0], self.run)
         generated.assert_called_once()
 
+    def test_cached_window_title_does_not_activate_an_unverified_browser(self):
+        preparation = json.loads(self.preparation.read_text(encoding='utf-8'))
+        preparation.update(window_name='Historical - Microsoft Edge', display_index=1)
+        self.preparation.write_text(json.dumps(preparation), encoding='utf-8')
+        desktop = NoDesktop()
+        desktop.call = Mock()
+        with patch.object(PreparedDeepSeekGenerator, 'generate', side_effect=ValueError('Page unconfirmed')) as generated:
+            finished = self.resume(lambda: desktop)
+        desktop.call.assert_not_called()
+        generated.assert_called_once()
+        self.assertEqual(finished['reason'], 'GENERATION_UNCERTAIN')
+        self.assertEqual(self.store.one('SELECT COUNT(*) FROM outbox WHERE run_id=?', (self.run,))[0], 0)
+
     def test_ack_gate_blocks_old_frozen_run_before_transport_and_adapter_submit(self):
         # The run was frozen while compatibility mode was active; enabling the
         # persisted policy must also block this otherwise valid resume entry.

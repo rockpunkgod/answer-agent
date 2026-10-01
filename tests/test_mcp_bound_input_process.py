@@ -85,7 +85,8 @@ class MCPBoundInputTests(unittest.TestCase):
         try:
             process,child=self.transport(['Click'])
             with patch('helpdesk.session_isolation.claim_deepseek_chat'):
-                DeepSeekSessionPreparer(process,fixture.snapshot,URL,fixture.evidence,fixture.controls)
+                DeepSeekSessionPreparer(process,fixture.snapshot,URL,fixture.evidence,
+                                        fixture.controls | {'display_index': 1})
             with process:process.call('Click',{})
             self.assertEqual(self.requests(child)[0]['expected_foreground_process'],'msedge')
         finally:
