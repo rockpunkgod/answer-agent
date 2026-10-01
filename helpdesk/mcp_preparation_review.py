@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 import re
 
-from .mcp_generation import input_fingerprint
+from .mcp_generation import input_fingerprint, requires_question_text
 from .mcp_page_contract import DeepSeekPage
 from .mcp_preparation import _files, prepare_question_text, question_text_fields
 
@@ -37,7 +37,7 @@ def _normalize(value):
 
 def _frozen_files(snapshot, evidence_directory=None):
     try:
-        text = prepare_question_text(snapshot, evidence_directory, create=False) if not snapshot['attachments'] or snapshot.get('references') else None
+        text = prepare_question_text(snapshot, evidence_directory, create=False) if requires_question_text(snapshot) else None
         return _files(snapshot, question_text_path=text['path'] if text else None)
     except (ValueError, OSError) as exc:
         raise PreparationReviewError(str(exc)) from exc

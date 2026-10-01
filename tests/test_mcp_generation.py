@@ -121,6 +121,40 @@ class PreparedGenerationTests(unittest.TestCase):
         self.assertEqual(result['run_id'], self.context['run_id'])
         self.assertEqual(self.prep['input_fingerprint'], input_fingerprint(self.context))
 
+    def test_actual_delivery_changes_the_prepared_input_fingerprint(self):
+        before = input_fingerprint(self.context)
+        self.context.update(intent='FOLLOWUP', previous_sent_answer='老师实际回复，保留原文。',
+            previous_delivery_simulated=0, sent_history=[dict(outbox_id='actual-part-1',
+                question_version=self.context['question_version'], sent_at='2026-10-01T10:00:00+08:00',
+                body='老师实际回复，保留原文。', simulated=0, delivery_method='MANUAL_ATTESTATION',
+                part_number=1, total_parts=2)])
+        frozen = copy.deepcopy(self.context)
+        self.assertNotEqual(input_fingerprint(frozen), before)
+        for field, value in (('body', '老师后来补充的实际回复。'),
+                             ('sent_at', '2026-10-01T10:01:00+08:00'),
+                             ('question_version', 'older-version'), ('total_parts', 3)):
+            with self.subTest(field=field):
+                changed = copy.deepcopy(frozen)
+                changed['sent_history'][0][field] = value
+                if field == 'body':
+                    changed['previous_sent_answer'] = value
+                self.assertNotEqual(input_fingerprint(frozen), input_fingerprint(changed))
+
+    def test_changed_actual_delivery_rejects_before_desktop_or_attempt(self):
+        history = [dict(outbox_id='actual-1', question_version='test',
+            sent_at='2026-10-01T10:00:00+08:00', body='老师实际解答第一部分。', simulated=0)]
+        self.context.update(intent='FOLLOWUP', previous_sent_answer=history[-1]['body'],
+                            sent_history=history, previous_delivery_simulated=0)
+        self.prep['input_fingerprint'] = input_fingerprint(self.context)
+        self.path.write_text(json.dumps(self.prep), encoding='utf-8')
+        self.context['sent_history'][0]['body'] = '后来登记了不同的实际回复。'
+        self.context['previous_sent_answer'] = self.context['sent_history'][0]['body']
+        transport = Transport()
+        with self.assertRaisesRegex(ValueError, 'context changed'):
+            PreparedDeepSeekGenerator(transport, self.path, self.base/'runs').generate(self.context)
+        self.assertEqual(transport.calls, [])
+        self.assertFalse((self.base/'runs/1234567890123456.json').exists())
+
     def test_long_paste_requires_restoration_and_full_readback_before_submit(self):
         class LongPaste(Transport):
             expanded = False

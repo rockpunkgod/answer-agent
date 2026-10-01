@@ -41,7 +41,13 @@ def validate_source_answer(store, row, *, approval=True):
     run = store.one('SELECT input_json FROM runs WHERE id=?', (row['run_id'],))
     if run:
         from .reference_resolution import validate_reference_snapshot
-        validate_reference_snapshot(store, json.loads(run['input_json']))
+        frozen = json.loads(run['input_json'])
+        validate_reference_snapshot(store, frozen)
+        if (row['state'] == 'PENDING' and frozen.get('simulated') is False
+                and frozen.get('generation_adapter') == 'WINDOWS_MCP_PREPARED_DEEPSEEK'):
+            from .mcp_generation import input_fingerprint
+            if input_fingerprint(context) != input_fingerprint(frozen):
+                raise ValueError('GENERATION_CONTEXT_CHANGED')
     answer = store.one("SELECT * FROM answers WHERE id=?", (row["answer_id"],))
     evidence = store.one("SELECT * FROM answer_evidence WHERE answer_id=?", (row["answer_id"],))
     if (not answer or answer["state"] != "GENERATED" or answer["text"] != row["body"]

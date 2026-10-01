@@ -13,9 +13,12 @@ import time
 
 from PIL import Image
 
-from .mcp_generation import input_fingerprint
+from .mcp_generation import delivery_context, input_fingerprint, requires_question_text
 from .mcp_page_contract import DeepSeekPage, PageUnconfirmed, snapshot_text
 from .teaching_bundle import verify_frozen_teaching
+
+
+QUESTION_TEXT_CACHE_VERSION = 'question-context-v1'
 
 
 class PreparationUnconfirmed(RuntimeError):
@@ -44,7 +47,9 @@ def question_text_fields(snapshot):
 
 
 def question_text_payload(snapshot):
-    payload = {'input_fingerprint': input_fingerprint(snapshot), 'question': question_text_fields(snapshot)}
+    payload = {'input_fingerprint': input_fingerprint(snapshot), 'question': question_text_fields(snapshot),
+               'turn_context': {'intent': snapshot['intent'], 'student_words': snapshot['student_words'],
+                                'actual_delivery': delivery_context(snapshot)}}
     if snapshot.get('references'):
         from .reference_resolution import reference_input
         payload['confirmed_references'] = reference_input(snapshot)
@@ -57,7 +62,8 @@ def prepare_question_text(snapshot, evidence_directory, *, create=True):
     payload = question_text_payload(snapshot)
     content = json.dumps(payload,
                          ensure_ascii=False, sort_keys=True, indent=2).encode('utf-8')
-    path = (Path(evidence_directory).resolve() / 'question-text' / (fingerprint + '.txt'))
+    path = (Path(evidence_directory).resolve() / 'question-text' /
+            (fingerprint + '-' + QUESTION_TEXT_CACHE_VERSION + '.txt'))
     if create and not path.exists():
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open('xb') as stream:
@@ -87,7 +93,7 @@ def _files(snapshot: dict, *, question_text_path=None):
             if any(x['name'].casefold() == path.name.casefold() for x in result):
                 raise ValueError('Upload filenames must be unique for readback')
             result.append({'kind': kind, 'path': str(path), 'name': path.name, 'sha256': digest})
-    if not attachments or snapshot.get('references'):
+    if requires_question_text(snapshot):
         if question_text_path is None:
             raise ValueError('Text-only preparation requires a derived frozen question file')
         path = Path(question_text_path).resolve(strict=True)
@@ -128,7 +134,7 @@ class DeepSeekSessionPreparer:
             raise ValueError('Unsupported material_order')
         self.poll_interval = poll_interval
         self.timeout = timeout
-        text = prepare_question_text(snapshot, self.evidence_path.parent) if not snapshot['attachments'] or snapshot.get('references') else None
+        text = prepare_question_text(snapshot, self.evidence_path.parent) if requires_question_text(snapshot) else None
         self.files = _files(snapshot, question_text_path=text['path'] if text else None)
         if ('visual_picker' in controls) == all(k in controls for k in
                                                 ('picker_window', 'file_input', 'open_button')):

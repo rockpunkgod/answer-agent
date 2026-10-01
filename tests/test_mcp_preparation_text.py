@@ -78,6 +78,20 @@ class TextPreparationTests(unittest.TestCase):
         self.assertEqual(approved['reviewed_question_text'], document['question'])
         PreparedDeepSeekGenerator(None, self.output, self.base)._preparation(self.snapshot)
 
+    def test_previous_plain_question_cache_is_preserved_and_not_reused(self):
+        legacy = self.base / 'question-text' / (input_fingerprint(self.snapshot) + '.txt')
+        legacy.parent.mkdir()
+        original = json.dumps({'question': question_text_fields(self.snapshot)}, ensure_ascii=False).encode('utf-8')
+        legacy.write_bytes(original)
+        current = prepare_question_text(self.snapshot, self.base)
+        self.assertNotEqual(Path(current['path']), legacy)
+        self.assertEqual(legacy.read_bytes(), original)
+        document = json.loads(Path(current['path']).read_bytes())
+        self.assertEqual(document['turn_context']['student_words'], self.snapshot['student_words'])
+        self.assertEqual(document['turn_context']['intent'], 'NEW')
+        self.assertIsNone(document['turn_context']['actual_delivery'])
+        self.assertEqual(prepare_question_text(self.snapshot, self.base), current)
+
     def test_text_review_requires_independent_explicit_source_fields_and_fingerprint(self):
         self.candidate()
         for change in ({'reviewer': ''}, {'source_review_evidence': ''},

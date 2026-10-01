@@ -377,7 +377,11 @@ class Workflow:
                     error = error or "ANSWER_LABEL_MISMATCH"
             if not stale:
                 try:
-                    self.app.context(run["turn_id"])
+                    current_context = self.app.context(run["turn_id"])
+                    if adapter_identity == 'WINDOWS_MCP_PREPARED_DEEPSEEK' and not simulated:
+                        from .mcp_generation import input_fingerprint
+                        if input_fingerprint(current_context) != input_fingerprint(snapshot):
+                            error = error or 'GENERATION_CONTEXT_CHANGED'
                 except ValueError:
                     error = error or "UNRESOLVED_INPUT"
             state = "STALE" if stale else "REJECTED" if error else "GENERATED"

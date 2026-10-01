@@ -163,9 +163,20 @@ def validate_reviewed_source_task(store, task_id):
     link = dict(link)
     origin = _read_origin(store, link)
     context = origin['context']
+    reviewed_context = context
+    if task.get('run_id'):
+        # The run's own newly delivered answer is an output, not a change to
+        # the source clarity review. Other actual replies remain input evidence.
+        own = {row[0] for row in store.all("SELECT id FROM outbox WHERE run_id=? AND state='SENT_UI_CONFIRMED'",
+                                          (task['run_id'],))}
+        if own:
+            previous = [h for h in context['sent_history'] if h['outbox_id'] not in own]
+            reviewed_context = {**context, 'sent_history': previous,
+                'previous_sent_answer': previous[-1]['body'] if previous else None,
+                'previous_delivery_simulated': previous[-1]['simulated'] if previous else None}
     if (task['message_id'] != origin['message']['id'] or task['binding_id'] != origin['message']['binding_id']
             or any(task[key] != context[key] for key in ('case_id', 'question_id', 'question_version', 'context_revision'))
-            or task['turn_id'] != origin['turn']['id'] or task['input_fingerprint'] != input_fingerprint(context)):
+            or task['turn_id'] != origin['turn']['id'] or task['input_fingerprint'] != input_fingerprint(reviewed_context)):
         raise ValueError('Original clarity review context changed')
     payload = json.loads(revision['payload'])
     if origin.get('semantic_decision') and payload.get('question_type') != origin['semantic_decision']['question_type']:

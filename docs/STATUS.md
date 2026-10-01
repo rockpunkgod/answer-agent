@@ -188,6 +188,24 @@
 
 本批验证均为匿名记录、Mock网页/桌面、本机HTTP及无界面浏览器，没有真实外发或正式日报提交。8767原运行配置与数据未修改；真实自动采集生产者、固定ANSWER下DeepSeek网页执行和平台交付观察仍未接通，屏幕2主窗口仍待就绪。全计划保持未完成。
 
+## 追问输入绑定实际交付（2026-10-02）
+
+基线为`7f41593b283b8d7458ab9eae06b1ca3a97738b72`。检查真实网页适配器发现：本地上下文虽已有实际交付，生成提示仍沿用首轮，冻结摘要也没有包含实际回复。两项匿名回归实际复现正文、时间、题目版本和部分数变化不改变摘要，改变后的回复仍可使用旧准备材料。本批在`mcp_generation.py`、`mcp_preparation.py`和`mcp_preparation_review.py`复用原上传与生成流程，加入本轮原话、intent及实际交付上下文，保存文字原貌，不由LLM重述。历史附件只投影名称、哈希与大小，不读取或上传其路径；模拟交付不能作为真实答疑的实际回复。
+
+有原图的追问也提供本轮冻结上下文文件；原文、回复时间、版本和交付部分纳入输入摘要。普通追问只处理本轮疑点；更正和答案异议重新核验当前学生版本。没有实际回复时明确不预设已交付，部分交付不意味着整包完成。上下文缓存使用`question-context-v1`文件名，旧文件保留，不因格式更新复用或覆盖。旧准备包缺本轮上下文时停止，不能自动重放上传或生成。
+
+`PreparedDeepSeekGenerator`在输入及提交前重新读取原数据库，检查暂停、原运行状态及当前上下文。生成期间实际回复变化时，`Workflow.finish()`保存拒绝结果，不建立待交付稿；生成后、交付前变化时，`validate_source_answer()`阻止审核及粘贴旧稿。均复用原运行、Outbox与版本记录，没有新增数据库表、迁移、依赖、框架、消息通道或发送权限。
+
+相邻回归发现两项计量失败：本轮刚核验送达的回答被新摘要当作此前输入变化。`source_question_tasks.py`仅在原来源审核校验中排除当前run自己的已核验输出，其他回复仍参与输入校验，原始消息、身份、版本与附件校验保留。修正后既有成功交付、计量恢复、来源变化停止三类断言继续通过，没有降低计量要求。
+
+相关命令`python -X utf8 -B -m unittest tests.test_mcp_followup_context tests.test_mcp_generation tests.test_shared_source_delivery_integration tests.test_mcp_preparation tests.test_mcp_preparation_review tests.test_mcp_preparation_text tests.test_mcp_fast_preparation tests.test_prepared_run_resume tests.test_prepared_generation_reconcile tests.test_automatic_preparation tests.test_reviewed_question_queue tests.test_source_question_tasks tests.test_manual_delivery_registration tests.test_saved_teacher_delivery tests.test_live_generation tests.test_reference_resolution`：增加缓存分隔用例前194项通过、0失败、0跳过，22.010秒；随后上下文、缓存与交付五模块52项通过、0失败、0跳过，4.767秒。新增执行用例通过真实SQLite和现有人工交付API登记匿名记录，网页及准备证据使用Mock；保留原练习来源禁记正式交付规则，不通过重新标记消息来源绕过该保护。
+
+本轮Luna medium再次有界核对三项Windows-MCP元数据，均成功返回。屏幕2仍不可唯一确认企业微信主窗口，固定码`VISIBLE_SCREEN2_WECOM_MAIN_WINDOW_UNAVAILABLE`；MCP进程PID23532正常退出、返回码0，主Agent核对进程已不存在。原始探针结果进一步说明：屏幕2仅列出两个`ImagePreview`预览窗口，没有符合条件的聊天主窗口，不能把预览窗口当成群聊。没有读取聊天正文、截图、输入、上传或发送。ANSWER仍为干净提交`57159d7a8b03a0743225ed27f3f1e6128bbcd45d`，必需的客观题脚本`gaokao-english/scripts/check_lesson.py`缺项未变。
+
+最终命令`python -X utf8 -B -m tools.verify_project --output artifacts/verification/20261002-followup-actual-context-final`：1071项，1068通过、0失败、3跳过，213.777秒，进程与有效退出码均为0。运行期间源码未变化，前后快照均为`sha256:8e2c85e1e5792e712a15c9a6883b4bbd03774b65cb15eff681c25be8c6e43899`，证据与日志哈希校验有效。3项跳过为官方存档SDK未提供、教学依赖与浏览器目录的符号链接不可创建，均不计通过。本批真实验证仅包括只读桌面元数据与本地ANSWER提交/缺项；答疑、交付、上下文及日报回归均为匿名SQLite、Mock适配器、本机HTTP及无界面浏览器，没有真实消息上传、发送、付费调用或正式日报提交。
+
+默认工作台仍只恢复队列准入，没有连接真实网页执行回调；Windows-MCP真实自动收题生产者、固定ANSWER下DeepSeek真实生成和平台交付观察尚未贯通。此次将实际交付接到现有网页输入，不能把Mock页面通过写成真实接通。8767旧服务、原数据与正式日报未修改，全计划保持未完成。
+
 ## 已可使用
 
 - 一个 PowerShell 入口启动本地工作台，缺可选采集配置或讲解目录仍能查看台账；复用服务不会自动恢复暂停。
@@ -211,7 +229,7 @@
 
 ## 本轮验证
 
-早期教学来源回归17项通过；屏幕2与相邻保护回归52项通过。真实ANSWER的六类本地原文预览与重复缓存核对通过，范围仅本地来源与文件生成；没有上传DeepSeek、运行教学检查或向企业微信输入消息。当时完整回归为上述996项；当前最终版本为1037项、1034通过、0失败、3跳过，见“MCP安装路径与真实只读核验”，原有有效测试保留。
+早期教学来源回归17项通过；屏幕2与相邻保护回归52项通过。真实ANSWER的六类本地原文预览与重复缓存核对通过，范围仅本地来源与文件生成；没有上传DeepSeek、运行教学检查或向企业微信输入消息。当时完整回归为上述996项；“MCP安装路径与真实只读核验”阶段最终版本为1037项、1034通过、0失败、3跳过。当前最新结果见“追问输入绑定实际交付”，原有有效测试保留。
 
 本轮针对导航、物理窗口、输入契约、传输和审计的47项回归，以及相邻准备/草稿路径的27项回归通过。原消息/附件衔接及页面断连恢复分别完成相关回归，本地服务检查未执行发送或增加计量。
 
