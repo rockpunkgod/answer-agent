@@ -123,9 +123,20 @@ class OperatorTasks:
         result['revisions'] = [{**dict(r), 'payload': json.loads(r['payload'])} for r in self.db.all(
             'SELECT * FROM operator_draft_revisions WHERE draft_id=? ORDER BY revision', (draft_id,))]
         result['payload'] = result['revisions'][-1]['payload']
-        task = self.db.one('SELECT id,run_id FROM operator_tasks WHERE draft_id=?', (draft_id,))
+        task = self.db.one('SELECT id,run_id,turn_id FROM operator_tasks WHERE draft_id=?', (draft_id,))
         result['task_id'] = task['id'] if task else None
         result['run_id'] = task['run_id'] if task else None
+        turn_id = task['turn_id'] if task else None
+        if not turn_id and row['label'] == 'SOURCE_MESSAGE':
+            from .source_question_tasks import SEMANTIC_BOUND_EVENT
+            links = self.db.all("SELECT turn_id FROM audit WHERE event=? AND json_extract(details,'$.draft_id')=?",
+                                (SEMANTIC_BOUND_EVENT,draft_id))
+            turn_id = links[0]['turn_id'] if len(links) == 1 else None
+        if turn_id:
+            from .manual_delivery import completion_for_turn
+            delivery = completion_for_turn(self.db, turn_id)
+            if delivery:
+                result['actual_delivery'] = delivery
         return result
 
     def get_task(self, task_id):
@@ -139,6 +150,10 @@ class OperatorTasks:
         run = self.db.one('SELECT state FROM runs WHERE id=?', (result['run_id'],)) if result['run_id'] else None
         result['run_state'] = run['state'] if run else None
         result['generation_submitted_by_intake'] = False
+        from .manual_delivery import completion_for_turn
+        delivery = completion_for_turn(self.db, result['turn_id'])
+        if delivery:
+            result['actual_delivery'] = delivery
         return result
 
     def list_drafts(self):

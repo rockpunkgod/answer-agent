@@ -416,6 +416,9 @@ class PerformanceLedger:
                 return reject('Delivery readback does not match the delivered answer')
             if 'confirmed_at' in evidence and timestamp(evidence['confirmed_at']) != sent:
                 return reject('Delivery readback time differs from actual delivery')
+            if evidence.get('verification_method') == 'MANUAL_ATTESTATION':
+                from .manual_delivery import validate_manual_package
+                validate_manual_package(self.db, row, evidence)
             if row['answer_id'] or row['run_id']:
                 if (evidence.get('confirmed') is not True or evidence.get('simulated') is not False
                         or evidence.get('body_hash') != sha256(row['body'].encode('utf-8')).hexdigest()):

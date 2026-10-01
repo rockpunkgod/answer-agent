@@ -894,6 +894,15 @@ class DemoHandler(BaseHTTPRequestHandler):
             self._json(200, {"records": records, "count": len(records),
                              "coverage_complete": False, "formal_statistics_eligible": False})
             return
+        if route == '/api/manual-deliveries':
+            from .manual_delivery import ManualDeliveries
+            root = self.server.db_path.parent / 'delivery-attachments'
+            with _store(self.server.db_path) as store:
+                tasks = ManualDeliveries(store, attachment_root=root).list()
+            files = [p.name for p in root.iterdir() if p.is_file()][:40] if root.is_dir() else []
+            self._json(200, {'tasks': tasks, 'attachment_files': files, 'verification_method': 'MANUAL_ATTESTATION',
+                             'sends_messages': False})
+            return
         if route == '/api/reference-lookups':
             lookup = self.server.reference_lookup
             with _store(self.server.db_path) as store:
@@ -961,6 +970,7 @@ class DemoHandler(BaseHTTPRequestHandler):
         files = {"/": ("index.html", "text/html; charset=utf-8"),
                  "/worker-control.js": ("worker-control.js", "text/javascript; charset=utf-8"),
                  "/reference-lookup.js": ("reference-lookup.js", "text/javascript; charset=utf-8"),
+                 "/manual-delivery.js": ("manual-delivery.js", "text/javascript; charset=utf-8"),
                  "/app.js": ("app.js", "text/javascript; charset=utf-8"),
                  "/style.css": ("style.css", "text/css; charset=utf-8")}
         selected = files.get(route)
@@ -979,7 +989,7 @@ class DemoHandler(BaseHTTPRequestHandler):
         if route.startswith('/api/worker/'):
             self._worker_post(route)
             return
-        if route not in ("/api/action", "/api/operator-tasks", '/api/reference-lookups'):
+        if route not in ("/api/action", "/api/operator-tasks", '/api/reference-lookups', '/api/manual-deliveries'):
             self._json(404, {"error": "接口不存在"})
             return
         expected_origin = f"http://127.0.0.1:{self.server.server_port}"
@@ -994,9 +1004,25 @@ class DemoHandler(BaseHTTPRequestHandler):
             return
         try:
             size = int(self.headers.get("Content-Length", "0"))
-            if not 0 < size <= (65536 if route in ('/api/operator-tasks', '/api/reference-lookups') else 1024):
+            maximum = 131072 if route == '/api/manual-deliveries' else 65536 if route in ('/api/operator-tasks', '/api/reference-lookups') else 1024
+            if not 0 < size <= maximum:
                 raise ValueError("请求大小无效")
             payload = json.loads(self.rfile.read(size))
+            if route == '/api/manual-deliveries':
+                from .manual_delivery import ManualDeliveries
+                fields = {'original_outbox_id','question_version','context_revision','reviewer','verification_evidence',
+                          'delivered_at','content','part_number','total_parts','attachments'}
+                direct_fields = fields - {'original_outbox_id'} | {'turn_id'}
+                identity = 'turn_id' if isinstance(payload, dict) and 'turn_id' in payload else 'original_outbox_id'
+                if (not isinstance(payload, dict) or set(payload) not in (fields,direct_fields)
+                        or any(not isinstance(payload.get(k), str) or not 0 < len(payload[k]) <= 128
+                               for k in (identity,'question_version'))):
+                    raise ValueError('交付登记只接受已有任务、版本及人工核验记录')
+                with _store(self.server.db_path) as store:
+                    registry = ManualDeliveries(store, attachment_root=self.server.db_path.parent / 'delivery-attachments')
+                    result = registry.register_for_turn(**payload) if identity == 'turn_id' else registry.register(**payload)
+                self._json(200, {'result': result})
+                return
             if route == '/api/reference-lookups':
                 lookup = self.server.reference_lookup
                 if not lookup.config.enabled:

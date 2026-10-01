@@ -8,6 +8,7 @@
   <script src="/app.js" defer></script>
   <script src="/worker-control.js" defer></script>
   <script src="/reference-lookup.js" defer></script>
+  <script src="/manual-delivery.js" defer></script>
 </head>
 <body>
   <header class="hero">
@@ -19,6 +20,24 @@
     </div>
   </header>
   <main class="wrap">
+    <section id="manual-delivery-panel" class="card">
+      <div class="section-title"><div><h2>登记实际交付</h2><p>人工发出后登记实际内容与时间。这里只保存核验记录，不发送消息；多部分交付须分别登记。</p></div></div>
+      <button id="manual-delivery-refresh" type="button" class="secondary">刷新答疑任务</button>
+      <form id="manual-delivery-form" class="operator-form" hidden>
+        <label class="wide">原答疑任务<select id="manual-delivery-task" required></select></label>
+        <label>总部分数<input id="manual-delivery-total" type="number" min="1" max="12" value="1" required></label>
+        <label>当前第几部分<input id="manual-delivery-part" type="number" min="1" max="12" value="1" required></label>
+        <label class="wide">这一部分实际发出的内容<textarea id="manual-delivery-content" rows="5" maxlength="24000"></textarea></label>
+        <label class="wide">实际交付附件（可选，仅列出批准目录内文件）<select id="manual-delivery-attachments" multiple></select></label>
+        <label>实际交付时间（含时区）<input id="manual-delivery-time" placeholder="2026-10-01T10:00:00+08:00" maxlength="64" required></label>
+        <label>核验人<input id="manual-delivery-reviewer" maxlength="80" required></label>
+        <label class="wide">核验依据<textarea id="manual-delivery-evidence" rows="2" maxlength="4000" placeholder="实际老师消息的位置、核对内容及附件的方式" required></textarea></label>
+        <label class="wide"><input id="manual-delivery-attested" type="checkbox" required>我已核验这是本题实际交付的解答或附件，不是“收到”、草稿或测试副本</label>
+        <button type="submit">保存人工核验记录</button>
+      </form>
+      <div id="manual-delivery-current"></div>
+      <p id="manual-delivery-status" role="status" aria-live="polite"></p>
+    </section>
     <section id="reference-lookup-panel" class="card" hidden>
       <div class="section-title"><div><h2>原题核对</h2><p>仅在模糊、缺页或版本疑点时查找。候选原题不替换学生版本，不代表完成答疑。</p></div></div>
       <div id="reference-lookup-mode" role="status"></div>

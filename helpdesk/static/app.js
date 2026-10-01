@@ -127,6 +127,7 @@ document.getElementById("performance-export").addEventListener("click",async()=>
 function updateButtons(){
  const running=Object.values(jobs).some(job=>job.state==="RUNNING");
  document.querySelectorAll("button").forEach(button=>{
+  if(button.closest('#manual-delivery-panel'))return;
   const action=button.dataset.action;
   button.disabled=busy||button.dataset.sourceUnavailable==='true'||(ackOnly&&!!button.closest('[data-teaching-entry]')&&!(sourceReviewEnabled&&button.closest('#question-review-panel')))||(action&&!allowedActions.has(action))||(action==="real_dispatch_test"&&!testDeliveryAvailable)||(realMode&&running&&action&&!["stop","resume"].includes(action));
   if(ackOnly&&action==="collector_start"&&(collectorStatus?.configured===false||collectorStatus?.control?.worker_alive))button.disabled=true;
@@ -242,14 +243,16 @@ async function refreshOperatorTasks(){
   const item=el('details','entry');item.dataset.draftId=draft.id;item.open=expanded.has(draft.id);const task=tasks.get(draft.task_id);
   const original=draft.label==='SOURCE_MESSAGE';
   const automatic=data.question_auto_continue===true||!!task?.auto_queue;
-  const state=task?.run_state==='STALE'?'旧输入已失效':task?.auto_queue?(queueNames[task.auto_queue.phase]||'后台准备中'):task?.run_state==='GENERATED'?(answerReviewRequired?'已生成，待答案审核':'已生成，等你按发送'):task?.run_id?(task.preparation_reviewed?'材料已核验，可生成':'已冻结，材料待准备'):task?'题面已审核':'草稿待核对';
+  const delivered=task?.actual_delivery||draft.actual_delivery;
+  const state=delivered?(delivered.stale?'历史已人工交付，题目已更正':'已人工核验交付'):task?.run_state==='STALE'?'旧输入已失效':task?.auto_queue?(queueNames[task.auto_queue.phase]||'后台准备中'):task?.run_state==='GENERATED'?(answerReviewRequired?'已生成，待答案审核':'已生成，等你按发送'):task?.run_id?(task.preparation_reviewed?'材料已核验，可生成':'已冻结，材料待准备'):task?'题面已审核':'草稿待核对';
   item.append(el('summary','',`第${draft.payload.number||'待核对'}题 · ${state}`));
   if(original){const source=draft.original_source;if(source){item.append(el('p','',`${source.group_name} · ${source.student_display_name} · 提问 ${display(source.student_sent_at,'created_at')}`));for(let i=0;i<source.image_count;i++){const image=document.createElement('img');image.src=`/api/source-question-image?draft_id=${encodeURIComponent(draft.id)}&index=${i}`;image.alt=`学生原题图片 ${i+1}`;image.className='source-question-image';image.loading='lazy';item.append(image);}}else{item.append(el('p','','原消息来源需核对，暂不能继续准备。'));}}
   item.append(el('pre','native-text',`${draft.payload.passage}\n\n${draft.payload.stem}\n${Object.entries(draft.payload.options).map(([key,value])=>`${key}. ${value}`).join('\n')}`));
-  if(!task){const button=el('button','secondary',original||automatic?'确认题面清楚并排队':'核对题面并建立测试任务');button.type='button';button.dataset.sourceUnavailable=String(original&&(!automatic||draft.source_valid!==true));button.disabled=busy||button.dataset.sourceUnavailable==='true';button.onclick=()=>operatorRequest({action:'review',draft_id:draft.id,revision:draft.revision,reviewer:document.getElementById('operator-reviewer').value,source_evidence:document.getElementById('operator-evidence').value});item.append(button);}
+  if(delivered){item.append(el('p','',`实际交付 ${display(delivered.completed_at,'created_at')} · 人工核验记录已回流，原生成稿保留。`));}
+  else if(!task){const button=el('button','secondary',original||automatic?'确认题面清楚并排队':'核对题面并建立测试任务');button.type='button';button.dataset.sourceUnavailable=String(original&&(!automatic||draft.source_valid!==true));button.disabled=busy||button.dataset.sourceUnavailable==='true';button.onclick=()=>operatorRequest({action:'review',draft_id:draft.id,revision:draft.revision,reviewer:document.getElementById('operator-reviewer').value,source_evidence:document.getElementById('operator-evidence').value});item.append(button);}
   else if(!automatic&&!task.run_id&&realMode){const button=el('button','secondary','冻结已审核生成输入');button.type='button';button.onclick=()=>operatorRequest({action:'freeze',task_id:task.id});item.append(button);}
   else if(!automatic&&task.preparation_reviewed&&task.run_state==='RUNNING'&&realMode){const button=el('button','secondary','生成本机测试任务答案');button.type='button';button.onclick=()=>operatorRequest({action:'generate',task_id:task.id});item.append(button);}
-  item.append(el('p','',`版本 ${draft.revision} · ${original?'沿用学生原消息，草稿尚未交付':'本机测试，不计绩效'}${task?.run_id?` · 生成编号 ${shortId(task.run_id)}`:''}`));target.append(item);
+  item.append(el('p','',`版本 ${draft.revision} · ${original?(delivered?'沿用学生原消息，实际交付已记录':'沿用学生原消息，草稿尚未交付'):'本机测试，不计绩效'}${task?.run_id?` · 生成编号 ${shortId(task.run_id)}`:''}`));target.append(item);
  }
  if(!data.drafts.length)target.append(el('p','',sourceReviewEnabled?'尚无来源核验通过且已归属的学生题目。原文片段仍在原始记录中，不能自动拼成题面。':'尚无本机录入草稿。'));
 }

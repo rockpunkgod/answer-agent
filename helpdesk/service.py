@@ -439,6 +439,14 @@ class Helpdesk:
         history = [dict(row) for row in self.db.all("""SELECT o.body,o.question_version,o.sent_at,o.simulated,o.id AS outbox_id
             FROM outbox o JOIN turns t ON t.id=o.turn_id WHERE t.question_id=?
             AND o.state='SENT_UI_CONFIRMED' AND o.purpose IN ('ANSWER','CORRECTION') ORDER BY o.sent_at,o.rowid""", (turn["question_id"],))]
+        for delivered in history:
+            check = self.db.one('SELECT evidence FROM delivery_checks WHERE outbox_id=? ORDER BY rowid DESC LIMIT 1',
+                                (delivered['outbox_id'],))
+            proof = json.loads(check['evidence']) if check else {}
+            if proof.get('verification_method') == 'MANUAL_ATTESTATION':
+                delivered.update(delivery_method='MANUAL_ATTESTATION', attachments=proof.get('attachments', []),
+                                 part_number=proof['part_number'], total_parts=proof['total_parts'],
+                                 verified_by=proof['reviewer'])
         return {"case_id": turn["case_id"], "question_id": turn["question_id"], "turn_id": turn_id,
                 "question_version": turn["question_version"], "context_revision": turn["context_revision"],
                 "student_question": q.to_dict(), "student_material": material["verified_text"],

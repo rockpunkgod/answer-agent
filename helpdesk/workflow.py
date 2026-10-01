@@ -252,6 +252,8 @@ class Workflow:
         with self.db.transaction():
             if self._stopped():
                 raise ValueError("STOPPED")
+            if self.db.one("SELECT id FROM outbox WHERE turn_id=? AND state='CANCELLED' AND last_error='MANUALLY_DELIVERED'", (turn_id,)):
+                raise ValueError('MANUALLY_DELIVERED')
             self._require_confirmed_ack(turn_id)
             snapshot = self.app.context(turn_id)
             source_review = self._source_clarity_marker(turn_id)
@@ -506,7 +508,7 @@ class Workflow:
             self.db.execute("UPDATE outbox SET review_status='APPROVED' WHERE id=?", (row["id"],))
             self._event("ANSWER_APPROVED", outbox=row["id"], run=row["run_id"])
 
-    def _record_check(self, row, evidence, *, simulated=None):
+    def _record_check(self, row, evidence, *, simulated=None, complete_turn=True):
         expected_simulation = self.desktop.simulated if simulated is None else simulated
         if type(expected_simulation) is not bool:
             raise ValueError('Delivery simulation mode must be explicit')
@@ -525,7 +527,7 @@ class Workflow:
         if not confirmed:
             prefix = "TEST_SEND_UNKNOWN:" if row["purpose"] == "TEST_ANSWER" else "SEND_UNKNOWN:"
             self._human(row["message_id"], prefix + row["id"])
-        if confirmed and row["turn_id"] and row["purpose"] in ("ANSWER", "CORRECTION"):
+        if confirmed and complete_turn and row["turn_id"] and row["purpose"] in ("ANSWER", "CORRECTION"):
             question = self.db.one("SELECT question_id FROM turns WHERE id=?", (row["turn_id"],))[0]
             current = self.db.one("SELECT current_version,context_revision FROM questions WHERE id=?", (question,))
             if tuple(current) != (row["question_version"], row["context_revision"]):
@@ -581,13 +583,25 @@ class Workflow:
                                      'semantic_decision_id': semantic_decision_id, 'answer_sent': False})
         return result
 
-    def _project_verified_manual_counting(self, row):
+    def _project_verified_manual_counting(self, row, *, original=None):
         """Resume deterministic counting from the frozen shared decision, never a UI draft."""
         from .collector_storage import CollectorStore
         from .performance import MATERIAL_TYPES, PerformanceLedger
         from .semantic_decisions import SharedSemanticDecisions
-        frozen = json.loads(self.db.one('SELECT input_json FROM runs WHERE id=?', (row['run_id'],))[0])
-        marker = frozen.get('source_clarity_review', {})
+        source = original if original is not None else row
+        run = self.db.one('SELECT input_json FROM runs WHERE id=?', (source['run_id'],))
+        if not run:
+            from .source_question_tasks import SEMANTIC_BOUND_EVENT
+            bindings = self.db.all('SELECT details FROM audit WHERE event=? AND turn_id=?',
+                                   (SEMANTIC_BOUND_EVENT, source['turn_id']))
+            if len(bindings) != 1:
+                return 'NO_SHARED_COUNTING_RELATION'
+            relation = json.loads(bindings[0]['details'])
+            marker = {'semantic_decision_id': relation.get('decision_id'), 'counting_unit_id': relation.get('unit_id'),
+                      'draft_id': relation.get('draft_id')}
+        else:
+            frozen = json.loads(run[0])
+            marker = frozen.get('source_clarity_review', {})
         decision_id, unit_id = marker.get('semantic_decision_id'), marker.get('counting_unit_id')
         if not decision_id or not unit_id:
             return 'NO_SHARED_COUNTING_RELATION'
@@ -784,8 +798,16 @@ class Workflow:
             answer = self.db.one("SELECT sent_at FROM outbox WHERE message_id=? AND purpose IN ('ANSWER','CORRECTION') AND state='SENT_UI_CONFIRMED' ORDER BY sent_at LIMIT 1", (m["id"],))
             created = datetime.fromisoformat(m["created_at"])
             age = (utc - created).total_seconds()
-            metrics.append({"message_id": m["id"], "ack_seconds": (datetime.fromisoformat(ack[0]) - created).total_seconds() if ack else None,
-                            "answer_seconds": (datetime.fromisoformat(answer[0]) - created).total_seconds() if answer else None,
+            def elapsed(receipt):
+                if not receipt or not receipt[0]:
+                    return None
+                try:
+                    seconds = (datetime.fromisoformat(receipt[0]) - created).total_seconds()
+                    return seconds if seconds >= 0 else None
+                except (ValueError, TypeError):
+                    return None
+            metrics.append({"message_id": m["id"], "ack_seconds": elapsed(ack),
+                            "answer_seconds": elapsed(answer),
                             "ack_overdue": not ack and age > 900, "answer_overdue": not answer and age > 3600})
         health["sla"] = metrics
         return {"simulation": True, "health": health, "outbox_by_state": health["outbox_by_state"], **{table: [dict(r) for r in self.db.all(f"SELECT * FROM {table} ORDER BY rowid DESC LIMIT 250")]
