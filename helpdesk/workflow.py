@@ -249,7 +249,9 @@ class Workflow:
                             "source": "verified_teaching_manifest" if manifest else "operator_allowlist",
                             **({"manifest_path": str(self.teaching_manifest.resolve()),
                                 "reviewed_policy_id": manifest['reviewed_policy_id'],
-                                "question_type": manifest['question_type']} if manifest else {})})
+                                "question_type": manifest['question_type'],
+                                **({'required_task_checks': manifest['required_task_checks']}
+                                   if manifest.get('format_version') == 3 else {})} if manifest else {})})
         return entries
 
     def start(self, turn_id):
@@ -304,9 +306,14 @@ class Workflow:
             snapshot["simulated"] = adapter.simulated
             snapshot["simulation"] = adapter.simulated
             snapshot["run_id"] = rid = new_id()
+            if any(s.get('required_task_checks') for s in skills):
+                from .lesson_checks import check_lesson
+                snapshot['teaching_source_check'] = check_lesson(snapshot)
             self.db.execute("INSERT INTO runs VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                             (rid, turn_id, snapshot["question_id"], snapshot["question_version"], snapshot["context_revision"],
                              sid, encode(snapshot), "RUNNING", None, now(), None))
+            if snapshot.get('teaching_source_check'):
+                self._event('TEACHING_SOURCE_CHECKED', run=rid, details=snapshot['teaching_source_check'])
             self._event("GENERATION_STARTED", run=rid, details={"adapter": adapter.identity, "simulated": adapter.simulated,
                 "skills": [{"name": s["name"], "sha256": s["sha256"]} for s in skills]})
             return rid
@@ -386,16 +393,36 @@ class Workflow:
                             error = error or 'GENERATION_CONTEXT_CHANGED'
                 except ValueError:
                     error = error or "UNRESOLVED_INPUT"
-            state = "STALE" if stale else "REJECTED" if error else "GENERATED"
-            revision = self.db.one("SELECT COALESCE(MAX(answer_revision),0)+1 FROM answers WHERE question_id=?", (run["question_id"],))[0]
-            aid = new_id()
             text = str(result.get("text", ""))
             if simulated and "[模拟答复，非真实 DeepSeek]" not in text:
                 text = "[模拟答复，非真实 DeepSeek] " + text
             previous = snapshot.get("sent_history", [])
             correction = bool(previous and (previous[-1]["question_version"] != run["question_version"] or snapshot["intent"] == Intent.DISPUTE))
-            if simulated and correction and state == "GENERATED":
+            if simulated and correction and not stale and not error:
                 text = "更正/复核说明：以下按本轮题目重新核验，之前回答仅作历史记录。\n" + text
+            if (not stale and not error and not simulated
+                    and any(s.get('required_task_checks') for s in snapshot.get('teaching_skills', []))):
+                from .question_matching import validate_receipt
+                try:
+                    validate_receipt(self.db, snapshot)
+                except (ValueError, OSError):
+                    error = 'QUESTION_MATCH_CHECK_FAILED'
+                    self._event('QUESTION_MATCH_RECHECK_FAILED', run=run_id, details={'reason': error})
+            if not stale and not error and any(s.get('required_task_checks') for s in snapshot.get('teaching_skills', [])):
+                from .lesson_checks import check_lesson
+                try:
+                    checked = check_lesson(snapshot, draft=text)
+                    self._event('TEACHING_DRAFT_CHECKED', run=run_id, details=checked)
+                    if checked['status'] != 'NO_AUTOMATIC_FLAGS':
+                        error = 'ANSWER_DRAFT_CHECK_REQUIRES_REVIEW'
+                except (ValueError, OSError) as exc:
+                    from .lesson_checks import LessonCheckError
+                    error = 'ANSWER_DRAFT_CHECK_FAILED'
+                    self._event('TEACHING_DRAFT_CHECK_FAILED', run=run_id,
+                                details={'reason': error, 'check_error': str(exc) if isinstance(exc, LessonCheckError) else type(exc).__name__})
+            state = "STALE" if stale else "REJECTED" if error else "GENERATED"
+            revision = self.db.one("SELECT COALESCE(MAX(answer_revision),0)+1 FROM answers WHERE question_id=?", (run["question_id"],))[0]
+            aid = new_id()
             self.db.execute("INSERT INTO answers VALUES(?,?,?,?,?,?,?,?,?,?)",
                             (aid, run["turn_id"], run["question_id"], run["question_version"], run["context_revision"], revision, text,
                              state, adapter_identity, now()))

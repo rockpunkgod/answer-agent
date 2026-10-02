@@ -174,17 +174,26 @@ def complete_automatic_preparation(store, task_id, candidate_path, *, source_rev
         task, snapshot, review = _source_review(store, task_id)
         _require(Path(task['preparation_path']).resolve() == output, 'FROZEN_PREPARATION_PATH_CHANGED')
         candidate = json.loads(candidate_path.read_text(encoding='utf-8'))
-        _require(candidate.get('preparation_mode') == 'FAST_UPLOAD_THEN_GENERATE'
+        _require(candidate.get('preparation_mode') in ('FAST_UPLOAD_THEN_GENERATE', 'VERIFY_THEN_TEACH')
                  and candidate.get('status') == 'ATTACHMENTS_READY_REQUIRES_SOURCE_REVIEW',
                  'FAST_UPLOAD_CANDIDATE_REQUIRED')
         staged_paths = [e.get('arguments', {}).get('text') for e in candidate.get('events', [])
                         if e.get('intent') in ('stage frozen file path', 'stage frozen path in reviewed picker')]
         files = candidate.get('files', [])
-        _require(candidate.get('effective_material_order') == 'COURSE_THEN_QUESTION'
-                 and staged_paths == [x['path'] for x in files if x['kind'] == 'course']
-                                   + [x['path'] for x in files if x['kind'] != 'course']
+        matching = candidate.get('preparation_mode') == 'VERIFY_THEN_TEACH'
+        expected_paths = ([x['path'] for x in files] if matching else
+                          [x['path'] for x in files if x['kind'] == 'course']
+                          + [x['path'] for x in files if x['kind'] != 'course'])
+        _require(candidate.get('effective_material_order') == ('QUESTION_VERIFY_THEN_COURSE' if matching else 'COURSE_THEN_QUESTION')
+                 and staged_paths == expected_paths
                  and not any(e.get('intent') == 'submit readback request once'
                              for e in candidate.get('events', [])), 'FAST_COURSE_THEN_QUESTION_REQUIRED')
+        if matching:
+            from .question_matching import validate_receipt
+            _require(candidate.get('question_match_result') == validate_receipt(store, snapshot, session_url=candidate['session_url']),
+                     'FIRST_QUESTION_VERIFICATION_CHANGED')
+            submits = [e for e in candidate.get('events', []) if e.get('intent') == 'submit question verification once']
+            _require(len(submits) == 1 and submits[0].get('status') == 'TOOL_RETURNED', 'FIRST_VERIFICATION_SUBMISSION_UNCONFIRMED')
         generator = PreparedDeepSeekGenerator(None, output, task['evidence_dir'])
         if output.exists():
             _require(source_path.is_file() and ready_path.is_file()

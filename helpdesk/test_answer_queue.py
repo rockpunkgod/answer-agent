@@ -43,6 +43,13 @@ def validate_source_answer(store, row, *, approval=True):
         from .reference_resolution import validate_reference_snapshot
         frozen = json.loads(run['input_json'])
         validate_reference_snapshot(store, frozen)
+        if (frozen.get('teaching_source_check')
+                or any(s.get('required_task_checks') for s in frozen.get('teaching_skills', []))):
+            from .lesson_checks import validate_task_checks
+            validate_task_checks(store, frozen, row['body'])
+            if frozen.get('simulated') is False:
+                from .question_matching import validate_receipt
+                validate_receipt(store, frozen)
         if (row['state'] == 'PENDING' and frozen.get('simulated') is False
                 and frozen.get('generation_adapter') == 'WINDOWS_MCP_PREPARED_DEEPSEEK'):
             from .mcp_generation import input_fingerprint

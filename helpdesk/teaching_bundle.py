@@ -194,7 +194,7 @@ def verify_bundle(manifest_path: str | Path, *, check_sources: bool = True,
         raise TeachingBundleError('ANSWER_SOURCE_CHECK_REQUIRED')
     path = Path(manifest_path).resolve(strict=True)
     manifest = json.loads(path.read_text(encoding='utf-8'))
-    if manifest.get('format_version') == 2:
+    if manifest.get('format_version') in (2, 3):
         from .answer_teaching import verify_answer_bundle
         manifest = verify_answer_bundle(manifest_path, check_sources=check_sources)
         if for_generation:
@@ -270,6 +270,9 @@ def verify_frozen_teaching(snapshot: dict) -> dict:
         raise TeachingBundleError('ANSWER_FROZEN_FILES_CHANGED')
     hashes = {entry['snapshot_path']: entry['snapshot_sha256'] for entry in manifest['files']}
     for skill in skills:
+        if (manifest.get('format_version') == 3
+                and skill.get('required_task_checks') != manifest['required_task_checks']):
+            raise TeachingBundleError('ANSWER_TASK_CHECK_CONTRACT_CHANGED')
         if (skill.get('source') != 'verified_teaching_manifest'
                 or skill.get('reviewed_policy_id') != manifest['reviewed_policy_id']
                 or skill.get('question_type') != manifest['question_type']

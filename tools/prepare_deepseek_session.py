@@ -29,6 +29,8 @@ def main():
                         help='JSON with reviewed upload/picker controls; preparation_mode=FAST_UPLOAD_THEN_GENERATE skips readback (candidate only); STRICT_READBACK preserves review contract')
     parser.add_argument('--evidence', type=Path, required=True,
                         help='New private JSON path; must not exist')
+    parser.add_argument('--reference-config', type=Path, default=ROOT / 'config' / 'reference-lookup.example.toml',
+                        help='Existing bounded reference-search configuration for VERIFY_THEN_TEACH')
     args = parser.parse_args()
     if args.operator_task and (not args.database or not args.run):
         parser.error('--operator-task requires --database and --run')
@@ -46,18 +48,26 @@ def main():
             snapshot = json.loads(row['input_json'])
     controls = json.loads(args.controls.read_text(encoding='utf-8'))
     if args.operator_task:
-        if controls.get('preparation_mode') != 'FAST_UPLOAD_THEN_GENERATE':
-            raise ValueError('Automatic continuation requires FAST_UPLOAD_THEN_GENERATE')
+        if controls.get('preparation_mode') not in ('FAST_UPLOAD_THEN_GENERATE', 'VERIFY_THEN_TEACH'):
+            raise ValueError('Automatic continuation requires FAST_UPLOAD_THEN_GENERATE or VERIFY_THEN_TEACH')
         from helpdesk.operator_tasks import OperatorTasks
         with closing(Store(args.database)) as store:
             task = OperatorTasks(store).get_task(args.operator_task)
-            if task['run_id'] != args.run or snapshot.get('operator_test', {}).get('task_id') != args.operator_task:
+            marker = snapshot.get('source_clarity_review', snapshot.get('operator_test', {}))
+            if task['run_id'] != args.run or marker.get('task_id') != args.operator_task:
                 raise ValueError('Initial reviewed task and frozen run differ')
             expected_candidate = Path(task['preparation_path']).with_name('preparation-candidate.json').resolve()
             if args.evidence.resolve() != expected_candidate:
                 raise ValueError('Automatic task candidate must use its own preparation-candidate.json')
     if args.evidence.exists():
         raise FileExistsError(f'Preparation evidence already exists: {args.evidence}')
+    if controls.get('preparation_mode') == 'VERIFY_THEN_TEACH':
+        if not args.database:
+            raise ValueError('VERIFY_THEN_TEACH requires the existing database and run')
+        from helpdesk.question_matching import prepare_input
+        from helpdesk.reference_lookup import LookupConfig, ReferenceLookup
+        with closing(Store(args.database)) as store:
+            snapshot = prepare_input(store, args.run, ReferenceLookup(LookupConfig.load(args.reference_config)))
     with MCPProcess() as transport:
         result = DeepSeekSessionPreparer(transport, snapshot, args.session_url,
                                          args.evidence, controls).run()

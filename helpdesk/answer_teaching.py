@@ -145,20 +145,35 @@ def _input(pin, question_type, documents):
         ('\n--- END SOURCE: ' + name + ' ---\n').encode('utf-8') for name, data in documents.items())
 
 
-def build_answer_bundle(*, question_type, output_root, request_kind='answer', repository=None):
+def _bundle_key(pin, question_type, request_kind, hashes, *, for_generation=False):
+    inputs = [pin['commit'], question_type, request_kind, list(hashes.items())]
+    if for_generation:
+        inputs.append('TASK_CHECKED_SOURCE_V1')
+    return sha256(json.dumps(inputs, ensure_ascii=False).encode('utf-8')).hexdigest()
+
+
+def build_answer_bundle(*, question_type, output_root, request_kind='answer', repository=None, for_generation=False):
+    if type(for_generation) is not bool:
+        raise TeachingSourceError('ANSWER_BUILD_MODE_INVALID')
+    # The current Question/generation contract supports four-option objective
+    # tasks. Preserve the other original source previews and manual workflows.
+    if for_generation and (question_type not in ('阅读理解', '完形填空') or request_kind != 'answer'):
+        raise TeachingSourceError('ANSWER_AUTOMATIC_TASK_SHAPE_NOT_SUPPORTED')
     pin = source_pin()
     root = _repository(repository, pin)
     route, selected, required = _selection(question_type, request_kind)
     documents = {name: _content(root, pin['commit'], name) for name in selected}
     tracked = set(_git(root, 'ls-tree', '-r', '--name-only', pin['commit']).decode('utf-8').splitlines())
     missing = [name for name in required if name not in tracked]
+    if for_generation and missing:
+        raise TeachingSourceError('ANSWER_REQUIRED_DEPENDENCIES_MISSING: ' + ', '.join(missing))
     checks = {name: _content(root, pin['commit'], name) for name in required if name not in missing}
     content = _input(pin, question_type, documents)
     if len(content) > MAX_BYTES:
         raise TeachingSourceError('ANSWER_INPUT_EXCEEDS_WORKFLOW_LIMIT')
     inputs = {**documents, **checks}
-    key = sha256(json.dumps([pin['commit'], question_type, request_kind,
-        [(name, sha256(data).hexdigest()) for name, data in inputs.items()]], ensure_ascii=False).encode('utf-8')).hexdigest()
+    hashes = {name: sha256(data).hexdigest() for name, data in inputs.items()}
+    key = _bundle_key(pin, question_type, request_kind, hashes, for_generation=for_generation)
     output = Path(output_root).absolute()
     _reject_redirects(output)
     bundle = output.resolve() / ('answer-' + key[:24])
@@ -194,6 +209,11 @@ def build_answer_bundle(*, question_type, output_root, request_kind='answer', re
             'snapshot_sha256': digest, 'bytes': len(content)}], workflow_teaching_paths=[str(teaching_input)],
         deferred_references=[{'relative_path': 'other question types / conditional course lookup',
             'reason': '未提供，不能声称已读取；课程依据问题需另行检索并带原文证据。'}])
+    if for_generation:
+        manifest.update(format_version=3, course_coverage='TASK_CHECKS_REQUIRED',
+            course_coverage_note='固定原文及依赖已核验；每题必须执行原脚本定位及成稿检查，异常转人工。不是实际网页或交付验收。',
+            answer_generation_allowed_by_course=True,
+            required_task_checks=['SOURCE', 'DRAFT'])
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
     verify_answer_bundle(manifest_path)
     return manifest_path
@@ -215,15 +235,22 @@ def _verify_answer_bundle(manifest_path, *, check_sources):
     manifest = json.loads(path.read_text(encoding='utf-8'))
     pin = source_pin()
     provenance = manifest['source_repository']
-    if (manifest.get('format_version') != 2 or provenance['url'] != pin['repository_url']
+    if (manifest.get('format_version') not in (2, 3) or provenance['url'] != pin['repository_url']
             or provenance['commit'] != pin['commit'] or manifest['reviewed_policy_id'] != 'ANSWER@' + pin['commit']
             or manifest['policy_review_status'] != 'PINNED_ANSWER_SOURCE'):
         raise TeachingSourceError('ANSWER_SOURCE_PIN_MISMATCH')
     route, selected, required = _selection(manifest['question_type'], manifest['request_kind'])
+    active = manifest['format_version'] == 3
+    if active and (manifest['question_type'] not in ('阅读理解', '完形填空')
+                   or manifest['request_kind'] != 'answer'
+                   or manifest.get('required_task_checks') != ['SOURCE', 'DRAFT']):
+        raise TeachingSourceError('ANSWER_TASK_CHECK_CONTRACT_CHANGED')
     root = _repository(provenance['root'], pin) if check_sources else None
     missing = manifest['missing_dependencies']
     if not isinstance(missing, list) or len(missing) != len(set(missing)) or any(n not in required for n in missing):
         raise TeachingSourceError('ANSWER_DEPENDENCY_STATUS_INVALID')
+    if active and missing:
+        raise TeachingSourceError('ANSWER_REQUIRED_DEPENDENCIES_MISSING: ' + ', '.join(missing))
     names = (*selected, *(name for name in required if name not in missing))
     if ([item['relative_path'] for item in manifest['source_files']] != list(names)
             or manifest['required_dependencies'] != list(required) or manifest['skill'] != route.skill):
@@ -256,8 +283,12 @@ def _verify_answer_bundle(manifest_path, *, check_sources):
         'snapshot_sha256': digest, 'bytes': len(expected)}
     if (manifest['files'] != [expected_file] or manifest['workflow_teaching_paths'] != [str(teaching_input)]
             or manifest['policy_source_sha256'] != hashes
-            or manifest['answer_generation_allowed_by_course'] is not False
+            or manifest['answer_generation_allowed_by_course'] is not active
             or manifest['real_deepseek_uploaded'] is not False or manifest['real_delivery_verified'] is not False
-            or manifest['course_coverage'] != ('DEPENDENCY_INCOMPLETE' if missing else 'SOURCE_VERIFIED_NOT_ACTIVATED')):
+            or manifest['course_coverage'] != ('TASK_CHECKS_REQUIRED' if active else
+                                             'DEPENDENCY_INCOMPLETE' if missing else 'SOURCE_VERIFIED_NOT_ACTIVATED')):
         raise TeachingSourceError('ANSWER_MANIFEST_PERMISSION_OR_INPUT_CHANGED')
+    if active and path.parent.name != 'answer-' + _bundle_key(pin, manifest['question_type'],
+            manifest['request_kind'], hashes, for_generation=True)[:24]:
+        raise TeachingSourceError('ANSWER_BUILD_MODE_CACHE_MISMATCH')
     return manifest

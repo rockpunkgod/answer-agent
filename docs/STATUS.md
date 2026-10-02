@@ -8,24 +8,26 @@
 
 | 最终条件 | 已有实现和相关测试 | 当前缺口/验收状态 |
 |---|---|---|
-| 1. ANSWER 冻结 | `answer_teaching.py`、`teaching_routes.py`、`config/teaching-source.toml`；`test_answer_teaching`、`test_teaching_bundle` | 新提交原文和依赖已实际核验，六类预览已生成；自动课程检查及生成激活未接通 |
+| 1. ANSWER 冻结 | `answer_teaching.py`、`teaching_routes.py`、`lesson_checks.py`；`test_answer_teaching`、`test_teaching_bundle`、`test_lesson_checks` | b04 原文和依赖已实际核验；阅读/完形四选项受检包已接原脚本 SOURCE/DRAFT 检查，其他题型仍只有预览/人工流程；真实教学未验收 |
 | 2. 消息身份/时间边界 | `native_message_source.py`、`collector_storage.py`、`collector_dispatch.py`；`test_native_message_source`、`test_collector_integration` | 文件由本机受控复制/人工准备，现有增量导入不是持续监听；生产者运行、停止检测和端到端最大延迟尚无真实证明 |
 | 3. Ack 时效 | `delivery_tasks.py`、`automatic_delivery_runtime.py`；`test_delivery_tasks`、`test_ack_before_generation` | 发送层 Ack/Answer 已分离并持久化；采集后详细队列接线仍需补，真实原提问起算 15 分钟未验收 |
 | 4. 检索备用 | `reference_lookup.py`、`reference_fetch.py`；`test_reference_lookup`、`test_reference_fetch` | 本批补有界备用调度；生产默认仅 Brave，实际备用 Provider 和来源准入仍未验证 |
 | 5. Top2 | `reference_lookup.top_candidates`；`test_reference_lookup` | 本批确定性最多两项、同内容去重和真实候选 ID 通过 Mock；尚未交到真实 DeepSeek |
-| 6. 两次 DeepSeek | `mcp_preparation.py`、`mcp_generation.py`、`reviewed_question_queue.py`；现有准备/生成测试 | 当前仍是单次教学生成；缺少第一次结构化核验及两阶段正式接线，旧练习不算新版验收 |
+| 6. 两次 DeepSeek | `question_matching.py`、`mcp_preparation.py`、`mcp_generation.py`；`test_question_matching` | 已接现有准备/生成入口：学生原图+Top2核验→程序检查→ANSWER上传→教学。仅 Mock 通过；真实网页、生产队列执行回调未验收，旧练习不算新版验收 |
 | 7. 会话及追问 | `workflow.py`、`session_isolation.py`、`mcp_generation.delivery_context`；`test_question_session_isolation`、`test_mcp_followup_context` | 学生/题目隔离、实际交付上下文已有 Mock；真实会话复用及避免重复搜题/上传未验收 |
-| 8. Answer 安全重试 | `reviewed_question_queue.py`、`delivery_tasks.py`；`test_reviewed_question_queue`、`test_delivery_tasks` | 队列中断停止、发送前有限重试已有 Mock；搜索/匹配/生成的独立恢复策略尚未完整接线 |
+| 8. Answer 安全重试 | `reviewed_question_queue.py`、`delivery_tasks.py`、`question_matching.begin_attempt`；相关队列与两阶段测试 | 新匹配开始先写原审计表，未知结果改证据文件名也不能重提；已有发送前有限重试保留。普通追问核验/附件复用及各阶段恢复还未完整接线 |
 | 9. 自动发送 | `workflow._validate`、`mcp_group_delivery.py`；`test_mcp_group_delivery`、`test_automatic_delivery_workbench` | 目标/版本/未知结果/接管防护已有 Mock，当前测试群真实自动发送未授权执行或验收 |
 | 10. 实际交付回流 | `manual_delivery.py`、`workflow._record_check`；`test_shared_source_delivery_integration`、`test_manual_delivery_registration` | 原 Outbox 和实际交付/绩效回流有 Mock；尚缺自动完整答案的确定性 DeliveryBatch 与顺序分段接线 |
 | 11. 中途更正 | `service.py`、`workflow.py`；`test_workflow`、`test_live_generation`、`test_reference_resolution` | 已有旧版本拦截保留；新两阶段及多段发送中的中途更正待联测 |
 | 12. 绩效一致性 | `semantic_decisions.py`、`performance.py`；`test_shared_semantic_consumers`、`test_performance_rules`、`test_performance_delivery_eligibility` | 原归属/计量/夜间规则保留，模拟边界已覆盖；真实新闭环的投影未验收 |
 | 13. 实际成本 | 搜索报告已有查询记录，网页有尝试证据 | 缺逐 AnswerTask 的实际付费/调用归集与均值、P50/P95、配置上限检查；不能把未知费用记 0 |
-| 14. 重启恢复 | 现有 SQLite、Outbox、`reviewed_question_queue`；相关队列/发送/会话恢复测试 | 旧路径恢复有 Mock；第一次核验后、第二次生成、分段和 UNKNOWN 的完整同库断点测试仍缺 |
+| 14. 重启恢复 | 现有 SQLite、Outbox、`reviewed_question_queue`；相关队列/发送/会话恢复测试 | 新第一次核验结果可在同库重新打开后校验，重复登记不重复事件；完整六断点、分段和真实 UNKNOWN 恢复试运行仍缺 |
 | 15. 无阻断级问题 | 现有版本/路径/目标/未知发送回归 | 真实 A–H 类别及至少 20 个任务试运行尚未执行；测试数量不证明生产稳定 |
 | 16. 限制公开 | 本文件、README、现有验证日志 | 保留 UNIT/MOCK/REAL/SKIPPED/FAILED 区分；CLI、SDK、上云、集群和符号链接权限不当作个人 Demo 上线前置条件 |
 
-本批实际处理：ANSWER 默认分支 main 最新 `b04ebc26d7fa096404111a0bb12f6c77cc8525b9`，先检查旧工作树干净，再 fetch 并快进到该精确提交，工作树仍干净；没有改写教学内容。新版 README 明确客观题共用 `gaokao-grammar-fill/scripts/check_lesson.py`，路由改为该仓库相对路径。主客观题只取自己的教学模块和共享脚本快照，不混入语法教学方法。新增测试保留原文、脏文件、缺项拦截、人工入口、缓存防串提交等断言；旧位置即使出现同名文件也不作为缺项替代。
+以下至“后续实施”之前为已提交 `7b6b128` 的上一批结果，保留其当时限制和测试证据；本批增量以“后续实施”为准。
+
+上一批实际处理：ANSWER 默认分支 main 最新 `b04ebc26d7fa096404111a0bb12f6c77cc8525b9`，先检查旧工作树干净，再 fetch 并快进到该精确提交，工作树仍干净；没有改写教学内容。新版 README 明确客观题共用 `gaokao-grammar-fill/scripts/check_lesson.py`，路由改为该仓库相对路径。主客观题只取自己的教学模块和共享脚本快照，不混入语法教学方法。新增测试保留原文、脏文件、缺项拦截、人工入口、缓存防串提交等断言；旧位置即使出现同名文件也不作为缺项替代。
 
 六类教学包本地实际生成并再次核验，必需缺项均为零，重复构建字节和修改时间均不变；提交、源文件哈希和只读原文清单留在忽略的 `data/private/teaching-bundles/`。只对明确标注的自建阅读题运行上游原脚本：定位返回 0；故意缺少讲解的稿件返回 1、报告 2 个疑点，这是预期拦截，不是教学通过。脚本 SHA256 为 `58322af6d1b794bb9bb862a2da0b800d777e225bac4b70cbd1e0130dded6323f`；结果保存在 `artifacts/verification/20261003-answer-freeze/checker-smoke/`。自动教学仍未激活，真实 DeepSeek 未上传，真实交付未验证。
 
@@ -35,7 +37,25 @@
 
 全量命令 `python -X utf8 -B -m tools.verify_project --output artifacts/verification/20261003-answer-freeze-top2-final`：1147 项、1144 通过、0 失败、3 跳过，227.040 秒，退出码 0，运行期间源码未变化。源码快照 `sha256:37a12291e90902a81f54dc21c28546bfd924cee00f9ea5e899f72885d1f6f599`；原始日志和 evidence.json 已复核，证据有效，等级仍为 MOCK_INTEGRATION_VERIFIED。3 项 SKIPPED 为官方 SDK 文件未提供、教学依赖符号链接无法创建、浏览器目录符号链接无法创建，均不计通过。真实核验仅为上述 ANSWER Git/文件/脚本的本地运行，未获得真实新题、网页生成、外发、绩效或成本样本。
 
-下一步依次补每题上游检查执行及教学激活、第一次结构化核验与第二次教学接线、完整交付分段和成本归集，随后进行当前同库恢复测试；具备可执行闭环后再明确真实测试群/账号与发送授权。官方 [ChatGPT 浏览器扩展](https://learn.chatgpt.com/docs/chrome-extension) 支持 Edge 的文档已核对，仅作为网页联调候选；未确认本机扩展连接或 Python 后台调用能力，不将其列为启动依赖。
+### 后续实施：每题原脚本检查与两阶段入口
+
+本批从 `7b6b1288c6d6ac37c58b13d70e1bd28bec590fb3` 继续，未更改冻结的 ANSWER 提交。原有 format2 预览保持禁生成；显式 `--for-generation` 只为现有四选项阅读/完形构建独立 format3 缓存。六类包齐全不等于六类自动任务都已支持：现有 `Question.complete`、选项结果和网页契约仍限四选项，七选五、语法、写作自动任务未接通，原文与人工流程保留。
+
+`lesson_checks.py` 使用已核对哈希的 ANSWER 原脚本，固定参数、10秒超时、无 shell，按当前题号检查源文及实际成稿；临时输入用完清理。定位卡进入第二阶段文本，检查疑点或失败阻止生成稿进入发送。证据写入原 run/audit，不增数据库表；发送前重查教学来源、题目/上下文绑定、正文哈希及程序保存的 SOURCE/DRAFT 记录。模型自报成功或置信度不能代替这些记录。SOURCE 失败不取消独立 ACK。零自动疑点不证明完整教学正确。
+
+`question_matching.py` 将有界检索的真实 Top2 固定在同一 run，候选/外部答案不覆盖学生题面。新 `VERIFY_THEN_TEACH` 复用当前 Windows-MCP 上传/页面校验：先上传学生图与不含教学文件的核验文本，仅提交一次六字段结构化核验；程序沿用 `domain.compare` 校验候选、四选项双射和差异。清晰无适用候选可按学生原题继续；模糊、冲突、配置不可用和中断明确停止。通过后上传同提交 ANSWER 与含核验结果的上下文，再由原生成入口发起第二次教学。已有题面人工核对只复用一次，没有伪造新的人工审核。
+
+第一次上传前已在原 audit 持久化尝试，换文件名不能绕过未知提交；核验结果、页面证据和原会话绑定可同库重读。普通追问的原核验/附件复用尚未接通，新的受检入口明确转待处理，不暗中重做全套搜索或重新上传。默认工作台尚无生产网页执行回调，未部署到运行配置，也未打开发送。这是可供受控联调的两阶段入口，不是 Level 3 验收通过。
+
+本机真实原脚本核验：b04 的阅读、完形受检包已分别生成到忽略的 `data/private/teaching-bundles/answer-b7bc64968b256a1a2d237ade/` 与 `answer-db966bf4c81cf6ebee2039b6/`；只对明确标注的自建文字题调用当前 `Workflow.start` 与 `check_lesson`，两类定位均 SOURCE_READY，故意不完整稿均 REVIEW_REQUIRED、2 个疑点。原始结果在 `artifacts/verification/20261003-teaching-matching-source/results.json`。这是本地脚本真实运行，未包含真实 DeepSeek、学生消息或交付。
+
+相关模拟验证已覆盖 24 种选项排列、题号、NOT/EXCEPT、数字角色及范围端点变化、缺选项、候选冲突、无候选清晰题、同库重读、旧版阻止登记、原图先于课程、两次网页提交、草稿不计绩效、第一次提交未知不重发。首轮原脚本进程错误被误报为 JSON 错误，已修正分类并保留断言；另一次测试命令误写两个不存在的模块名，属测试命令失败，改为仓库实际模块后重跑，不作为通过。
+
+首次全量回归 `artifacts/verification/20261003-teaching-matching-final/` 为1172项、1169通过、0失败、3跳过，299.117秒，运行期间源码未变。之后复核修正了“已拒绝候选会使整个核验入口停止”的边界：保留其拒绝状态，只作为第一阶段差异证据，不能被模型提升为可用同题；清晰学生题面仍可选择 STUDENT_ONLY。专项用例通过；最新全量结果以后续验证记录为准，旧快照不冒充修改后版本。
+
+最新全量命令：`python -X utf8 -B -m tools.verify_project --output artifacts/verification/20261003-teaching-matching-final-v2`。结果1173项、1170通过、0失败、3跳过，299.449秒，退出码0，源码未在运行中变化。快照为 `sha256:17414bb3979f951bff11a95fc93b61f936ef45fdd8bc7142635fb719538a51cf`；evidence.json 与日志复核有效、未过期，等级仍为 MOCK_INTEGRATION_VERIFIED。SKIPPED分别为官方SDK文件未提供、教学符号链接无法创建、浏览器Profile符号链接无法创建，均不计通过。不要求为这三项提升管理员权限；不是实际路径防护失败。REAL仅上述本机ANSWER原脚本与原文检查，真实网页、群发送、真实成本与正式日报提交均未执行。
+
+下一步补普通追问复用、生产网页调度连接、完整交付分段和实际成本归集，再完成六断点恢复与授权真实试运行。官方 [ChatGPT 浏览器扩展](https://learn.chatgpt.com/docs/chrome-extension) 支持 Edge 的文档已核对，仅作为网页联调候选；未确认本机扩展连接或 Python 后台调用能力，不将其列为启动依赖。
 
 ## 本轮审计与最小改动
 

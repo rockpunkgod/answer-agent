@@ -68,7 +68,11 @@ def review_preparation(snapshot: dict, candidate_path, review_path, output_path,
     files = _frozen_files(snapshot, candidate_path.parent)
     courses = [x for x in files if x['kind'] == 'course']
     images = [x for x in files if x['kind'] == 'question_image']
-    fast = candidate.get('preparation_mode') == 'FAST_UPLOAD_THEN_GENERATE'
+    fast = candidate.get('preparation_mode') in ('FAST_UPLOAD_THEN_GENERATE', 'VERIFY_THEN_TEACH')
+    if candidate.get('preparation_mode') == 'VERIFY_THEN_TEACH':
+        from .question_matching import frozen_receipt
+        _require(candidate.get('question_match_result') == frozen_receipt(snapshot, session_url=candidate['session_url']),
+                 'First question verification changed')
     _require(candidate.get('status') == ('ATTACHMENTS_READY_REQUIRES_SOURCE_REVIEW' if fast else 'READBACK_CANDIDATE_REQUIRES_OPERATOR_REVIEW')
              and candidate.get('operator_verified') is False,
              'Candidate is not an unverified completed readback')
@@ -167,7 +171,7 @@ def review_preparation(snapshot: dict, candidate_path, review_path, output_path,
 
     preparation = {
         'status': 'ATTACHMENTS_READY_SOURCE_REVIEWED' if fast else 'OPERATOR_VERIFIED_UPLOAD_AND_INPUT',
-        'preparation_mode': 'FAST_UPLOAD_THEN_GENERATE' if fast else 'STRICT_READBACK',
+        'preparation_mode': candidate['preparation_mode'] if fast else 'STRICT_READBACK',
         'model_readback_performed': not fast,
         'operator_verified': True,
         'reviewer': reviewer.strip(),

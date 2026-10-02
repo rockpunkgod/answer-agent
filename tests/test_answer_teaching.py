@@ -293,6 +293,47 @@ class AnswerTeachingTests(unittest.TestCase):
                 with self.assertRaisesRegex(source.TeachingSourceError, 'PERMISSION_OR_INPUT_CHANGED'):
                     verify_bundle(path)
 
+    def test_task_checked_bundle_is_separate_and_does_not_claim_real_acceptance(self):
+        preview = self.bundle()
+        checked = self.bundle(for_generation=True)
+        self.assertNotEqual(preview, checked)
+        self.assertFalse(verify_bundle(preview)['answer_generation_allowed_by_course'])
+        manifest = verify_bundle(checked, for_generation=True)
+        self.assertEqual(manifest['format_version'], 3)
+        self.assertEqual(manifest['required_task_checks'], ['SOURCE', 'DRAFT'])
+        self.assertTrue(manifest['answer_generation_allowed_by_course'])
+        self.assertFalse(manifest['real_deepseek_uploaded'])
+        self.assertFalse(manifest['real_delivery_verified'])
+        self.assertEqual(checked, self.bundle(for_generation=True))
+        self.assertEqual((checked.parent / 'teaching-input.md').read_bytes(),
+                         (preview.parent / 'teaching-input.md').read_bytes())
+
+    def test_preview_cannot_be_promoted_by_editing_format_and_flags(self):
+        path = self.bundle()
+        manifest = verify_bundle(path)
+        manifest.update(format_version=3, required_task_checks=['SOURCE', 'DRAFT'],
+                        answer_generation_allowed_by_course=True, course_coverage='TASK_CHECKS_REQUIRED')
+        self.write_manifest(path, manifest)
+        with self.assertRaisesRegex(source.TeachingSourceError, 'BUILD_MODE_CACHE_MISMATCH'):
+            verify_bundle(path, for_generation=True)
+
+    def test_task_checked_build_blocks_missing_dependency_and_unsupported_shape(self):
+        for kind in ('七选五', '语法填空', '应用文', '读后续写'):
+            with self.subTest(kind=kind), self.assertRaisesRegex(source.TeachingSourceError, 'TASK_SHAPE_NOT_SUPPORTED'):
+                self.bundle(kind, for_generation=True)
+            self.assertIsNotNone(self.bundle(kind))
+        self.remove_required_checker()
+        with self.assertRaisesRegex(source.TeachingSourceError, 'REQUIRED_DEPENDENCIES_MISSING'):
+            self.bundle(for_generation=True)
+
+    def test_task_check_contract_cannot_be_removed(self):
+        path = self.bundle(for_generation=True)
+        manifest = verify_bundle(path)
+        manifest['required_task_checks'] = []
+        self.write_manifest(path, manifest)
+        with self.assertRaisesRegex(source.TeachingSourceError, 'TASK_CHECK_CONTRACT_CHANGED'):
+            verify_bundle(path, for_generation=True)
+
     def test_forged_allowlist_and_invalid_manifest_are_rejected(self):
         path = self.bundle()
         manifest = verify_bundle(path)
