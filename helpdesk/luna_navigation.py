@@ -25,8 +25,10 @@ _DISABLED = ('shell_tool', 'apps', 'plugins', 'browser_use', 'browser_use_extern
              'computer_use', 'multi_agent', 'hooks', 'skill_search', 'image_generation', 'view_image')
 
 
-def _source(record_path):
-    """Only original, single DISPLAY2 Screenshot records from our private journal."""
+def _source(record_path, display_index):
+    """Only an original capture of the configured display from our private journal."""
+    if type(display_index) is not int or display_index < 0:
+        raise ValueError('LUNA_DISPLAY_INDEX_REQUIRED')
     archive = (ROOT / 'data/private/windows-mcp').resolve(strict=True)
     record_path = Path(record_path).resolve(strict=True)
     if not record_path.is_relative_to(archive):
@@ -39,11 +41,15 @@ def _source(record_path):
     texts = [item.get('text', '') for item in items if item.get('type') == 'text']
     if len(images) != 1 or len(texts) != 1:
         raise ValueError('LUNA_SINGLE_SCREEN_REQUIRED')
-    region = re.search(r'Screenshot Region: \((-?\d+),(-?\d+),(-?\d+),(-?\d+)\)', texts[0])
-    if ('Selected Displays: 1\n' not in texts[0] or not region
-            or tuple(map(int, region.groups())) != (0, -1440, 2560, 0)
-            or r'DISPLAY2 (0,-1440,2560,0)' not in texts[0]):
-        raise ValueError('LUNA_DISPLAY2_NOT_VERIFIED')
+    selected = re.findall(r'^Selected Displays: ([^\r\n]*)\r?$', texts[0], re.M)
+    regions = re.findall(r'^Screenshot Region: \((-?\d+),(-?\d+),(-?\d+),(-?\d+)\)\s*$', texts[0], re.M)
+    displays = re.findall(r'(?<!\d)' + str(display_index)
+        + r':\s*(?:\\\\\.\\)?DISPLAY\d+\s+\((-?\d+),(-?\d+),(-?\d+),(-?\d+)\)', texts[0])
+    if selected != [str(display_index)] or len(regions) != 1 or displays != regions:
+        raise ValueError('LUNA_DISPLAY_SCOPE_UNCONFIRMED')
+    left, top, right, bottom = map(int, regions[0])
+    if right <= left or bottom <= top:
+        raise ValueError('LUNA_DISPLAY_SCOPE_UNCONFIRMED')
     image = Path(images[0]['path']).resolve(strict=True)
     if not image.is_relative_to(archive) or image.stat().st_size > 25_000_000:
         raise ValueError('LUNA_IMAGE_OUTSIDE_APPROVED_DIRECTORY')
@@ -63,24 +69,26 @@ def _source(record_path):
     from PIL import Image
     with Image.open(image) as bitmap:
         width, height = bitmap.size
-    if width < 1 or height < 1 or width * 1440 != height * 2560:
+    if width < 1 or height < 1 or width * (bottom - top) != height * (right - left):
         raise ValueError('LUNA_SCREENSHOT_GEOMETRY_CHANGED')
-    return image, width, height
+    return image, width, height, (left, top, right, bottom)
 
 
-def suggest(record_path, instruction, allowed_actions, *, runner=None):
+def suggest(record_path, instruction, allowed_actions, *, display_index=1, runner=None):
     """Return one bounded navigation suggestion; failure never triggers a retry.
 
     Screenshot/instruction content is untrusted input. No recipient, path,
     timestamp, model confidence or teaching judgment is accepted in the result.
-    This does not start a listener or switch/send on the real desktop.
+    The caller supplies one authorized display index. Its current bounds come
+    from the capture, not its device number or an earlier layout. This does not
+    start a listener or switch/send on the real desktop.
     """
     allowed = tuple(allowed_actions)
     if not allowed or any(action not in ACTIONS for action in allowed) or 'STOP' not in allowed:
         raise ValueError('LUNA_ACTION_SCOPE_REQUIRED')
     if not isinstance(instruction, str) or not instruction.strip() or len(instruction.encode('utf-8')) > 6000:
         raise ValueError('LUNA_NAVIGATION_INSTRUCTION_LIMIT')
-    image, width, height = _source(record_path)
+    image, width, height, region = _source(record_path, display_index)
     executable = shutil.which('codex')
     if not executable:
         raise RuntimeError('LUNA_CODEX_NOT_INSTALLED')
@@ -141,6 +149,9 @@ def suggest(record_path, instruction, allowed_actions, *, runner=None):
         except Exception:
             # Never leak an exception's credential-bearing stderr or student text.
             raise RuntimeError('LUNA_NAVIGATION_UNAVAILABLE_NO_RETRY') from None
+    left, top, right, bottom = region
     return {'action': value['action'], 'loc': None if value['action'] == 'STOP' else [
-        round(value['image_x'] * 2560 / width), -1440 + round(value['image_y'] * 1440 / height)],
-        'source_record': str(Path(record_path).resolve())}
+        left + value['image_x'] * (right - left) // width,
+        top + value['image_y'] * (bottom - top) // height],
+        'source_record': str(Path(record_path).resolve()),
+        'display_index': display_index, 'display_region': list(region)}
