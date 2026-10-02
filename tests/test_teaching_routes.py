@@ -2,7 +2,7 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from helpdesk.teaching_routes import resolve_route, inspect_route, OBJECTIVE, GRAMMAR, WRITING, QA
+from helpdesk.teaching_routes import resolve_route, inspect_route, OBJECTIVE, GRAMMAR, WRITING, QA, OBJECTIVE_CHECKER
 
 
 class TeachingRouteTests(unittest.TestCase):
@@ -25,9 +25,10 @@ class TeachingRouteTests(unittest.TestCase):
     def test_missing_checker_never_falls_back_to_other_skill(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            old = root / GRAMMAR / 'scripts/check_lesson.py'
+            old = root / OBJECTIVE / 'scripts/check_lesson.py'
             old.parent.mkdir(parents=True)
             old.write_text('raise RuntimeError("must not execute")', encoding='utf-8')
             report = inspect_route(root, '阅读理解')
-            self.assertIn(OBJECTIVE + '/scripts/check_lesson.py', report['missing_dependencies'])
+            self.assertIn(OBJECTIVE_CHECKER, report['missing_dependencies'])
+            self.assertNotIn(OBJECTIVE + '/scripts/check_lesson.py', report['dependencies'])
             self.assertFalse(report['generation_authorized'])

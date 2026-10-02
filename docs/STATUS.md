@@ -1,6 +1,41 @@
 # 当前能力与缺口
 
-截至2026-10-02，源码提交仅包含程序、测试、配置示例与通用说明。本机聊天记录、学生图片、数据库、登录状态、运行凭据及历史验收材料保留在原工作目录，不上传。
+截至2026-10-03，源码提交仅包含程序、测试、配置示例与通用说明。本机聊天记录、学生图片、数据库、登录状态、运行凭据及历史验收材料保留在原工作目录，不上传。
+
+## 当前最终验收基线（2026-10-03）
+
+以本人最新 Level 3 验收标准为准，起点业务提交为 `b697faa3171018fa83a36cee8b127d5d840522bf`。当前结论为 **NOT_READY**；以下逐项映射实际代码与测试，UNIT/MOCK 不代替 REAL。后文日期更早的记录保留为历史，不代表当前版本通过。未操作生产数据库、未开启群发送、未提交新的 DeepSeek 请求；本轮没有数据库迁移。
+
+| 最终条件 | 已有实现和相关测试 | 当前缺口/验收状态 |
+|---|---|---|
+| 1. ANSWER 冻结 | `answer_teaching.py`、`teaching_routes.py`、`config/teaching-source.toml`；`test_answer_teaching`、`test_teaching_bundle` | 新提交原文和依赖已实际核验，六类预览已生成；自动课程检查及生成激活未接通 |
+| 2. 消息身份/时间边界 | `native_message_source.py`、`collector_storage.py`、`collector_dispatch.py`；`test_native_message_source`、`test_collector_integration` | 文件由本机受控复制/人工准备，现有增量导入不是持续监听；生产者运行、停止检测和端到端最大延迟尚无真实证明 |
+| 3. Ack 时效 | `delivery_tasks.py`、`automatic_delivery_runtime.py`；`test_delivery_tasks`、`test_ack_before_generation` | 发送层 Ack/Answer 已分离并持久化；采集后详细队列接线仍需补，真实原提问起算 15 分钟未验收 |
+| 4. 检索备用 | `reference_lookup.py`、`reference_fetch.py`；`test_reference_lookup`、`test_reference_fetch` | 本批补有界备用调度；生产默认仅 Brave，实际备用 Provider 和来源准入仍未验证 |
+| 5. Top2 | `reference_lookup.top_candidates`；`test_reference_lookup` | 本批确定性最多两项、同内容去重和真实候选 ID 通过 Mock；尚未交到真实 DeepSeek |
+| 6. 两次 DeepSeek | `mcp_preparation.py`、`mcp_generation.py`、`reviewed_question_queue.py`；现有准备/生成测试 | 当前仍是单次教学生成；缺少第一次结构化核验及两阶段正式接线，旧练习不算新版验收 |
+| 7. 会话及追问 | `workflow.py`、`session_isolation.py`、`mcp_generation.delivery_context`；`test_question_session_isolation`、`test_mcp_followup_context` | 学生/题目隔离、实际交付上下文已有 Mock；真实会话复用及避免重复搜题/上传未验收 |
+| 8. Answer 安全重试 | `reviewed_question_queue.py`、`delivery_tasks.py`；`test_reviewed_question_queue`、`test_delivery_tasks` | 队列中断停止、发送前有限重试已有 Mock；搜索/匹配/生成的独立恢复策略尚未完整接线 |
+| 9. 自动发送 | `workflow._validate`、`mcp_group_delivery.py`；`test_mcp_group_delivery`、`test_automatic_delivery_workbench` | 目标/版本/未知结果/接管防护已有 Mock，当前测试群真实自动发送未授权执行或验收 |
+| 10. 实际交付回流 | `manual_delivery.py`、`workflow._record_check`；`test_shared_source_delivery_integration`、`test_manual_delivery_registration` | 原 Outbox 和实际交付/绩效回流有 Mock；尚缺自动完整答案的确定性 DeliveryBatch 与顺序分段接线 |
+| 11. 中途更正 | `service.py`、`workflow.py`；`test_workflow`、`test_live_generation`、`test_reference_resolution` | 已有旧版本拦截保留；新两阶段及多段发送中的中途更正待联测 |
+| 12. 绩效一致性 | `semantic_decisions.py`、`performance.py`；`test_shared_semantic_consumers`、`test_performance_rules`、`test_performance_delivery_eligibility` | 原归属/计量/夜间规则保留，模拟边界已覆盖；真实新闭环的投影未验收 |
+| 13. 实际成本 | 搜索报告已有查询记录，网页有尝试证据 | 缺逐 AnswerTask 的实际付费/调用归集与均值、P50/P95、配置上限检查；不能把未知费用记 0 |
+| 14. 重启恢复 | 现有 SQLite、Outbox、`reviewed_question_queue`；相关队列/发送/会话恢复测试 | 旧路径恢复有 Mock；第一次核验后、第二次生成、分段和 UNKNOWN 的完整同库断点测试仍缺 |
+| 15. 无阻断级问题 | 现有版本/路径/目标/未知发送回归 | 真实 A–H 类别及至少 20 个任务试运行尚未执行；测试数量不证明生产稳定 |
+| 16. 限制公开 | 本文件、README、现有验证日志 | 保留 UNIT/MOCK/REAL/SKIPPED/FAILED 区分；CLI、SDK、上云、集群和符号链接权限不当作个人 Demo 上线前置条件 |
+
+本批实际处理：ANSWER 默认分支 main 最新 `b04ebc26d7fa096404111a0bb12f6c77cc8525b9`，先检查旧工作树干净，再 fetch 并快进到该精确提交，工作树仍干净；没有改写教学内容。新版 README 明确客观题共用 `gaokao-grammar-fill/scripts/check_lesson.py`，路由改为该仓库相对路径。主客观题只取自己的教学模块和共享脚本快照，不混入语法教学方法。新增测试保留原文、脏文件、缺项拦截、人工入口、缓存防串提交等断言；旧位置即使出现同名文件也不作为缺项替代。
+
+六类教学包本地实际生成并再次核验，必需缺项均为零，重复构建字节和修改时间均不变；提交、源文件哈希和只读原文清单留在忽略的 `data/private/teaching-bundles/`。只对明确标注的自建阅读题运行上游原脚本：定位返回 0；故意缺少讲解的稿件返回 1、报告 2 个疑点，这是预期拦截，不是教学通过。脚本 SHA256 为 `58322af6d1b794bb9bb862a2da0b800d777e225bac4b70cbd1e0130dded6323f`；结果保存在 `artifacts/verification/20261003-answer-freeze/checker-smoke/`。自动教学仍未激活，真实 DeepSeek 未上传，真实交付未验证。
+
+检索只补缺口，不改变 `domain.compare` 或候选确认：新增 `initial_question` 触发原因和 `top_candidates` 输出，最多两项、稳定排序、同内容去重、不带外部答案，登记后绑定现有候选表 ID；候选少于两项不补造。最多三个适配器共享六次查询/六页及现有时间预算，失败或空结果为备用保留额度，按来源交替选页以免首来源挤占全部页数；页面仍逐个执行准入和存储检查。生产配置仍只有既有 Brave，多适配器通过测试注入验证，不伪称真实备用网站已接通。
+
+相关验证：`python -X utf8 -B -m unittest tests.test_teaching_routes tests.test_answer_teaching tests.test_teaching_bundle` 为 44 项、43 通过、1 符号链接跳过，49.297 秒。`python -X utf8 -B -m unittest tests.test_reference_lookup tests.test_reference_providers tests.test_reference_resolution tests.test_reference_workbench` 最终 84 项全部通过，9.043 秒；首轮 1 项失败发现首次候选输出的 tuple 与 SQLite/缓存 JSON 的 list 不一致，已在真实输出边界统一 JSON 表示并保留重复运行一致性断言。该轮没有外网题库、付费调用或业务消息输入。
+
+全量命令 `python -X utf8 -B -m tools.verify_project --output artifacts/verification/20261003-answer-freeze-top2-final`：1147 项、1144 通过、0 失败、3 跳过，227.040 秒，退出码 0，运行期间源码未变化。源码快照 `sha256:37a12291e90902a81f54dc21c28546bfd924cee00f9ea5e899f72885d1f6f599`；原始日志和 evidence.json 已复核，证据有效，等级仍为 MOCK_INTEGRATION_VERIFIED。3 项 SKIPPED 为官方 SDK 文件未提供、教学依赖符号链接无法创建、浏览器目录符号链接无法创建，均不计通过。真实核验仅为上述 ANSWER Git/文件/脚本的本地运行，未获得真实新题、网页生成、外发、绩效或成本样本。
+
+下一步依次补每题上游检查执行及教学激活、第一次结构化核验与第二次教学接线、完整交付分段和成本归集，随后进行当前同库恢复测试；具备可执行闭环后再明确真实测试群/账号与发送授权。官方 [ChatGPT 浏览器扩展](https://learn.chatgpt.com/docs/chrome-extension) 支持 Edge 的文档已核对，仅作为网页联调候选；未确认本机扩展连接或 Python 后台调用能力，不将其列为启动依赖。
 
 ## 本轮审计与最小改动
 
@@ -35,7 +70,7 @@
 
 不根据个人开发身份推断企业规模；当前版本与账号限制需用官方文档和原企业账号验证，不新建企业或切换身份规避。其余四个社区项目本轮未接入、未核验，不作为接口实现依据。覆盖成立后才考虑一条只读对照路径：无ACK、无DeepSeek提交、无正式计量，再按群与时间范围显式切换；不同时上线CLI/SDK/Webhook，不删除现有可用入口。
 
-## ANSWER版本与预览结果
+## ANSWER版本与预览结果（历史：2026-10-02）
 
 本机 `E:\作业帮\.tools\ANSWER-reference` 为干净的main，提交 `57159d7a8b03a0743225ed27f3f1e6128bbcd45d`，与核对时远端默认分支一致。用户提供的 `ANSWER-main.zip` 中211个文件逐一与该提交的Git blob一致；不能将检出目录CRLF与ZIP中LF的差异误报成教学修改。未修改、拉取或执行ANSWER教学脚本。
 
@@ -282,11 +317,13 @@ ANSWER仍为干净固定提交`57159d7a8b03a0743225ed27f3f1e6128bbcd45d`，客�
 
 `test_screen2_activation.py`补4项，覆盖当前屏幕、身份/范围矛盾、非法参数、移动及超时不重试。相关51项通过。全量命令`python -X utf8 -B -m tools.verify_project --output artifacts/verification/20261002-configured-wecom-activation-final`：1135项、1132通过、0失败、3跳过，221.582秒，退出码0，源码快照`sha256:dcc9229af996d51ef94af43c633704019370838f2bc314a7a987d28cbb261a5c`未变化，证据有效。全量仍是匿名/Mock集成；本次真实验证覆盖激活、前台身份和截图定位，群内容Snapshot读取失败。3项跳过仍为SDK文件未提供及两项符号链接创建不可用。
 
-## 已可使用
+## 当前显示器上的 Edge 入口（2026-10-03）
 
 当前显示器的Edge入口另于2026-10-03完成最小兼容修改：`ActivateEdgeOnDisplay`复用原有标题栏原生检查，只接受物理坐标和严格设备名，核验命中的真实进程、标题栏及切换后同一窗口/几何；旧屏幕2行为保持兼容，没有新增桌面服务或任意命令入口。补3项匿名测试，相关47项通过。全量`python -X utf8 -B -m tools.verify_project --output artifacts/verification/20261003-edge-display-final`为1138项、1135通过、0失败、3跳过，226.213秒；源码快照`sha256:6057ff05eb7e61a20da6140d8bf31f739b83d7324398a008bb1b19232230bfbc`未变化，证据有效，仍属离线/Mock。
 
 真实尝试在首次前台检查发现Chrome后停止，尚未执行这个Edge入口，也未读取DeepSeek页面。最后MCP连接及可枚举子树已退出，无待返回调用；未上传、提交、群发送或写正式计量。此前重新定位企业微信的尝试仅取得新截图，在下一次右键前停止，仍未导出原文。真实切窗、完整收题和网页队列均未因此升级为通过。3项SKIPPED仍为官方SDK未提供及两项本机符号链接创建不可用。
+
+## 已可使用
 
 - 一个 PowerShell 入口启动本地工作台，缺可选采集配置或讲解目录仍能查看台账；复用服务不会自动恢复暂停。
 - 原生文字增量导入、原文导出及来源校验；原始时间与采集时间分开，重复采集去重。保存原文不等于实时监听。
@@ -309,7 +346,7 @@ ANSWER仍为干净固定提交`57159d7a8b03a0743225ed27f3f1e6128bbcd45d`，客�
 
 ## 本轮验证
 
-早期教学来源回归17项通过；屏幕2与相邻保护回归52项通过。真实ANSWER的六类本地原文预览与重复缓存核对通过，范围仅本地来源与文件生成；没有上传DeepSeek、运行教学检查或向企业微信输入消息。当时完整回归为上述996项；“MCP安装路径与真实只读核验”阶段最终版本为1037项、1034通过、0失败、3跳过。当前最新结果见“当前显示器上的受控企业微信激活”，原有有效测试保留。
+早期教学来源回归17项通过；屏幕2与相邻保护回归52项通过。真实ANSWER的六类本地原文预览与重复缓存核对通过，范围仅本地来源与文件生成；当时没有上传DeepSeek、运行教学检查或向企业微信输入消息。当时完整回归为上述996项；“MCP安装路径与真实只读核验”阶段最终版本为1037项、1034通过、0失败、3跳过。当前最新结果见本文件开头“当前最终验收基线”，原有有效测试保留。
 
 本轮针对导航、物理窗口、输入契约、传输和审计的47项回归，以及相邻准备/草稿路径的27项回归通过。原消息/附件衔接及页面断连恢复分别完成相关回归，本地服务检查未执行发送或增加计量。
 

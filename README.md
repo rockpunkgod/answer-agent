@@ -64,7 +64,7 @@ Edge对应入口为`ActivateEdgeOnDisplay`，只接受当前物理坐标`loc`和
 
 ## 教学来源与只读预览
 
-[config/teaching-source.toml](config/teaching-source.toml) 固定 ANSWER 提交 `57159d7a8b03a0743225ed27f3f1e6128bbcd45d`。不自动拉取、切换提交或改写教学文件。教学目录存在未提交改动时停止，保留原文件供本人审核；Windows 的 LF/CRLF 换行差异允许核对，预览使用 Git 提交的原始字节。
+[config/teaching-source.toml](config/teaching-source.toml) 固定 ANSWER 提交 `b04ebc26d7fa096404111a0bb12f6c77cc8525b9`（2026-10-03 核对的默认分支 main）。读取配置不自动拉取、切换提交或改写教学文件。教学目录存在未提交改动时停止，保留原文件供本人审核；Windows 的 LF/CRLF 换行差异允许核对，预览使用 Git 提交的原始字节。
 
 本机已有该版本的 ANSWER 检出目录，可在业务仓库中运行：
 
@@ -72,9 +72,9 @@ Edge对应入口为`ActivateEdgeOnDisplay`，只接受当前物理坐标`loc`和
 python -X utf8 -B -m tools.prepare_teaching_bundle --question-type 阅读理解 --repository "E:\作业帮\.tools\ANSWER-reference"
 ```
 
-这是**本地原文预览**。工具按 ANSWER 的 README 分工选取当前题型完整文件，合成一个教学输入文件，并保存源文件、提交和哈希；同版本同题型复用缓存。语法使用旧版语法 Skill，写作使用 `gaokao-writing`，不混用主 Skill 内的同名题型文件。结果留在忽略的 `data/private/teaching-bundles/`。
+这是**本地原文预览**。工具按 ANSWER 的 README 分工选取当前题型完整文件，合成一个教学输入文件，并保存源文件、提交和哈希；同版本同题型复用缓存。语法使用 `gaokao-grammar-fill`，写作使用 `gaokao-writing`；阅读、七选五和完形使用 `gaokao-english`。结果留在忽略的 `data/private/teaching-bundles/`。新提交生成新缓存，旧包保留，不能冒充新版。
 
-当前 ANSWER 客观题目录缺少 README 和 Agent 定义要求的 `gaokao-english/scripts/check_lesson.py`，预览会明确报告缺项；不借用语法目录的脚本。语法检查脚本虽然存在，本轮未执行课程定位与修稿流程。新预览包均保持 `answer_generation_allowed_by_course=false`，不能通过修改清单把它提升为已验证生成权限。
+新版 README 明确规定，客观题共用 `gaokao-grammar-fill/scripts/check_lesson.py`。程序按这一依赖取同一提交的原脚本快照，不另造同名实现，也不加载语法教学方法来讲阅读题。六类预览的必需文件已齐全；缺少指定脚本时仍阻止受影响的自动教学分支。原脚本已在匿名阅读题上完成本地定位和缺陷稿检查，尚未接通每题生成前后自动运行。新预览包均保持 `answer_generation_allowed_by_course=false`，不能通过修改清单把它提升为已验证生成权限。听力保留课程未提供可用方法的边界，不使用通用技巧代替。
 
 新代码在生成、上传和中断后再次提交前检查 ANSWER 来源及冻结内容。旧本机教学包不能继续用于这些操作；旧消息、生成稿和交付记录仍可查看、核验。缺少来源绑定的旧任务需要重新核对并冻结输入，不能修改 JSON 冒充通过。
 
@@ -108,6 +108,10 @@ python -X utf8 -B -m tools.crawl_reference --self-test
 ```
 
 演示只使用自建网页样例，报告中的“一致”表示候选逐字段对应，不表示已确认或已使用真实网站。实际任务使用当前题目 ID、版本和上下文版本，查询失败、访问受限和超时分别记录，不显示成“找不到原题”。完整学生题面仍能独立答疑。
+
+检索报告另提供 `top_candidates`：确定性粗排序、同内容去重，最多两项，不携带外部答案/解析；候选不足两个不补造。写入现有候选表后使用真实候选 ID，原文、来源和差异证据仍保留。排名不确认同题、不改变学生版本或计量。`initial_question` 可要求清晰新题也执行搜索；自动详细任务尚需接线，旧人工核对入口保持兼容。
+
+检索器支持最多三个已接入搜索适配器按序执行，一个失败或无结果会继续备用；共同受最多六次查询、六页和既有时间预算限制，也为备用来源保留页数。当前生产默认仍仅有 Brave，多个适配器的备用逻辑只完成 Mock 验证；没有新增或默许启用未知网站、生产通道或付费服务。Top2 到 DeepSeek 第一次结构化核验、第二次教学的真实接线仍待完成，不能把本地筛选当作两阶段网页验收。
 
 启用前将 [配置示例](config/reference-lookup.example.toml) 复制到忽略的 `data/private/reference-lookup.local.toml`，设置 `enabled=true`、保留 `shadow=true`。在没有同端口旧服务时启动：
 

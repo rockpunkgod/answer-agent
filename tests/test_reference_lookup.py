@@ -180,6 +180,107 @@ class ReferenceLookupTests(unittest.TestCase):
         self.assertEqual(report['retrieval_status'], 'NOT_REQUIRED')
         self.assertFalse(provider.calls)
 
+    def test_initial_question_searches_even_when_student_material_is_complete(self):
+        provider = Provider()
+        lookup = ReferenceLookup(replace(self.config, network_enabled=True), provider=provider)
+        report = lookup.run(self.snapshot, trigger='initial_question')
+        self.assertEqual(report['retrieval_status'], 'NO_RESULTS')
+        self.assertTrue(provider.calls)
+        self.assertEqual(report['top_candidates'], [])
+        self.assertEqual(report['next_action'], 'CONTINUE_STUDENT_MATERIAL')
+
+    def test_failed_search_provider_continues_backup_without_leaking_error(self):
+        first = Provider(error=RuntimeError('private-credential-value'))
+        backup = Provider([{'url': 'https://example.org/question/backup', 'summary': 'Observed URL'}])
+        backup.identity = 'MOCK_BACKUP'
+        lookup = ReferenceLookup(replace(self.config, network_enabled=True), providers=[first, backup], fetcher=Fetcher())
+        report = lookup.run(self.snapshot, trigger='initial_question')
+        self.assertEqual(len(first.calls), 1)
+        self.assertEqual(len(backup.calls), 1)
+        self.assertEqual(report['retrieval_status'], 'CANDIDATES_FOUND')
+        self.assertEqual(report['queries'][0]['status'], 'INTERNAL_ERROR')
+        self.assertEqual(report['queries'][1]['provider'], backup.identity)
+        self.assertNotIn('private-credential-value', encode(report))
+        self.assertFalse(report['top_candidates'][0]['equivalence_confirmed'])
+
+    def test_empty_provider_reserves_backup_budget_and_never_exceeds_total(self):
+        first, backup = Provider(), Provider()
+        backup.identity = 'MOCK_BACKUP_EMPTY'
+        config = replace(self.config, network_enabled=True, max_search_requests=4)
+        report = ReferenceLookup(config, providers=[first, backup]).run(self.snapshot, trigger='initial_question')
+        self.assertEqual(len(first.calls), 2)
+        self.assertEqual(len(backup.calls), 2)
+        self.assertEqual(len(report['queries']), 4)
+        self.assertEqual(report['retrieval_status'], 'NO_RESULTS')
+
+    def test_primary_pages_cannot_exhaust_page_slots_before_backup(self):
+        first = Provider([{'url': f'https://example.org/question/failing-{i}'} for i in range(6)])
+        backup = Provider([{'url': 'https://example.org/question/backup'}])
+        backup.identity = 'MOCK_BACKUP_FETCH'
+        class PartialFetcher(Fetcher):
+            def page(self, url, source, budget):
+                if 'failing-' in url:
+                    self.calls.append(url)
+                    raise LookupFailure('ACCESS_RESTRICTED', 'HTTP_403')
+                return super().page(url, source, budget)
+        fetcher = PartialFetcher()
+        config = replace(self.config, network_enabled=True, max_pages=2)
+        report = ReferenceLookup(config, providers=[first, backup], fetcher=fetcher).run(self.snapshot, trigger='initial_question')
+        self.assertEqual(fetcher.calls, ['https://example.org/question/failing-0', 'https://example.org/question/backup'])
+        self.assertEqual(report['retrieval_status'], 'CANDIDATES_FOUND')
+        self.assertEqual(report['top_candidates'][0]['source'], backup.identity)
+
+    def test_provider_lists_are_bounded_and_remain_subject_to_source_admission(self):
+        provider = Provider([{'url': 'https://unapproved.example.net/question/1'}])
+        fetcher = Fetcher()
+        config = replace(self.config, network_enabled=True)
+        with self.assertRaises(ValueError):
+            ReferenceLookup(config, provider=provider, providers=[provider])
+        for values in ([], [provider, provider], [object()]):
+            with self.subTest(values=values), self.assertRaises(ValueError):
+                ReferenceLookup(config, providers=values)
+        report = ReferenceLookup(config, providers=[provider], fetcher=fetcher).run(self.snapshot, trigger='initial_question')
+        self.assertEqual(report['retrieval_status'], 'ACCESS_RESTRICTED')
+        self.assertEqual(fetcher.calls, [])
+        self.assertEqual(report['top_candidates'], [])
+
+    def test_top_two_are_stable_distinct_observations_without_reference_answers(self):
+        second, third, duplicate = [self.fixtures / name for name in ('second.html', 'third.html', 'duplicate.html')]
+        second.write_text(FIXTURE.read_text().replace('Why did Maya', 'Why did Maya NOT'), encoding='utf-8')
+        third.write_text(FIXTURE.read_text().replace('Why did Maya carry blankets to the library?',
+            'What color was the old school bus?'), encoding='utf-8')
+        duplicate.write_bytes(FIXTURE.read_bytes())
+        report = self.run_fixture(files=[str(third), str(second), str(duplicate), str(self.file)])
+        selected = report['top_candidates']
+        self.assertEqual(len(report['matches']), 4)
+        self.assertEqual(len(selected), 2)
+        self.assertEqual(selected[0]['reference_question']['verified_stem'], 'Why did Maya carry blankets to the library?')
+        self.assertIn('NOT', selected[1]['reference_question']['verified_stem'])
+        self.assertNotIn('reference_answers', encode(selected))
+        self.assertNotIn('Fixture answer', encode(selected))
+        self.assertTrue(all(row['candidate_id'] is None for row in selected))
+        self.assertTrue(all(row['retrieved_at'] and row['content_hash'] for row in selected))
+        self.assertTrue(all(row['equivalence_confirmed'] is False for row in selected))
+        reversed_report = self.run_fixture(files=[str(self.file), str(duplicate), str(second), str(third)])
+        self.assertEqual([row['source_url'] for row in selected], [row['source_url'] for row in reversed_report['top_candidates']])
+
+    def test_top_candidates_reference_actual_database_ids_without_counting_or_confirming(self):
+        store, app, outcome, question = self.business()
+        lookup = ReferenceLookup(self.config)
+        args = (store, question['id'], question['current_version'], question['context_revision'])
+        report = lookup.run_for_question(*args, trigger='initial_question', fixtures=[str(self.file)])
+        selected = report['top_candidates']
+        self.assertEqual(len(selected), 1)
+        row = store.one('SELECT * FROM reference_candidates WHERE id=?', (selected[0]['candidate_id'],))
+        self.assertIsNotNone(row)
+        self.assertEqual(row['student_version'], question['current_version'])
+        self.assertEqual(json.loads(row['payload']), selected[0]['reference_question'])
+        repeated = lookup.run_for_question(*args, trigger='initial_question', fixtures=[str(self.file)])
+        self.assertEqual(repeated['top_candidates'], selected)
+        self.assertEqual(app.context(outcome.turn_id)['references'], [])
+        self.assertEqual(store.one('SELECT COUNT(*) FROM performance_units')[0], 0)
+        self.assertEqual(store.one('SELECT COUNT(*) FROM reference_candidates')[0], 1)
+
     def test_missing_key_distinct_from_true_empty_search_and_not_negative_cached(self):
         config = replace(self.config, network_enabled=True, key_env='REFERENCE_TEST_KEY')
         with patch.dict(os.environ, {}, clear=True):

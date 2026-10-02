@@ -8,18 +8,21 @@ class TeachingRoute:
     skill: str
     module: str
     agent: str | None
-    checker: str | None
+    checker: str | None  # Repository-relative dependency, declared by ANSWER.
 
 
 OBJECTIVE = 'gaokao-english'
-GRAMMAR = 'gaokao-english-formal-backup-20260919-01'
+GRAMMAR = 'gaokao-grammar-fill'
 WRITING = 'gaokao-writing'
 QA = 'kaiming-english-qa'
+# ANSWER b04ebc26 README explicitly shares this checker with objective types.
+# Do not search other skills or manufacture a replacement when it is missing.
+OBJECTIVE_CHECKER = GRAMMAR + '/scripts/check_lesson.py'
 ROUTES = {
-    '阅读理解': TeachingRoute(OBJECTIVE, 'references/reading-comprehension.md', 'gaokao-objective', 'scripts/check_lesson.py'),
-    '七选五': TeachingRoute(OBJECTIVE, 'references/seven-five.md', 'gaokao-objective', 'scripts/check_lesson.py'),
-    '完形填空': TeachingRoute(OBJECTIVE, 'references/cloze.md', 'gaokao-objective', 'scripts/check_lesson.py'),
-    '语法填空': TeachingRoute(GRAMMAR, 'references/grammar-fill.md', 'gaokao-grammar-fill', 'scripts/check_lesson.py'),
+    '阅读理解': TeachingRoute(OBJECTIVE, 'references/reading-comprehension.md', 'gaokao-objective', OBJECTIVE_CHECKER),
+    '七选五': TeachingRoute(OBJECTIVE, 'references/seven-five.md', 'gaokao-objective', OBJECTIVE_CHECKER),
+    '完形填空': TeachingRoute(OBJECTIVE, 'references/cloze.md', 'gaokao-objective', OBJECTIVE_CHECKER),
+    '语法填空': TeachingRoute(GRAMMAR, 'references/grammar-fill.md', 'gaokao-grammar-fill', OBJECTIVE_CHECKER),
     '应用文': TeachingRoute(WRITING, 'references/application-writing-and-correction.md', 'gaokao-writing', None),
     '读后续写': TeachingRoute(WRITING, 'references/continuation-writing-and-correction.md', 'gaokao-writing', None),
 }
@@ -43,7 +46,7 @@ def inspect_route(repository, question_type, request_kind='answer'):
     """Inspect dependencies without installing skills or executing their scripts.
 
     Presence is not an approval of teaching contents or answer correctness.
-    Missing checkers are never borrowed from another skill.
+    The checker path is declared by this ANSWER version, never a fallback.
     """
     root = Path(repository).resolve(strict=True)
     route = resolve_route(question_type, request_kind)
@@ -53,7 +56,7 @@ def inspect_route(repository, question_type, request_kind='answer'):
     if route.agent:
         names.append(f'agents/{route.agent}.md')
     if route.checker:
-        names.append(f'{route.skill}/{route.checker}')
+        names.append(route.checker)
     missing = []
     for name in names:
         path = root / name

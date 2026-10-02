@@ -126,7 +126,7 @@ def _selection(question_type, request_kind):
                       for name in ('objective-revision', 'method-application-example', 'course-evidence')]
     requirements = []
     if route.checker:
-        requirements.append(route.skill + '/' + route.checker)
+        requirements.append(route.checker)
     return route, tuple(documents), tuple(requirements)
 
 

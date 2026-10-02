@@ -21,8 +21,8 @@ from .reference_providers import HttpProvider, LocalProvider
 from .storage import encode, now
 
 
-VERSION = 'reference-lookup-v3'
-TRIGGERS = {'blurred', 'missing_material', 'clean_copy', 'version_difference', 'manual_source'}
+VERSION = 'reference-lookup-v4'
+TRIGGERS = {'initial_question', 'blurred', 'missing_material', 'clean_copy', 'version_difference', 'manual_source'}
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -348,7 +348,7 @@ def verify_candidate(snapshot, document, item):
                          snapshot['question_version'], student, material,
                          student_raw_material=snapshot['original_student_material'])
     result = {'source_url': document['source_url'], 'page_sha256': document['page_sha256'],
-              'reference_number': reference.number, 'match_status': 'NO_MATCH',
+              'reference_number': reference.number, 'title': document.get('claimed_title'), 'match_status': 'NO_MATCH',
               'resolution_status': comparison.resolution_status, 'comparison_result': asdict(comparison),
               'verified_fields': [e['field'] for e in comparison.evidence if e['relation'] == 'EQUAL'],
               'missing_fields': list(item['missing_fields']),
@@ -386,6 +386,56 @@ def verify_candidate(snapshot, document, item):
     return result
 
 
+def top_candidates(snapshot, report):
+    """Deterministic rough selection only; this does not confirm equivalence.
+
+    Keep all lookup evidence in the report, but supply at most two distinct
+    question versions to the matching stage. External solutions are excluded.
+    Database IDs exist only after register_candidates has actually saved them.
+    """
+    from .reference_resolution import content_fingerprint
+
+    def words(text):
+        return set(re.findall(r"[a-z0-9]+(?:['’-][a-z0-9]+)*", (text or '').casefold()))
+
+    def overlap(left, right):
+        a, b = words(left), words(right)
+        return len(a & b) / len(a | b) if a or b else 0
+
+    student = snapshot['student_question']
+    ranked = []
+    for match in report.get('matches', []):
+        reference = match['reference_question']
+        # Scores only order real observations; they never authorize a reference.
+        score = (4 * overlap(student.get('verified_stem') or student['raw_stem'],
+                             reference.get('verified_stem') or reference['raw_stem'])
+                 + 3 * overlap(snapshot.get('student_material') or snapshot['original_student_material'],
+                               match['reference_material'])
+                 + 2 * overlap(' '.join(o.get('verified_text') or o['raw_text'] for o in student['options']),
+                               ' '.join(o.get('verified_text') or o['raw_text'] for o in reference['options'])))
+        exact = match['resolution_status'] == 'MATCH_CANDIDATE'
+        ranked.append((not exact, -score, match['source_url'], match['page_sha256'],
+                       str(match['reference_number']), match))
+    selected, seen = [], set()
+    for _, negative_score, _, _, _, match in sorted(ranked, key=lambda row: row[:5]):
+        fingerprint = content_fingerprint(Question.from_dict(match['reference_question']), match['reference_material'])
+        if fingerprint in seen or match.get('candidate_storage') == 'SOURCE_STORAGE_NOT_APPROVED':
+            continue
+        seen.add(fingerprint)
+        captured = next((row for row in report['candidates'] if row['url'] == match['source_url']), {})
+        selected.append({'rank': len(selected) + 1, 'rough_score': round(-negative_score, 6),
+            'candidate_id': match.get('candidate_id'), 'source': captured.get('provider'),
+            'source_url': match['source_url'], 'title': match.get('title'),
+            'retrieved_at': captured.get('fetched_at'), 'content_hash': match['page_sha256'],
+            'reference_number': match['reference_number'], 'reference_question': match['reference_question'],
+            'reference_material': match['reference_material'], 'reference_evidence': match['reference_evidence'],
+            'missing_fields': match['missing_fields'], 'equivalence_confirmed': False})
+        if len(selected) == 2:
+            break
+    # Match SQLite/cache JSON representation on the first run as well as replay.
+    return json.loads(encode(selected))
+
+
 def _atomic_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     fd, temporary = tempfile.mkstemp(dir=path.parent, prefix='.pending-', suffix='.json')
@@ -399,18 +449,85 @@ def _atomic_json(path, value):
 
 
 class ReferenceLookup:
-    def __init__(self, config, *, fetcher=None, provider=None):
+    def __init__(self, config, *, fetcher=None, provider=None, providers=None):
         self.config = config
         self.fetcher = fetcher or ReferenceFetcher(timeout=config.timeout_seconds,
             interval=config.request_interval_seconds, retries=config.retries)
-        self.provider = provider or BraveSearch(self.fetcher, config.key_env)
+        if providers is not None and provider is not None:
+            raise ValueError('Specify one provider or an ordered provider list')
+        selected = tuple(providers) if providers is not None else (provider or BraveSearch(self.fetcher, config.key_env),)
+        if (not 1 <= len(selected) <= 3 or len(selected) > min(config.max_search_requests, config.max_pages)
+                or any(not isinstance(getattr(p, 'identity', None), str)
+                       or not re.fullmatch(r'[A-Z0-9_]{1,80}', p.identity)
+                       or not callable(getattr(p, 'search', None)) for p in selected)
+                or len({p.identity for p in selected}) != len(selected)):
+            raise ValueError('At most three uniquely named admitted search adapters are allowed')
+        self.providers = selected
+        self.provider = selected[0]  # Preserve the existing single-provider API.
         self._memory = {}
         self._memory_lock = threading.Lock()
 
     def _identity(self):
         config = asdict(self.config)
         config['cache_root'], config['fixture_root'] = str(self.config.cache_root), str(self.config.fixture_root)
-        return [VERSION, config, self.provider.identity, bool(os.environ.get(self.config.key_env))]
+        return [VERSION, config, [p.identity for p in self.providers], bool(os.environ.get(self.config.key_env))]
+
+    def _search(self, queries, budget, report):
+        """Bounded ordered adapters; one failure cannot suppress a backup.
+
+        The production default remains the existing Brave adapter. Injection of
+        another adapter does not approve its page domains or storage policy.
+        """
+        candidates = []
+        remaining = self.config.max_search_requests
+        for index, provider in enumerate(self.providers):
+            # Reserve a share of the total budget for each remaining adapter,
+            # including when the previous provider returned no results.
+            limit = remaining // (len(self.providers) - index)
+            for query in queries[:limit]:
+                try:
+                    budget.remaining()
+                except LookupFailure as exc:
+                    report['errors'].append({'status': exc.status, 'code': exc.code, 'provider': provider.identity})
+                    return candidates
+                remaining -= 1
+                record = {'query': query, 'provider': provider.identity, 'searched_at': now(), 'cache_hit': False}
+                report['queries'].append(record)
+                try:
+                    search_key = digest([VERSION, provider.identity, self.config.key_env, query])
+                    cached_search = self._cache('search', search_key)
+                    if cached_search is None:
+                        found = provider.search(query, budget)
+                        if (not isinstance(found, list) or len(found) > 20
+                                or any(not isinstance(item, dict) or not isinstance(item.get('url'), str) for item in found)):
+                            raise LookupFailure('PROVIDER_UNAVAILABLE', 'SEARCH_RESPONSE_INVALID')
+                        searched_at = now()
+                        self._cache('search', search_key, value={'results': found, 'searched_at': searched_at})
+                    else:
+                        found, searched_at = cached_search['results'], cached_search['searched_at']
+                        record['cache_hit'] = True
+                    record.update(searched_at=searched_at, result_count=len(found), status='SUCCEEDED')
+                    candidates.extend({**item, 'provider': provider.identity} for item in found)
+                    if found:
+                        break
+                except LookupFailure as exc:
+                    record.update(status=exc.status, code=exc.code)
+                    report['errors'].append({'status': exc.status, 'code': exc.code, 'provider': provider.identity})
+                    break
+                except Exception:
+                    record.update(status='INTERNAL_ERROR', code='SEARCH_ADAPTER_ERROR')
+                    report['errors'].append({'status': 'INTERNAL_ERROR', 'code': 'SEARCH_ADAPTER_ERROR', 'provider': provider.identity})
+                    break
+        # A bad primary site's long result list must not use every page slot
+        # before a backup site's first candidate can be tried.
+        counts, ordered = {}, []
+        priority = {p.identity: i for i, p in enumerate(self.providers)}
+        for item in candidates:
+            identity = item['provider']
+            occurrence = counts.get(identity, 0)
+            counts[identity] = occurrence + 1
+            ordered.append((occurrence, priority[identity], item))
+        return [item for _, _, item in sorted(ordered, key=lambda row: row[:2])]
 
     def _fixture_hashes(self, fixtures):
         result = []
@@ -507,7 +624,7 @@ class ReferenceLookup:
             'original_student_material': snapshot['original_student_material'],
             'original_question_time': snapshot.get('original_question_time'),
             'retrieval_status': 'DISABLED', 'match_status': 'NOT_VERIFIED', 'next_action': 'CONTINUE_STUDENT_MATERIAL',
-            'queries': [], 'candidates': [], 'matches': [], 'errors': [], 'cache_hit': False,
+            'queries': [], 'candidates': [], 'matches': [], 'top_candidates': [], 'errors': [], 'cache_hit': False,
             'network_verified': False, 'student_material_replaced': False, 'delivery_completed': False,
             'performance_changed': False, 'created_at': now(), 'expires_at_epoch': time.time() + self.config.cache_seconds}
         if not self.config.enabled:
@@ -560,30 +677,7 @@ class ReferenceLookup:
                     proposed = ['"' + p + '"' for p in phrases[:2]] + ['"' + shortened + '"']
                     proposed += ['"' + p + '"' for p in phrases[2:3]] + [first, shortened]
                     queries = list(dict.fromkeys(proposed))
-                    for query in queries[:self.config.max_search_requests]:
-                        record = {'query': query, 'provider': self.provider.identity, 'searched_at': now(), 'cache_hit': False}
-                        report['queries'].append(record)
-                        try:
-                            search_key = digest([VERSION, self.provider.identity, self.config.key_env, query])
-                            cached_search = self._cache('search', search_key)
-                            if cached_search is None:
-                                found = self.provider.search(query, budget)
-                                searched_at = now()
-                                self._cache('search', search_key, value={'results': found, 'searched_at': searched_at})
-                            else:
-                                found, searched_at = cached_search['results'], cached_search['searched_at']
-                                record['cache_hit'] = True
-                            record['searched_at'] = searched_at
-                            record['result_count'] = len(found)
-                            candidates.extend({**item, 'provider': self.provider.identity} for item in found)
-                            if found:
-                                break
-                        except LookupFailure as exc:
-                            report['errors'].append({'status': exc.status, 'code': exc.code})
-                            break
-                        except Exception:
-                            report['errors'].append({'status': 'INTERNAL_ERROR', 'code': 'SEARCH_ADAPTER_ERROR'})
-                            break
+                    candidates.extend(self._search(queries, budget, report))
             documents = []
             seen = set()
             for item in candidates:
@@ -643,6 +737,7 @@ class ReferenceLookup:
             for document in documents:
                 for item in document['questions']:
                     report['matches'].append(verify_candidate(snapshot, document, item))
+            report['top_candidates'] = top_candidates(snapshot, report)
             plausible = [m for m in report['matches'] if m['match_status'] in ('MATCH_VERIFIED', 'OPTION_REORDER_VERIFIED', 'PARTIAL_MATCH')]
             if len(plausible) > 1:
                 report['match_status'], report['next_action'] = 'AMBIGUOUS', 'MANUAL_REVIEW'
@@ -757,6 +852,12 @@ class ReferenceLookup:
                 if current and tuple(current) == (report['question_version'], report['context_revision']):
                     raise
                 return
+        try:
+            snapshot = student_snapshot(store, report['question_id'], report['question_version'], report['context_revision'])
+        except ValueError:
+            report['top_candidates'] = []
+            return
+        report['top_candidates'] = top_candidates(snapshot, report)
         if report.get('lookup_key') and report['retrieval_status'] in ('OFFLINE_FIXTURE', 'CANDIDATES_FOUND', 'NO_RESULTS'):
             self._cache('verification', report['lookup_key'], value=report,
                         ttl=max(0, report['expires_at_epoch'] - time.time()))

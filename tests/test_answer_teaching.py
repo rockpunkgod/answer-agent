@@ -12,7 +12,7 @@ from unittest.mock import Mock, patch
 
 from helpdesk import answer_teaching as source
 from helpdesk.teaching_bundle import TeachingBundleError, verify_bundle
-from helpdesk.teaching_routes import GRAMMAR, OBJECTIVE, ROUTES, WRITING
+from helpdesk.teaching_routes import GRAMMAR, OBJECTIVE, ROUTES, WRITING, OBJECTIVE_CHECKER
 from helpdesk.storage import Store
 from helpdesk.workflow import Workflow
 from tools.prepare_teaching_bundle import main
@@ -44,7 +44,7 @@ class AnswerTeachingTests(unittest.TestCase):
             path = self.repo / name
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(('完整原文。条件不可摘要。\n' + name + '\n').encode('utf-8'))
-        # A different skill's checker exists, but is never borrowed or executed.
+        # The declared shared checker is snapshotted but never executed by a preview.
         (self.repo / GRAMMAR / 'scripts/check_lesson.py').write_bytes(
             b"raise RuntimeError('THIS_SOURCE_PREVIEW_MUST_NOT_EXECUTE_TEACHING_CODE')\n")
         self.git('add', '.')
@@ -75,12 +75,25 @@ class AnswerTeachingTests(unittest.TestCase):
     def write_manifest(self, path, manifest):
         path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding='utf-8')
 
+    def remove_required_checker(self, *, add_legacy_copy=False):
+        self.git('rm', '--', OBJECTIVE_CHECKER)
+        if add_legacy_copy:
+            old = self.repo / OBJECTIVE / 'scripts/check_lesson.py'
+            old.parent.mkdir(parents=True)
+            old.write_bytes(b'raise RuntimeError("NOT_THE_DECLARED_CHECKER")\n')
+            self.git('add', '--', OBJECTIVE + '/scripts/check_lesson.py')
+        self.git('-c', 'user.name=Source test', '-c', 'user.email=source-test@example.invalid',
+                 'commit', '-m', 'Fixture missing required checker')
+        self.commit = self.git('rev-parse', 'HEAD').decode('ascii').strip()
+        self.write_pin()
+
     def test_real_generation_reports_required_missing_source_path(self):
+        self.remove_required_checker()
         path = self.bundle();before = path.read_bytes()
         db = Store(self.base / 'source-gate.db');self.addCleanup(db.close)
         adapter = Mock(identity='REAL_SOURCE_TEST', simulated=False)
         with self.assertRaisesRegex(TeachingBundleError,
-                'ANSWER_REQUIRED_DEPENDENCIES_MISSING: gaokao-english/scripts/check_lesson.py'):
+                'ANSWER_REQUIRED_DEPENDENCIES_MISSING: ' + OBJECTIVE_CHECKER):
             Workflow(db, teaching_manifest=path, generation_adapter=adapter)._skills()
         adapter.generate.assert_not_called()
         self.assertEqual(db.one('SELECT COUNT(*) FROM runs')[0], 0)
@@ -97,6 +110,7 @@ class AnswerTeachingTests(unittest.TestCase):
 
     def test_valid_answer_preview_keeps_manual_workbench_available_without_queue_or_desktop(self):
         from helpdesk.demo_server import DemoHTTPServer
+        self.remove_required_checker()
         path = self.bundle()
         with patch('helpdesk.mcp_transport.MCPProcess') as transport:
             server = DemoHTTPServer(('127.0.0.1', 0), db_path=self.base / 'manual.db',
@@ -105,7 +119,7 @@ class AnswerTeachingTests(unittest.TestCase):
                 self.assertTrue(server.source_review_enabled)
                 self.assertFalse(server.question_auto_continue)
                 self.assertIsNone(server.reviewed_queue_thread)
-                self.assertIn('gaokao-english/scripts/check_lesson.py', server.teaching_blocked_reason)
+                self.assertIn(OBJECTIVE_CHECKER, server.teaching_blocked_reason)
                 transport.assert_not_called()
             finally:
                 server.server_close()
@@ -134,7 +148,10 @@ class AnswerTeachingTests(unittest.TestCase):
             snapshot = manifest_path.parent / 'sources' / item['relative_path']
             self.assertEqual(snapshot.read_bytes(), original)
             self.assertEqual(item['sha256'], sha256(original).hexdigest())
-            self.assertIn(original, assembled)
+            if item['relative_path'] in manifest['required_dependencies']:
+                self.assertNotIn(original, assembled)
+            else:
+                self.assertIn(original, assembled)
         self.assertIn(('Commit: ' + self.commit).encode(), assembled)
 
     def test_each_type_uses_the_readme_route_without_other_type_modules(self):
@@ -163,12 +180,49 @@ class AnswerTeachingTests(unittest.TestCase):
         self.assertNotIn(b'raise RuntimeError', Path(manifest['workflow_teaching_paths'][0]).read_bytes())
 
     def test_missing_objective_checker_is_reported_not_borrowed(self):
+        self.remove_required_checker(add_legacy_copy=True)
         manifest = verify_bundle(self.bundle())
-        self.assertEqual(manifest['missing_dependencies'], [OBJECTIVE + '/scripts/check_lesson.py'])
+        self.assertEqual(manifest['missing_dependencies'], [OBJECTIVE_CHECKER])
         self.assertEqual(manifest['course_coverage'], 'DEPENDENCY_INCOMPLETE')
         self.assertFalse(manifest['answer_generation_allowed_by_course'])
         self.assertFalse(any(item['relative_path'].startswith(GRAMMAR)
                              for item in manifest['source_files']))
+        self.assertNotIn(OBJECTIVE + '/scripts/check_lesson.py',
+                         [item['relative_path'] for item in manifest['source_files']])
+
+    def test_objective_uses_declared_shared_checker_without_grammar_methods(self):
+        for kind in ('阅读理解', '七选五', '完形填空'):
+            with self.subTest(kind=kind):
+                manifest_path = self.bundle(kind)
+                manifest = verify_bundle(manifest_path)
+                self.assertEqual(manifest['required_dependencies'], [OBJECTIVE_CHECKER])
+                self.assertEqual(manifest['missing_dependencies'], [])
+                names = [item['relative_path'] for item in manifest['source_files']]
+                self.assertEqual([name for name in names if name.startswith(GRAMMAR + '/')],
+                                 [OBJECTIVE_CHECKER])
+                original = self.git('show', self.commit + ':' + OBJECTIVE_CHECKER)
+                self.assertEqual((manifest_path.parent / 'sources' / OBJECTIVE_CHECKER).read_bytes(), original)
+                assembled = Path(manifest['workflow_teaching_paths'][0]).read_text(encoding='utf-8')
+                self.assertNotIn(GRAMMAR + '/SKILL.md', assembled)
+                self.assertNotIn(GRAMMAR + '/references/grammar-fill.md', assembled)
+                self.assertFalse(manifest['answer_generation_allowed_by_course'])
+
+    def test_reviewed_new_commit_gets_separate_cache_and_old_bundle_is_rejected(self):
+        old = self.bundle()
+        old_bytes = old.read_bytes()
+        entry = self.repo / OBJECTIVE / 'SKILL.md'
+        entry.write_bytes(entry.read_bytes() + '新课程原文\n'.encode('utf-8'))
+        self.git('add', '--', OBJECTIVE + '/SKILL.md')
+        self.git('-c', 'user.name=Source test', '-c', 'user.email=source-test@example.invalid',
+                 'commit', '-m', 'Fixture reviewed source update')
+        self.commit = self.git('rev-parse', 'HEAD').decode('ascii').strip()
+        self.write_pin()
+        new = self.bundle()
+        self.assertNotEqual(old, new)
+        self.assertEqual(old.read_bytes(), old_bytes)
+        self.assertEqual(verify_bundle(new)['source_repository']['commit'], self.commit)
+        with self.assertRaisesRegex(source.TeachingSourceError, 'SOURCE_PIN_MISMATCH'):
+            verify_bundle(old)
 
     def test_same_source_and_type_reuse_unchanged_cache(self):
         path = self.bundle()
@@ -279,7 +333,7 @@ class AnswerTeachingTests(unittest.TestCase):
         self.assertEqual(report['status'], 'SOURCE_PREVIEW')
         self.assertFalse(report['answer_generation_allowed_by_course'])
         self.assertEqual(report['source_repository']['commit'], self.commit)
-        self.assertTrue(report['missing_dependencies'])
+        self.assertEqual(report['missing_dependencies'], [])
         for call in calls.call_args_list:
             args = call.args[0]
             self.assertEqual(args[:3], ['git', '-C', str(self.repo)])
