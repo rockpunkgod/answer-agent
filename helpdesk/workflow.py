@@ -10,7 +10,7 @@ from pathlib import Path
 import re
 from typing import Protocol
 
-from .delivery import BoundMessage, MockDesktop, PreflightFailure, NotSubmitted
+from .delivery import BoundMessage, MockDesktop, PreflightFailure, RetryablePreflightFailure, NotSubmitted
 from .domain import Intent, new_id, normalize
 from .locking import resource_lock
 from .service import Helpdesk
@@ -62,8 +62,10 @@ class Workflow:
                 or type(getattr(self.generation_adapter, "simulated", None)) is not bool
                 or not callable(getattr(self.generation_adapter, "generate", None))):
             raise ValueError("Generation adapter requires identity, simulated, and generate(snapshot)")
-        # A separate explicit production gate must be implemented/accepted before real sends.
-        if self.desktop.simulated is not True and getattr(self.desktop, "test_only", False) is not True:
+        from .mcp_group_delivery import MCPGroupDesktop
+        # Only the locally reviewed concrete group adapter may send formal text.
+        if (self.desktop.simulated is not True and getattr(self.desktop, "test_only", False) is not True
+                and not isinstance(self.desktop, MCPGroupDesktop)):
             raise ValueError("This demo cannot enable a real desktop sender")
         if teaching_manifest is not None and teaching_paths:
             raise ValueError("Choose a teaching manifest or explicit paths, not both")
@@ -492,10 +494,22 @@ class Workflow:
         if transport and self.desktop.simulated:
             if row["simulated"] != 1:
                 raise ValueError("REAL_SEND_DISABLED")
-        elif transport and (row["simulated"] != 0 or row["purpose"] != "PROGRESS" or row["answer_id"] or row["review_status"] != "OPERATOR_AUTHORIZED"):
-            # The optional live smoke-test bridge cannot deliver teaching answers or ACKs
-            # to students. It only accepts explicitly operator-queued probe messages.
-            raise ValueError("ONLY_OPERATOR_TEST_PROBES_ALLOWED")
+        elif transport and self.desktop.simulated is False:
+            from .mcp_group_delivery import MCPGroupDesktop
+            if isinstance(self.desktop, MCPGroupDesktop):
+                if row['simulated'] != 0 or row['purpose'] not in ('ACK', 'ANSWER', 'CORRECTION'):
+                    raise ValueError('ACTUAL_GROUP_DELIVERY_REQUIRED')
+                receipt = self.db.one('SELECT source FROM messages WHERE id=?', (row['message_id'],))
+                if not receipt or not receipt['source'].startswith('collector:'):
+                    raise ValueError('ACTUAL_STUDENT_SOURCE_REQUIRED')
+                if row['purpose'] != 'ACK':
+                    if (not self.db.one("SELECT 1 FROM sqlite_master WHERE type='table' AND name='operator_tasks'")
+                            or not self.db.one("SELECT id FROM operator_tasks WHERE turn_id=? AND label='SOURCE_MESSAGE'", (row['turn_id'],))):
+                        raise ValueError('REVIEWED_ORIGINAL_STUDENT_TASK_REQUIRED')
+                self.desktop.authorize(bound)
+            elif (row["simulated"] != 0 or row["purpose"] != "PROGRESS" or row["answer_id"] or row["review_status"] != "OPERATOR_AUTHORIZED"):
+                # The optional smoke-test bridge remains limited to operator probes.
+                raise ValueError("ONLY_OPERATOR_TEST_PROBES_ALLOWED")
         if row["purpose"] in ("ANSWER", "CORRECTION"):
             validate_source_answer(self.db, row, approval=approval and self._answer_review_required())
         elif row["purpose"] not in ("ACK", "CLARIFICATION", "REQUEST_IMAGE", "PROGRESS"):
@@ -712,13 +726,22 @@ class Workflow:
                     if row["purpose"] != "TEST_ANSWER":
                         self._human(row["message_id"], "SEND_CHECK_FAILED:" + str(exc))
                     return "STALE"
-                try:
-                    self.desktop.preflight(bound)
-                except PreflightFailure as exc:
+            # UI reads must not block original-message ingestion or an operator pause.
+            try:
+                self.desktop.preflight(bound)
+            except PreflightFailure as exc:
+                with self.db.transaction():
                     self.db.execute("UPDATE outbox SET state='FAILED',last_error=? WHERE id=?", (str(exc), row["id"]))
-                    if row["purpose"] != "TEST_ANSWER":
+                    retryable = isinstance(exc, RetryablePreflightFailure)
+                    self._event('SEND_PREFLIGHT_FAILED', outbox=row['id'], run=row['run_id'],
+                                details={'reason': str(exc), 'retryable': retryable, 'submission_attempted': False})
+                    if row["purpose"] != "TEST_ANSWER" and not retryable:
                         self._human(row["message_id"], str(exc))
-                    return "FAILED"
+                return "FAILED"
+            with self.db.transaction():
+                current = self.db.one('SELECT * FROM outbox WHERE id=?', (row['id'],))
+                if current['state'] != 'PENDING':
+                    return current['state']
                 self.db.execute("UPDATE outbox SET state='SENDING' WHERE id=?", (row["id"],))
                 self._event("SEND_STARTED", outbox=row["id"], run=row["run_id"])
             # Commit SENDING before the side effect. A crash from here onwards is never retried.
@@ -739,9 +762,11 @@ class Workflow:
                 except (ValueError, PreflightFailure):
                     self.db.execute("UPDATE outbox SET state='STALE',review_status='INVALIDATED' WHERE id=?", (row["id"],))
                     return "STALE"
-                try:
-                    evidence = self.desktop.send(bound)
-                except NotSubmitted as exc:
+            # SENDING is durable, while the database remains available during UI work.
+            try:
+                evidence = self.desktop.send(bound)
+            except NotSubmitted as exc:
+                with self.db.transaction():
                     evidence = {"submission_attempted": False, "draft_may_remain": True,
                                 "simulated": self.desktop.simulated, "reason": str(exc)}
                     self.db.execute("UPDATE outbox SET state='FAILED',last_error=? WHERE id=?", (str(exc), row["id"]))
@@ -749,11 +774,17 @@ class Workflow:
                     if row["purpose"] != "TEST_ANSWER":
                         self._human(row["message_id"], "UNSENT_DRAFT_REVIEW:" + row["id"])
                     self._event("SEND_NOT_SUBMITTED", outbox=row["id"], run=row["run_id"], details=evidence)
-                    return "FAILED"
-                except Exception:
-                    # Side-effect exceptions are not retryable; raw exception may contain private data.
-                    evidence = {"confirmed": False, "simulated": self.desktop.simulated, "reason": "SEND_EXCEPTION"}
-                return self._record_check(current, evidence)
+                return "FAILED"
+            except Exception:
+                # Side-effect exceptions are not retryable; raw exception may contain private data.
+                evidence = {"confirmed": False, "simulated": self.desktop.simulated, "reason": "SEND_EXCEPTION"}
+            with self.db.transaction():
+                state = self._record_check(current, evidence)
+            if state == 'SENT_UI_CONFIRMED' and current['purpose'] in ('ANSWER', 'CORRECTION') and self.desktop.simulated is False:
+                counting = self._project_verified_manual_counting(current)
+                with self.db.transaction():
+                    self._event('VERIFIED_DELIVERY_COUNTING', outbox=row['id'], run=row['run_id'], details={'state': counting})
+            return state
 
     def recover(self):
         recovered = []
@@ -772,21 +803,23 @@ class Workflow:
     def inspect_unknown(self, outbox_id):
         """Explicit operator-requested, read-only check of a previously uncertain send."""
         with resource_lock(self.desktop.lock_path):
+            row = self.db.one("SELECT * FROM outbox WHERE id=?", (outbox_id,))
+            if not row or row["state"] not in ("SENDING", "SEND_UNKNOWN"):
+                raise ValueError("Only uncertain sends can be inspected")
+            try:
+                bound = test_copy_reconcile_bound(self.db, row) if row["purpose"] == "TEST_ANSWER" else self._bound(row)
+                evidence = self.desktop.reconcile(bound)
+            except Exception:
+                evidence = {"confirmed": False, "simulated": self.desktop.simulated, "reason": "RECOVERY_CHECK_FAILED"}
             with self.db.transaction():
-                row = self.db.one("SELECT * FROM outbox WHERE id=?", (outbox_id,))
-                if not row or row["state"] not in ("SENDING", "SEND_UNKNOWN"):
-                    raise ValueError("Only uncertain sends can be inspected")
-                try:
-                    bound = test_copy_reconcile_bound(self.db, row) if row["purpose"] == "TEST_ANSWER" else self._bound(row)
-                    evidence = self.desktop.reconcile(bound)
-                except Exception:
-                    evidence = {"confirmed": False, "simulated": self.desktop.simulated, "reason": "RECOVERY_CHECK_FAILED"}
                 state = self._record_check(row, evidence)
                 if state == "SENT_UI_CONFIRMED":
                     prefix = "TEST_SEND_UNKNOWN:" if row["purpose"] == "TEST_ANSWER" else "SEND_UNKNOWN:"
                     self.db.execute("UPDATE human_tasks SET state='RESOLVED' WHERE message_id=? AND reason=?",
                         (row["message_id"], prefix + row["id"]))
-                return state
+            if state == 'SENT_UI_CONFIRMED' and row['purpose'] in ('ANSWER', 'CORRECTION') and self.desktop.simulated is False:
+                self._project_verified_manual_counting(row)
+            return state
 
     def dashboard(self):
         health = self.app.health()

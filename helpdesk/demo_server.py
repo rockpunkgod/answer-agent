@@ -377,7 +377,7 @@ def perform_real(store, action, config, *, generator=None, transport_factory=Non
 class DemoHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, address: tuple[str, int], db_path: Path, *, real_config=None, real_generator=None, transport_factory=None, desktop_factory=None, native_archive_root=None, collector_config=None, processing_mode="COMPATIBILITY", collector_source_factory=None, answer_review_root=None, worker_boundary=False, worker_policy=None, worker_token_env='HELPDESK_WORKER_TOKEN', performance_enabled=None, source_review_manifest=None, reference_lookup_config=None):
+    def __init__(self, address: tuple[str, int], db_path: Path, *, real_config=None, real_generator=None, transport_factory=None, desktop_factory=None, native_archive_root=None, collector_config=None, processing_mode="COMPATIBILITY", collector_source_factory=None, answer_review_root=None, worker_boundary=False, worker_policy=None, worker_token_env='HELPDESK_WORKER_TOKEN', performance_enabled=None, source_review_manifest=None, reference_lookup_config=None, automatic_delivery_config=None, automatic_desktop_factory=None):
         if address[0] != "127.0.0.1":
             raise ValueError("演示服务只允许绑定 127.0.0.1")
         if processing_mode not in {"COMPATIBILITY", "ACK_ONLY"}:
@@ -439,6 +439,13 @@ class DemoHTTPServer(ThreadingHTTPServer):
             if configured:
                 self.db_path = Path(configured).resolve()
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
+        from .automatic_delivery_runtime import AutomaticDeliveryRuntime
+        self.automatic_delivery = AutomaticDeliveryRuntime(self.db_path, automatic_delivery_config,
+            collector_config=self.collector_config, desktop_factory=automatic_desktop_factory)
+        if self.worker_boundary and self.automatic_delivery.enabled:
+            raise ValueError('Choose the existing Worker boundary or the local automatic sender, not both')
+        if self.real_config and self.automatic_delivery.enabled:
+            raise ValueError('Prepared test delivery and formal automatic group delivery use separate launch configurations')
         self.performance_available = performance_enabled if performance_enabled is not None else processing_mode != "ACK_ONLY"
         if stage is not None:
             if "performance_enabled" in stage:
@@ -466,7 +473,8 @@ class DemoHTTPServer(ThreadingHTTPServer):
             from .workflow import Workflow
             with _store(self.db_path) as store:
                 workflow = Workflow(store)
-                workflow.set_answer_review_required(False, actor="trusted_workbench_startup")
+                if not self.automatic_delivery.enabled:
+                    workflow.set_answer_review_required(False, actor="trusted_workbench_startup")
                 workflow.set_require_source_clarity_review(True, actor="trusted_workbench_startup")
                 if self.source_review_enabled:
                     workflow.set_require_ack_before_generation(True, actor="trusted_workbench_startup")
@@ -475,7 +483,7 @@ class DemoHTTPServer(ThreadingHTTPServer):
                 for purpose in ("ANSWER", "CORRECTION"):
                     if not self.source_review_enabled or manual.get(purpose) != "DISABLED":
                         manual[purpose] = "MANUAL"
-                if policy != manual:
+                if policy != manual and not self.automatic_delivery.enabled:
                     workflow.set_delivery_policy(manual, name or "题面确认后排队，讲解人工发送")
         self.collector_supervisor = None
         if processing_mode == "ACK_ONLY":
@@ -506,12 +514,13 @@ class DemoHTTPServer(ThreadingHTTPServer):
                 coordinator.configure_worker(value['worker_id'],value['policy'])
                 self.worker_token_worker_id=value['worker_id']
         super().__init__(address, DemoHandler)
-        if self.question_auto_continue:
+        if self.question_auto_continue or self.automatic_delivery.enabled:
             self.reviewed_queue_thread = Thread(target=self._resume_reviewed_queue,
                 name="reviewed-question-admission", daemon=True)
             self.reviewed_queue_thread.start()
 
     def server_close(self):
+        self.automatic_delivery.pause_requested.set()
         self.reviewed_queue_stop.set()
         if self.reviewed_queue_thread:
             self.reviewed_queue_thread.join(1)
@@ -520,12 +529,15 @@ class DemoHTTPServer(ThreadingHTTPServer):
         super().server_close()
 
     def _resume_reviewed_queue(self):
-        """Resume durable ACK prerequisites only; never inject desktop callbacks."""
+        """ACK/answer delivery is independent of teaching generation and admission."""
         from .reviewed_question_queue import resume_pending
         while not self.reviewed_queue_stop.is_set():
             try:
+                if self.automatic_delivery.enabled:
+                    self.automatic_delivery.tick()
                 with _store(self.db_path) as store:
-                    resume_pending(store)
+                    if self.question_auto_continue:
+                        resume_pending(store)
                 self.reviewed_queue_error = None
             except Exception as exc:
                 self.reviewed_queue_error = type(exc).__name__
@@ -689,8 +701,12 @@ class DemoHandler(BaseHTTPRequestHandler):
 
     def _json(self, status: int, value):
         payload = json.dumps(value, ensure_ascii=False, default=str).encode("utf-8")
-        self._headers(status, "application/json; charset=utf-8", len(payload))
-        self.wfile.write(payload)
+        try:
+            self._headers(status, "application/json; charset=utf-8", len(payload))
+            self.wfile.write(payload)
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            # A closed local browser is not a failed/retryable business action.
+            return
 
     def _host_valid(self):
         return self.headers.get("Host") == f"127.0.0.1:{self.server.server_port}"
@@ -700,6 +716,11 @@ class DemoHandler(BaseHTTPRequestHandler):
             self._json(403, {"error": "主机地址检查未通过"})
             return
         route = urlsplit(self.path).path
+        if route == '/api/delivery/tasks':
+            with _store(self.server.db_path) as store:
+                result = self.server.automatic_delivery.snapshot(store)
+            self._json(200, result)
+            return
         if route == '/api/worker/control':
             from .worker_coordinator import WorkerCoordinator
             with _store(self.server.db_path) as store:
@@ -967,6 +988,7 @@ class DemoHandler(BaseHTTPRequestHandler):
             with _store(self.server.db_path) as store:
                 from .workflow import Workflow
                 dashboard = Workflow(store).dashboard()
+                automatic_delivery = self.server.automatic_delivery.snapshot(store)
             real = bool(self.server.real_config)
             ack_only = self.server.processing_mode == "ACK_ONLY"
             collector = self.server.collector_snapshot() if ack_only else None
@@ -983,13 +1005,14 @@ class DemoHandler(BaseHTTPRequestHandler):
                              "source_review_enabled": self.server.source_review_enabled,
                              "teaching_blocked_reason": self.server.teaching_blocked_reason,
                              "question_auto_continue": self.server.question_auto_continue,
+                             "automatic_delivery": automatic_delivery,
                              "reviewed_queue": {"worker_alive": bool(self.server.reviewed_queue_thread
                                  and self.server.reviewed_queue_thread.is_alive()),
                                  "error_type": self.server.reviewed_queue_error},
                              "csrf_token": self.server.csrf_token, "dashboard": dashboard,
                              "jobs": self.server.job_snapshot(),
                              "test_delivery_available": real and not self.server.question_auto_continue and bool(self.server.real_config.get('pin')),
-                             "allowed_actions": ["collector_start", "collector_stop", "resume", "stop"] if ack_only else ["resume", "stop"] if self.server.question_auto_continue else sorted(REAL_ACTIONS if real else ALLOWED_ACTIONS)})
+                             "allowed_actions": ["collector_start", "collector_stop", "resume", "stop"] if ack_only else ["resume", "stop"] if self.server.question_auto_continue or self.server.automatic_delivery.enabled else sorted(REAL_ACTIONS if real else ALLOWED_ACTIONS)})
             return
         files = {"/": ("index.html", "text/html; charset=utf-8"),
                  "/worker-control.js": ("worker-control.js", "text/javascript; charset=utf-8"),
@@ -1013,7 +1036,7 @@ class DemoHandler(BaseHTTPRequestHandler):
         if route.startswith('/api/worker/'):
             self._worker_post(route)
             return
-        if route not in ("/api/action", "/api/operator-tasks", '/api/reference-lookups', '/api/manual-deliveries'):
+        if route not in ("/api/action", "/api/operator-tasks", '/api/reference-lookups', '/api/manual-deliveries', '/api/delivery/control'):
             self._json(404, {"error": "接口不存在"})
             return
         expected_origin = f"http://127.0.0.1:{self.server.server_port}"
@@ -1032,6 +1055,15 @@ class DemoHandler(BaseHTTPRequestHandler):
             if not 0 < size <= maximum:
                 raise ValueError("请求大小无效")
             payload = json.loads(self.rfile.read(size))
+            if route == '/api/delivery/control':
+                if (not isinstance(payload, dict) or set(payload) not in ({'action'}, {'action', 'outbox_id'})
+                        or payload.get('action') not in ('pause', 'resume', 'inspect', 'approve')
+                        or ('outbox_id' in payload and payload['action'] not in ('inspect', 'approve'))):
+                    raise ValueError('只接受暂停、恢复、审核或核验已有发送任务')
+                with _store(self.server.db_path) as store:
+                    result = self.server.automatic_delivery.control(store, payload['action'], outbox_id=payload.get('outbox_id'))
+                self._json(200, {'result': result})
+                return
             if route == '/api/manual-deliveries':
                 from .manual_delivery import ManualDeliveries
                 fields = {'original_outbox_id','question_version','context_revision','reviewer','verification_evidence',
@@ -1114,6 +1146,15 @@ class DemoHandler(BaseHTTPRequestHandler):
                 return
             if not isinstance(payload, dict) or set(payload) != {"action"} or not isinstance(payload["action"], str):
                 raise ValueError("只允许预设演示动作")
+            if self.server.automatic_delivery.enabled and payload['action'] in ('stop', 'resume'):
+                with _store(self.server.db_path) as store:
+                    result = self.server.automatic_delivery.control(store,
+                        'pause' if payload['action'] == 'stop' else 'resume')
+                self._json(200, {'result': result})
+                return
+            if self.server.automatic_delivery.enabled and payload['action'] not in ('collector_start', 'collector_stop'):
+                self._json(403, {'error': '自动发送只处理已有可信任务；请使用收到与答案发送入口'})
+                return
             if self.server.processing_mode == "ACK_ONLY" and payload["action"] in {"collector_start", "collector_stop"}:
                 supervisor = self.server.collector_supervisor
                 result = supervisor.start() if payload["action"] == "collector_start" else supervisor.stop()
@@ -1233,6 +1274,7 @@ def main():
     parser.add_argument("--source-review-manifest", type=Path,
                         help="本人已审核的教学清单；只开放原消息题面确认和持久排队，不需要旧题生成记录")
     parser.add_argument('--reference-lookup-config', type=Path, help='可选原题核对TOML；默认关闭，不开启发送权限')
+    parser.add_argument('--automatic-delivery-config', type=Path, help='本人核验的本地群发送JSON；复用现有Outbox和阶段发送策略')
     parser.add_argument("--processing-mode", choices=("COMPATIBILITY", "ACK_ONLY"), default="COMPATIBILITY")
     parser.add_argument("--port", type=int, default=8765)
     parser.add_argument('--worker-boundary',action='store_true',help='后台禁止直接操作桌面，采用固定Worker业务接口')
@@ -1249,8 +1291,8 @@ def main():
         answer_review_root=args.answer_review_root,worker_boundary=args.worker_boundary,
         worker_policy=args.worker_policy,worker_token_env=args.worker_token_env,
         performance_enabled=args.enable_performance, source_review_manifest=args.source_review_manifest,
-        reference_lookup_config=args.reference_lookup_config)
-    print(f"{'消息采集 · 仅排队收到' if server.processing_mode == 'ACK_ONLY' else '真实已准备任务' if server.real_config else '模拟演示'}：http://127.0.0.1:{server.server_port}/", flush=True)
+        reference_lookup_config=args.reference_lookup_config, automatic_delivery_config=args.automatic_delivery_config)
+    print(f"{'收到与答案发送任务' if server.automatic_delivery.enabled else '消息采集 · 仅排队收到' if server.processing_mode == 'ACK_ONLY' else '真实已准备任务' if server.real_config else '模拟演示'}：http://127.0.0.1:{server.server_port}/", flush=True)
     try:
         if args.auto_start_collector:
             server.collector_supervisor.start()

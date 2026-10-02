@@ -16,6 +16,16 @@ class PreflightFailure(Exception):
     """No send attempted. A human must resolve the reason before retrying."""
 
 
+class RetryablePreflightFailure(PreflightFailure):
+    """A bounded fresh preflight may retry; no draft or submit was attempted."""
+    CODES = frozenset({'WINDOW_UNAVAILABLE', 'TRANSIENT_UI_READ_FAILURE'})
+
+    def __init__(self, code):
+        if code not in self.CODES:
+            raise ValueError('Unsupported retryable preflight failure')
+        super().__init__(code)
+
+
 class NotSubmitted(Exception):
     """Adapter proves failure happened before the submit gesture, possibly leaving a draft.
 

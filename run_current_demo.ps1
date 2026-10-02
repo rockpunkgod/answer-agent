@@ -6,7 +6,8 @@ param(
     [string]$AnswerReviewRoot = 'data/private/answer-review-packets',
     [string]$SourceReviewManifest = '',
     [switch]$NoAutoCollect,
-    [string]$ReferenceLookupConfig = ''
+    [string]$ReferenceLookupConfig = '',
+    [string]$AutomaticDeliveryConfig = ''
 )
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
@@ -29,6 +30,9 @@ if ($null -ne $ExistingState) {
     if ($ReferenceLookupConfig) {
         throw 'Reference lookup config is read at service startup. Stop the existing service or choose another port; its configuration was not changed.'
     }
+    if ($AutomaticDeliveryConfig) {
+        throw 'Automatic delivery config is read at startup. Stop the existing service or choose another port; no sender was enabled.'
+    }
     Write-Output "Current demo is available: $LocalUrl/"
     if (-not $ExistingState.collector.control.worker_alive) {
         Write-Output 'Collection is not running. Review its status and start it from the workbench when ready.'
@@ -40,7 +44,12 @@ if ($Listeners | Where-Object { $_.Port -eq $Port }) {
     throw "Port $Port is still listening but its status was not verified; no duplicate process was started."
 }
 $LaunchArgs = @('-X', 'utf8', '-B', '-m', 'helpdesk.demo_server', '--port', "$Port",
-    '--db', $Db, '--processing-mode', 'ACK_ONLY', '--enable-performance', '--worker-boundary')
+    '--db', $Db, '--processing-mode', 'ACK_ONLY', '--enable-performance')
+if ($AutomaticDeliveryConfig) {
+    $LaunchArgs += @('--automatic-delivery-config', $AutomaticDeliveryConfig)
+} else {
+    $LaunchArgs += '--worker-boundary'
+}
 if (Test-Path -LiteralPath $CollectorConfig -PathType Leaf) {
     $LaunchArgs += @('--collector-config', $CollectorConfig)
     if (-not $NoAutoCollect) { $LaunchArgs += '--auto-start-collector' }

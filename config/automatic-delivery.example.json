@@ -1,0 +1,25 @@
+{
+  "enabled": false,
+  "retry": {"max_attempts": 3, "initial_retry_seconds": 5, "max_retry_seconds": 60},
+  "desktop": {
+    "allow_real_send": false,
+    "platform": "wecom",
+    "display_index": 1,
+    "controls_verified": false,
+    "reviewer": "",
+    "verification_evidence": "",
+    "groups": [
+      {
+        "group_key": "REPLACE_WITH_BOUND_GROUP_KEY",
+        "student_keys": ["REPLACE_WITH_VERIFIED_STUDENT_KEY"],
+        "header_name": "REPLACE_WITH_EXACT_CURRENT_GROUP_HEADER",
+        "header_parent_name": "REPLACE_WITH_REVIEWED_GROUP_HEADER_CONTAINER",
+        "header_parent_role": "组",
+        "editor_name": "REPLACE_WITH_REVIEWED_EDITOR_NAME",
+        "self_sender_name": "REPLACE_WITH_REVIEWED_OWN_MESSAGE_CONTAINER",
+        "self_sender_role": "组",
+        "receipt_role": "text"
+      }
+    ]
+  }
+}

@@ -25,13 +25,13 @@ class CurrentDemoLauncherTests(unittest.TestCase):
         shutil.copyfile(ROOT / 'run_current_demo.ps1', self.launcher)
         self.arguments = self.root / 'python-arguments.json'
         self.harness = self.root / 'harness.ps1'
-        self.harness.write_text('''param([string]$Launcher, [int]$Port, [string]$RecordFile, [string]$SourceReviewManifest, [switch]$NoAutoCollect)
+        self.harness.write_text('''param([string]$Launcher, [int]$Port, [string]$RecordFile, [string]$SourceReviewManifest, [switch]$NoAutoCollect, [string]$AutomaticDeliveryConfig)
 $ErrorActionPreference = 'Stop'
 function global:python {
     ConvertTo-Json -InputObject @($args) -Compress | Set-Content -LiteralPath $RecordFile -Encoding UTF8
     $global:LASTEXITCODE = 0
 }
-& $Launcher -Port $Port -SourceReviewManifest $SourceReviewManifest -NoAutoCollect:$NoAutoCollect
+& $Launcher -Port $Port -SourceReviewManifest $SourceReviewManifest -NoAutoCollect:$NoAutoCollect -AutomaticDeliveryConfig $AutomaticDeliveryConfig
 ''', encoding='ascii')
         self.posts = []
 
@@ -60,17 +60,36 @@ function global:python {
         self.addCleanup(cleanup)
         return server.server_port
 
-    def invoke(self, port, *, no_auto_collect=False, manifest=None):
+    def invoke(self, port, *, no_auto_collect=False, manifest=None, automatic_config=None):
         command = [POWERSHELL, '-NoProfile', '-NonInteractive', '-File', str(self.harness),
                    '-Launcher', str(self.launcher), '-Port', str(port), '-RecordFile', str(self.arguments)]
         if no_auto_collect: command.append('-NoAutoCollect')
         if manifest: command += ['-SourceReviewManifest', str(manifest)]
+        if automatic_config: command += ['-AutomaticDeliveryConfig', str(automatic_config)]
         return subprocess.run(command, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=20)
 
     def free_port(self):
         with socket.socket() as candidate:
             candidate.bind(('127.0.0.1', 0))
             return candidate.getsockname()[1]
+
+    def test_local_automatic_configuration_is_forwarded_without_worker_boundary(self):
+        config = self.root / 'automatic.local.json'
+        config.write_text('{"enabled":false}', encoding='ascii')
+        result = self.invoke(self.free_port(), automatic_config=config)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        arguments = json.loads(self.arguments.read_text(encoding='utf-8-sig'))
+        self.assertIn('--automatic-delivery-config', arguments)
+        self.assertIn(str(config), arguments)
+        self.assertNotIn('--worker-boundary', arguments)
+
+    def test_existing_service_is_not_silently_upgraded_to_automatic_sending(self):
+        port = self.serve({'application': 'wecom-english-helpdesk', 'processing_mode': 'ACK_ONLY',
+                           'collector': {'control': {'worker_alive': False}}})
+        result = self.invoke(port, automatic_config=self.root / 'automatic.local.json')
+        self.assertNotEqual(result.returncode, 0)
+        self.assertFalse(self.arguments.exists())
+        self.assertEqual(self.posts, [])
 
     def test_reuse_with_missing_optional_files_does_not_restart_a_paused_collector(self):
         port = self.serve({'processing_mode': 'ACK_ONLY',

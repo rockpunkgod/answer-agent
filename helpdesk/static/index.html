@@ -69,6 +69,12 @@
       <div class="actions"><button data-action="collector_start">启动采集与收到排队</button><button data-action="collector_stop" class="secondary">停止采集，保留进度</button></div>
       <p id="collector-control-note">正在读取原文导入与收到任务状态；发送方式以当前阶段配置为准。</p>
     </section>
+    <section id="automatic-delivery-panel" class="card" hidden>
+      <div class="section-title"><div><h2>收到与答案发送</h2><p>收到独立处理，答案遵守当前审核配置。发送结果不确定时先核验。</p></div></div>
+      <div id="automatic-delivery-status" role="status" aria-live="polite"></div>
+      <div class="actions"><button id="automatic-pause" class="danger">暂停自动发送</button><button id="automatic-resume" class="secondary">恢复自动发送</button></div>
+      <div id="automatic-delivery-tasks"></div>
+    </section>
     <section class="card simulation-controls">
       <div class="section-title"><span class="step">01</span><div><h2>提交完整样题</h2><p>已核实的原文：He returned home to look after his mother. 第 12 题含完整 A–D 选项。</p></div></div>
       <div class="actions"><button data-action="new_alice">Alice 提交第 12 题</button><button data-action="new_bob" class="secondary">Bob 提交同一题</button><button data-action="dispatch_ack" class="secondary">模拟发送一条确认收到</button></div>

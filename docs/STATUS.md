@@ -222,6 +222,30 @@
 
 ANSWER仍为干净提交`57159d7a8b03a0743225ed27f3f1e6128bbcd45d`，主客观题分支缺少`gaokao-english/scripts/check_lesson.py`，未借用备份目录同名脚本。原8767配置、数据库和绩效台账未修改。真实持续采集生产者、工作台网页回调及当前固定ANSWER的真实教学仍未贯通；页面缺失已在多次有界读取中重复出现，不能用历史快照或模拟动作代替接通。
 
+## 收到与答案任务分离、自动发送及重试（2026-10-02）
+
+基线为`89b51f315e6098e5d51e203e3b6cb2a6c33d18ec`。遵循既有STATUS，不重做采集、归属、网页、数据库或绩效架构。新增`delivery_tasks.py`中的AckTask/AnswerTask视图，分别消费既有ACK及ANSWER/CORRECTION Outbox；不建第二份完成台账。ACK只核验原消息、绑定、身份和原始时间，不等待题面确认或教学依赖。次数、到期时间和结果沿用现有审计表，跨重启保留，收到优先于到期答案。旧`collector_answer_tasks`保留兼容准入记录，发送权威仍为Outbox。
+
+`automatic_delivery_runtime.py`接入工作台的已有后台循环；答疑生成不在该发送循环内。默认启动保留Worker边界；显式提供本机自动配置才选用现有Windows-MCP发送入口，不能同时开启两种桌面发送边界。`demo_server.py`沿用本机Origin/CSRF保护，新增独立任务查看与pause/resume/approve/inspect；本机界面展示群、学生、完整原文稿、尝试和到期时间。启动时保留现有AUTO/MANUAL/DISABLED及审核开关，不因题面队列启用而改写自动发送策略。旧运行服务不被静默升级。
+
+`mcp_group_delivery.py`是当前Windows-MCP连接内的受控文字交付，必须使用本人已核验的本地群/学生白名单及控件证据。每轮重新核验原绑定、当前前台WXWork窗口、显示器区域、真正的标题栏容器、唯一编辑器和本人消息容器；不自动切群/激活其他窗口。完整原文输入后用新剪贴板标记、精确复制和发送前快照检查，一次按发送键。仅新出现的本人消息可确认，旧ACK、学生同文、聊天正文冒充标题、旧剪贴板均不能代替回执。私有尝试证据绑定Outbox、正文哈希和审核配置，不伪造平台消息ID或已读。
+
+`workflow.py`仅把UI操作移出业务数据库写事务，保留SENDING提交、阶段/版本复核和实际核验。确认文字交付后复用已有计量归并；未核验、模拟、练习和ACK不计完成。原群、学生和SOURCE_MESSAGE任务从已有记录取得，不能将OPERATOR_TEST等练习提升为正式外发。确认或显式只读核验均回到原Outbox；未找到共享计量关系仍待核对，不数消息。
+
+重试仅接受可证明未输入/未提交的临时预检失败或桌面锁忙，默认最多3次，间隔5/10秒，可在简单JSON中有界配置。永久身份错误、旧题、验证码、草稿残留和未知发送不盲目重发。重启遗留的自动SENDING转SEND_UNKNOWN，阻止后续自动操作并等待原记录核验；未结束的MCP调用暂停并禁止另开连接。数据库空闲时消息可继续入库，匿名等待生成用例确认后续ACK独立发送。没有数据库迁移、源消息时间改写、附件删除或正式报表修改。
+
+新增测试为`test_delivery_tasks.py`、`test_mcp_group_delivery.py`、`test_automatic_delivery_workbench.py`，并补充已有启动测试。首轮原生协议用例中8项失败来自匿名窗口高度把编辑点放在下边界；修正fixture几何后保留越界断言。随后移动测试的模拟动作发生在已生成快照之后且未移动窗口元数据，补齐真实窗口移动模拟；共享来源fixture另有旧ACK待发送，接入真实来源校验并先核验该ACK，保留收到优先断言。界面测试关闭HTTP监听时调用顺序不正确导致线程异常，改为先shutdown再server_close；浏览器取消只读刷新连接按正常断连处理。均未删掉关键断言或把失败计通过。
+
+新增发送/原生/HTTP/启动模块相关40项通过（23.803秒），交付登记、题面及界面相邻98项通过（38.568秒）；追加锁忙耗尽状态用例后相关60项通过（25.715秒）。这些均为匿名SQLite、Mock原生协议、本地HTTP/PowerShell与无界面浏览器，没有真实企业微信输入/发送、DeepSeek上传/提交、付费Provider调用或正式日报提交。
+
+最终命令`python -X utf8 -B -m tools.verify_project --output artifacts/verification/20261002-ack-answer-automatic-final`：1117项、1114通过、0失败、3跳过，225.857秒，过程与有效退出码均0；测试期间源码未变化，快照`sha256:2c9e7c18d07f3178cda464b33cf853c618ae8859ca1e1ba09adf2efa18a09f20`。3项跳过为未提供官方SDK文件及两项符号链接创建不可用，不计通过。等级为离线/Mock集成，不用全量通过替代本批真实外发验收。
+
+ANSWER仍为干净固定提交`57159d7a8b03a0743225ed27f3f1e6128bbcd45d`，客观题必需`gaokao-english/scripts/check_lesson.py`仍缺失。本机原8767服务和配置未操作；发送配置示例明确禁用、控件未核验。新发送入口为已核验的前台单群文字交付能力，不证明持续收题、跨群导航、媒体发送或网页执行回调已贯通，当前没有真实自动新题全流程验收。
+
+用户另要求subagent提炼先前DeepSeek交互，并进一步限定为指定置顶会话中本人实际发出的prompt，排除系统流程和DeepSeek回答。`gpt-6.1-sol / low`只读复核后撤回最初系统标准，仅检索可能的导出文件名，未读其他私有正文；业务模板和答案原文文件不作为个人prompt样本。README只记录本人已确认的三种用法（复制原话、点明题目、发图片）及样本缺口，不编造原句、不修改教学Skills或新增进度文件。
+
+随后仅由`gpt-6-luna / medium`有界只读定位屏幕2，未并发操作同一桌面/Profile/数据库。本次DisplayInventory与DesktopStatus成功，实际仅有显示器索引0（DISPLAY9，2560×1600），remote=false；限定`display=[1]`的唯一一次Snapshot明确失败：`Invalid display index 1. Available displays: 0.`。未读取其他屏幕、页面/窗口正文或USER prompt；没有上传、输入、发送或生成prompt样本文件。MCP PID82740正常退出，主Agent已独立确认进程不存在。此前屏幕2的可用证据不代替当前显示器范围。用户随后明确允许只读当前唯一屏幕，同一Luna subagent重新核验并读取`display=[0]`：DeepSeek页面标记可见，但未核验所指置顶会话；未提取、保存或归纳USER prompt。MCP PID91968正常退出，主Agent已独立确认不存在。继续限定只读定位；该授权不改变真实发送配置或允许外发。
+
 ## 已可使用
 
 - 一个 PowerShell 入口启动本地工作台，缺可选采集配置或讲解目录仍能查看台账；复用服务不会自动恢复暂停。

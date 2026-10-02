@@ -166,7 +166,43 @@ document.getElementById("native-refresh").addEventListener("click",async()=>{
   }
  }catch(error){target.textContent=error.message||"读取原文失败";}
 });
+async function deliveryControl(action, outboxId){
+ const payload={action};if(outboxId)payload.outbox_id=outboxId;
+ const response=await fetch('/api/delivery/control',{method:'POST',headers:{'Content-Type':'application/json',Origin:location.origin,'X-CSRF-Token':csrfToken},body:JSON.stringify(payload)});
+ const result=await response.json();
+ if(!response.ok)throw Error(result.error||'发送任务处理失败');
+ await refresh();
+}
+function renderAutomaticDelivery(data){
+ const panel=document.getElementById('automatic-delivery-panel');panel.hidden=data?.enabled!==true;
+ if(panel.hidden)return;
+ const status=document.getElementById('automatic-delivery-status');
+ status.textContent=`${data.simulation?'模拟发送循环':data.paused?'自动发送已暂停':'自动发送循环已配置'} · 收到 ${(data.ack_tasks||[]).length} · 答案 ${(data.answer_tasks||[]).length} · 真实核验交付 ${data.real_confirmed_tasks||0}`;
+ if(data.error_type)status.textContent+=' · 本机连接需核验';
+ if(data.native_call_pending||data.last_result?.state==='NEEDS_ATTENTION')status.textContent+=' · 发送结果需人工核验，自动发送已停下';
+ const run=(action,id)=>deliveryControl(action,id).catch(error=>{status.textContent=error.message;});
+ document.getElementById('automatic-pause').onclick=()=>run('pause');
+ document.getElementById('automatic-resume').onclick=()=>run('resume');
+ const target=document.getElementById('automatic-delivery-tasks');target.replaceChildren();
+ const names={PENDING:'待发送',SENDING:'正在发送',SENT_UI_CONFIRMED:'界面已核验',SEND_UNKNOWN:'需核验发送结果',FAILED:'失败，查看原因',STALE:'题目已变化',CANCELLED:'已取消'};
+ for(const task of [...(data.ack_tasks||[]),...(data.answer_tasks||[])]){
+  const item=el('details','entry');
+  item.append(el('summary','',`${task.group_name||''} · ${task.student_name||''} · ${task.kind==='ACK'?'收到':'答案'} · ${names[task.state]||task.state} · ${task.delivery_mode} · 尝试 ${task.attempts}`));
+  item.append(el('pre','native-text',task.content||''));
+  if(task.simulated)item.append(el('p','','模拟记录，不向真实群发送或计绩效。'));
+  if(task.next_attempt_at)item.append(el('p','','下次尝试：'+display(task.next_attempt_at,'created_at')));
+  if(task.last_error)item.append(el('p','','处理原因：'+task.last_error));
+  if(data.answer_review_required&&task.kind==='ANSWER'&&task.state==='PENDING'&&task.review_status!=='APPROVED'){
+   const approve=el('button','secondary','核对讲解后批准');approve.type='button';approve.onclick=()=>run('approve',task.task_id);item.append(approve);
+  }
+  if(task.state==='SEND_UNKNOWN'){
+   const inspect=el('button','secondary','只读核验发送结果');inspect.type='button';inspect.onclick=()=>run('inspect',task.task_id);item.append(inspect);
+  }
+  target.append(item);
+ }
+}
 function configureMode(data){
+ renderAutomaticDelivery(data.automatic_delivery);
  answerReviewRequired=data.dashboard?.health?.answer_review_required!==false;
  questionAutoContinue=data.question_auto_continue===true;
  sourceReviewEnabled=data.source_review_enabled===true;
