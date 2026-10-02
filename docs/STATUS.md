@@ -10,7 +10,7 @@
 |---|---|---|
 | 1. ANSWER 冻结 | `answer_teaching.py`、`teaching_routes.py`、`lesson_checks.py`；`test_answer_teaching`、`test_teaching_bundle`、`test_lesson_checks` | b04 原文和依赖已实际核验；阅读/完形四选项受检包已接原脚本 SOURCE/DRAFT 检查，其他题型仍只有预览/人工流程；真实教学未验收 |
 | 2. 消息身份/时间边界 | `native_message_source.py`、`collector_storage.py`、`collector_dispatch.py`；`test_native_message_source`、`test_collector_integration` | 文件由本机受控复制/人工准备，现有增量导入不是持续监听；生产者运行、停止检测和端到端最大延迟尚无真实证明 |
-| 3. Ack 时效 | `delivery_tasks.py`、`automatic_delivery_runtime.py`；`test_delivery_tasks`、`test_ack_before_generation` | 发送层 Ack/Answer 已分离并持久化；采集后详细队列接线仍需补。`workflow.dashboard`时延仍用created_at，必须改为有证据的source_sent_at，现值不能证明原提问起算15分钟；真实端到端未验收 |
+| 3. Ack 时效 | `delivery_tasks.py`、`automatic_delivery_runtime.py`、`message_sla.py`；`test_delivery_tasks`、`test_ack_before_generation`、`test_message_sla` | 发送层 Ack/Answer 已分离并持久化；采集后详细队列接线仍需补。状态接口已按有证据的source_sent_at及完整真实回执计时，包含采集等待，迟到成功仍标超时；匿名边界通过，真实端到端15分钟未验收 |
 | 4. 检索备用 | `reference_lookup.py`、`reference_fetch.py`；`test_reference_lookup`、`test_reference_fetch` | 本批补有界备用调度；生产默认仅 Brave，实际备用 Provider 和来源准入仍未验证 |
 | 5. Top2 | `reference_lookup.top_candidates`；`test_reference_lookup` | 本批确定性最多两项、同内容去重和真实候选 ID 通过 Mock；尚未交到真实 DeepSeek |
 | 6. 两次 DeepSeek | `question_matching.py`、`mcp_preparation.py`、`mcp_generation.py`；`test_question_matching` | 已接现有准备/生成入口：学生原图+Top2核验→程序检查→ANSWER上传→教学。仅 Mock 通过；真实网页、生产队列执行回调未验收，旧练习不算新版验收 |
@@ -74,6 +74,16 @@
 最终回归命令：`python -X utf8 -B -m tools.verify_project --output artifacts/verification/20261003-ordered-delivery-final-v2`。1189项、1186通过、0失败、3跳过，302.975秒，退出码0，源码运行期间未变化。快照 `sha256:b21859e6a0275369f8fe1c965e1b29827641d35f2bbd56c51819ca93aef0401e`；原始日志与evidence.json复核有效、未过期，等级 **MOCK_INTEGRATION_VERIFIED**。3项SKIPPED仍为未提供官方SDK文件、教学符号链接无法创建、浏览器Profile符号链接无法创建，均不算通过。没有新真实账号、网页、群发送、付费调用或日报提交样本。
 
 当前仍为 **NOT_READY**：持续收题生产者、原始发送时间起算的SLA展示与真实15分钟Ack、真实两次DeepSeek、普通追问复用、实际成本及A–H试运行仍缺。Edge官方浏览器扩展可用于Codex真实网页联调，当前会话未接通，Python独立调用未验证；不把扩展作为新的启动依赖。
+
+### 后续实施：按学生原始发送时间显示应答时延（2026-10-03）
+
+从`b151f81a39703810441327d6d283a87aa96c13ff`继续，`message_sla.py`只读取原messages/Outbox/delivery_checks，不增加表或改写消息。`workflow.dashboard`不再以created_at计时；原时间必须有来源、定位与证据，原时间缺失、冲突、时序矛盾保持待核验。按明确时区计算采集等待和实际交付时长，收到15分钟边界包含等号，已迟到成功仍保留超时事实。模拟回执、错误绑定、未核验或缺时间回执都不建立真实SLA结果；手工多部分和自动分段沿用既有完整性校验，少一段不算完整答疑。
+
+原状态接口把详细答疑的固定3600秒当成超时线，但没有相应已确认政策配置。本批保留实际答疑时长，`answer_overdue`与门槛保持未判定，正式绩效时效继续使用原确认规则，不另造考核。首次专项21项中20通过、1失败：复用的匿名夜间fixture将提问改成23:10，却留下23:05采集时间。仅在新SLA测试的临时库中提供明确合成的23:11采集时间，保留矛盾时序拒绝测试；未修改真实消息来制造边界结果。随后57项相邻回归全部通过，12.668秒；补充自动分段证据缺失检查后的最终结果见后续记录。
+
+本批仍无真实桌面、DeepSeek请求、群发送或正式日报提交。ANSWER版本未改，生产入口未部署。Edge官方浏览器扩展支持文档已核对，可以作为网页联调入口候选；未验证本会话连接与Python独立调用，不增启动依赖。原始时间起算已补；连续生产者、普通追问复用、真实网页/发送、实际成本与稳定试运行仍缺，结论保持 **NOT_READY**。
+
+最终专项命令：`python -X utf8 -B -m unittest tests.test_message_sla tests.test_manual_delivery_workbench tests.test_workflow tests.test_delivery_batches`，58项全部通过，13.330秒，0失败、0跳过。其中13项为新的时延测试，覆盖原发送与采集差值、15分钟含边界、跨时区、迟到成功、时间缺失/冲突/倒置、模拟与未知回执、人工部分交付及自动完整分段缺证据；其余复用原工作台HTTP/无界面浏览器和发送回归。均为UNIT/MOCK，不是REAL。此次没有重跑全量；上一批全量快照不能替代本批源码的验证。
 
 ## 本轮审计与最小改动
 

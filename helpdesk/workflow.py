@@ -3,7 +3,6 @@
 No model gets a send tool. The transport receives an immutable destination resolved
 from the message's binding, after version and approval checks under a desktop lock.
 """
-from datetime import datetime, timezone
 from hashlib import sha256
 import json
 from pathlib import Path
@@ -888,24 +887,7 @@ class Workflow:
         policy, stage_name = self._delivery_policy_config()
         health["delivery_policy"] = policy
         health["delivery_stage_name"] = stage_name
-        utc = datetime.now(timezone.utc)
-        metrics = []
-        for m in self.db.all("SELECT id,created_at FROM messages WHERE intent!='IRRELEVANT'"):
-            ack = self.db.one("SELECT sent_at FROM outbox WHERE message_id=? AND purpose='ACK' AND state='SENT_UI_CONFIRMED'", (m["id"],))
-            answer = self.db.one("SELECT sent_at FROM outbox WHERE message_id=? AND purpose IN ('ANSWER','CORRECTION') AND state='SENT_UI_CONFIRMED' ORDER BY sent_at LIMIT 1", (m["id"],))
-            created = datetime.fromisoformat(m["created_at"])
-            age = (utc - created).total_seconds()
-            def elapsed(receipt):
-                if not receipt or not receipt[0]:
-                    return None
-                try:
-                    seconds = (datetime.fromisoformat(receipt[0]) - created).total_seconds()
-                    return seconds if seconds >= 0 else None
-                except (ValueError, TypeError):
-                    return None
-            metrics.append({"message_id": m["id"], "ack_seconds": elapsed(ack),
-                            "answer_seconds": elapsed(answer),
-                            "ack_overdue": not ack and age > 900, "answer_overdue": not answer and age > 3600})
-        health["sla"] = metrics
+        from .message_sla import message_sla
+        health["sla"] = message_sla(self.db)
         return {"simulation": True, "health": health, "outbox_by_state": health["outbox_by_state"], **{table: [dict(r) for r in self.db.all(f"SELECT * FROM {table} ORDER BY rowid DESC LIMIT 250")]
                                     for table in ("messages", "questions", "answers", "outbox", "reviews", "runs", "human_tasks", "bindings")}}
