@@ -24,6 +24,8 @@
 
 原生文字导入的配置示例是 [config/collector.windows-native.example.toml](config/collector.windows-native.example.toml)。按本机实际目录、身份与阶段填写后，保存为 `data/private/windows-native-demo/collector.local.toml`，或通过 `-CollectorConfig` 指定配置。这个适配器导入已保存的 Windows-MCP 原文，**不会自行监听客户端、推断学生时间或发送“收到”**。
 
+GUI观察适配器要求提供者给出群内可持续定位的消息位置，不能使用屏幕坐标或当前可见行号。重启及重叠观察复用消息身份，保留首次原文和证据；内容、发送人、原始时间或归属变化仍停下核对。位置缺失的记录保留为未核验材料，不自动应答。此适配器尚未接入真实持续观察提供者，不把文件导入或匿名测试当作实时收题。
+
 原消息题面入口使用配置中的 `[stage] source_review_manifest` 指向审核通过的本地教学包。新的教学来源仅使用 [ANSWER](https://github.com/rockpunkgod/ANSWER.git)；仓库不包含私人课程材料、登录状态或模型密钥。实际网页、模型或 Windows-MCP 操作才需要相应工具和登录，不是打开台账的依赖。
 
 Windows-MCP 已装在其他工作目录时，可在启动本项目的 PowerShell 中指定现有环境，不需要复制或重新安装：

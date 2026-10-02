@@ -165,7 +165,14 @@ CREATE TABLE IF NOT EXISTS live_activation (
                 if existing:
                     # Never overwrite the original if a stable ID reappears with changed content.
                     immutable = ("source_type", "source_message_id", "room_id", "sender_id", "message_type", "raw_content", "raw_payload", "sent_at_raw", "media_id", "reply_to_message_id", "quoted_message_id")
-                    if any(existing[k] != fields[k] for k in immutable):
+                    changed = {k for k in immutable if existing[k] != fields[k]}
+                    if (changed == {"raw_payload"} and message.source_type == "windows_gui"
+                            and message.source_message_id is None):
+                        from .gui_message_source import same_message_payload
+                        if same_message_payload(existing["raw_payload"], fields["raw_payload"],
+                                message_id=message.message_id, room_id=message.room_id):
+                            changed.clear()
+                    if changed:
                         conflicts += 1
                         db.execute("INSERT INTO message_conflicts VALUES(?,?,?,?,?)", (str(uuid4()), existing["message_id"], "stable_id_payload_conflict", json.dumps(fields, ensure_ascii=False), utc_now()))
                         db.execute("UPDATE events SET auto_reply_allowed=0,last_error='stable_id_payload_conflict: review required' WHERE message_id=? AND processed_at IS NULL", (existing["message_id"],))

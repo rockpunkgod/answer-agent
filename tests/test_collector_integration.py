@@ -165,6 +165,126 @@ class CollectorIntegrationTests(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             source.fetch_page(None, SyncMode.LIVE, 1000)
 
+    def gui_observation(self, *, position="row-1", text="老师，这题为什么选B？", **changes):
+        item = dict(sender_id="student", sender_identity_verified=True,
+            consecutive_header_verified=True, position=position, text=text,
+            sent_at="2026-10-02T10:00:00+08:00", full_time_verified=True, **changes)
+        return dict(provenance="official_windows_mcp", room_id="room", room_name="Anonymous English",
+            foreground=True, desktop_unlocked=True, position_continuity=True,
+            last_position="page-1", evidence={"capture": "anonymous-frame-1"}, messages=[item])
+
+    def test_gui_overlapping_observation_after_restart_queues_one_ack_per_message(self):
+        observation = self.gui_observation()
+        source = GUIMessageSource(lambda **kwargs: observation, expected_room_id="room")
+        first = source.fetch_page(None, SyncMode.LIVE, 10)
+        self.collector.persist_batch(source.source_name, SyncMode.LIVE, first, None)
+        dispatcher = CollectorDispatcher(self.collector, self.business, processing_mode="ACK_ONLY")
+        dispatcher.drain()
+        observation.update(last_position="page-2", evidence={"capture": "anonymous-frame-2"},
+            messages=[dict(observation["messages"][0]),
+                      self.gui_observation(position="row-2", text="老师，第32题为什么选C？")["messages"][0]])
+        restarted = GUIMessageSource(lambda **kwargs: observation, expected_room_id="room")
+        second = restarted.fetch_page(first.next_cursor, SyncMode.LIVE, 10)
+        result = self.collector.persist_batch(source.source_name, SyncMode.LIVE, second, first.next_cursor)
+        dispatcher.drain()
+        self.assertEqual((len(result.inserted_ids), result.duplicate_count, result.conflict_count), (1, 1, 0))
+        with self.collector.connect() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM messages").fetchone()[0], 2)
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM events").fetchone()[0], 2)
+        self.assertEqual(self.business.one("SELECT COUNT(*) FROM collector_answer_tasks")[0], 2)
+        self.assertEqual(self.business.one("SELECT COUNT(*) FROM outbox WHERE purpose='ACK'")[0], 2)
+        stored = self.collector.get_message(first.messages[0].message_id)
+        self.assertEqual(json.loads(stored["raw_payload"])["observation"], {"capture": "anonymous-frame-1"})
+        self.assertEqual(stored["sent_at_local"], "2026-10-02T10:00:00+08:00")
+        self.assertIsNone(stored["source_message_id"])
+        self.assertEqual(self.business.one("SELECT COUNT(*) FROM performance_units")[0], 0)
+
+    def test_gui_same_logical_position_with_changed_message_retains_original_and_blocks_ack(self):
+        observation = self.gui_observation()
+        source = GUIMessageSource(lambda **kwargs: observation, expected_room_id="room")
+        first = source.fetch_page(None, SyncMode.LIVE, 10)
+        self.collector.persist_batch(source.source_name, SyncMode.LIVE, first, None)
+        original = dict(observation["messages"][0])
+        cursor = first.next_cursor
+        for index, changed in enumerate(({"text": "老师，题干更正了，为什么选D？"},
+                {"sender_id": "another-student"}, {"sent_at": "2026-10-02T23:10:00+08:00"},
+                {"sender_role": "teacher"}, {"context": "different referenced question"},
+                {"full_time_verified": 1})):
+            with self.subTest(changed=changed):
+                observation.update(last_position=f"changed-{index}",
+                    evidence={"capture": f"anonymous-changed-{index}"}, messages=[original | changed])
+                batch = source.fetch_page(cursor, SyncMode.LIVE, 10)
+                result = self.collector.persist_batch(source.source_name, SyncMode.LIVE, batch, cursor)
+                cursor = batch.next_cursor
+                self.assertEqual((len(result.inserted_ids), result.duplicate_count, result.conflict_count), (0, 1, 1))
+        stored = self.collector.get_message(first.messages[0].message_id)
+        self.assertEqual((stored["raw_content"], stored["sender_id"], stored["sent_at_local"]),
+            (original["text"], "student", original["sent_at"]))
+        CollectorDispatcher(self.collector, self.business, processing_mode="ACK_ONLY").drain()
+        self.assertEqual(self.business.one("SELECT COUNT(*) FROM outbox")[0], 0)
+        self.assertEqual(self.business.one("SELECT COUNT(*) FROM performance_units")[0], 0)
+
+    def test_gui_observation_exception_does_not_apply_to_arbitrary_message_id(self):
+        observation = self.gui_observation()
+        source = GUIMessageSource(lambda **kw: observation, expected_room_id="room")
+        first = source.fetch_page(None, SyncMode.LIVE, 10)
+        first = MessageBatch((replace(first.messages[0], message_id="legacy-unverified-id"),), first.next_cursor)
+        self.collector.persist_batch(source.source_name, SyncMode.LIVE, first, None)
+        observation.update(last_position="page-2", evidence={"capture": "anonymous-frame-2"})
+        second = source.fetch_page("page-1", SyncMode.LIVE, 10)
+        second = MessageBatch((replace(second.messages[0], message_id="legacy-unverified-id"),), second.next_cursor)
+        result = self.collector.persist_batch(source.source_name, SyncMode.LIVE, second, "page-1")
+        self.assertEqual((len(result.inserted_ids), result.duplicate_count, result.conflict_count), (0, 1, 1))
+
+    def test_gui_unlocated_messages_remain_separate_unverified_evidence(self):
+        observation = self.gui_observation(position=None)
+        observation["messages"].append(dict(observation["messages"][0]))
+        source = GUIMessageSource(lambda **kw: observation, expected_room_id="room")
+        batch = source.fetch_page(None, SyncMode.LIVE, 10)
+        result = self.collector.persist_batch(source.source_name, SyncMode.LIVE, batch, None)
+        self.assertEqual((len(result.inserted_ids), result.duplicate_count), (2, 0))
+        self.assertTrue(all(message.source_confidence == "low" for message in batch.messages))
+        CollectorDispatcher(self.collector, self.business, processing_mode="ACK_ONLY").drain()
+        self.assertEqual(self.business.one("SELECT COUNT(*) FROM outbox")[0], 0)
+
+    def test_gui_identical_text_in_distinct_positions_or_groups_is_not_collapsed(self):
+        observation = self.gui_observation()
+        observation["messages"].append(dict(observation["messages"][0], position="row-2", sender_id="second"))
+        first = GUIMessageSource(lambda **kw: observation, expected_room_id="room").fetch_page(None, SyncMode.LIVE, 10)
+        self.collector.persist_batch("windows_gui", SyncMode.LIVE, first, None)
+        observation.update(room_id="other-room", last_position="page-2")
+        second = GUIMessageSource(lambda **kw: observation, expected_room_id="other-room").fetch_page("page-1", SyncMode.LIVE, 10)
+        result = self.collector.persist_batch("windows_gui", SyncMode.LIVE, second, "page-1")
+        self.assertEqual((len(result.inserted_ids), result.duplicate_count, result.conflict_count), (2, 0, 0))
+        with self.collector.connect() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM messages").fetchone()[0], 4)
+
+    def test_gui_duplicate_logical_positions_in_one_batch_stop_before_commit(self):
+        observation = self.gui_observation()
+        observation["messages"].append(dict(observation["messages"][0], sender_id="second"))
+        source = GUIMessageSource(lambda **kw: observation, expected_room_id="room")
+        with self.assertRaisesRegex(ValueError, "position"):
+            SyncEngine(self.collector, source).sync()
+        self.assertIsNone(self.collector.get_sync_state(source.source_name)["cursor"])
+        with self.collector.connect() as db:
+            self.assertEqual(db.execute("SELECT COUNT(*) FROM messages").fetchone()[0], 0)
+
+    def test_gui_missing_original_time_stays_unverified_after_reobservation(self):
+        observation = self.gui_observation()
+        observation["messages"][0].update(sent_at=None, display_time="23:03", full_time_verified=False)
+        source = GUIMessageSource(lambda **kw: observation, expected_room_id="room")
+        first = source.fetch_page(None, SyncMode.LIVE, 10)
+        self.collector.persist_batch(source.source_name, SyncMode.LIVE, first, None)
+        observation.update(last_position="page-2", evidence={"capture": "anonymous-frame-2"})
+        second = source.fetch_page("page-1", SyncMode.LIVE, 10)
+        result = self.collector.persist_batch(source.source_name, SyncMode.LIVE, second, "page-1")
+        self.assertEqual((len(result.inserted_ids), result.duplicate_count, result.conflict_count), (0, 1, 0))
+        stored = self.collector.get_message(first.messages[0].message_id)
+        self.assertIsNone(stored["sent_at_utc"])
+        self.assertEqual(stored["time_confidence"], "low")
+        CollectorDispatcher(self.collector, self.business, processing_mode="ACK_ONLY").drain()
+        self.assertEqual(self.business.one("SELECT COUNT(*) FROM outbox")[0], 0)
+
     def test_gui_teacher_and_self_messages_never_queue_received(self):
         dispatcher = CollectorDispatcher(self.collector, self.business, processing_mode="ACK_ONLY")
         for index, (metadata, reason) in enumerate((
