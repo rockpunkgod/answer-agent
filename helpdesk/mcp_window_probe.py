@@ -84,18 +84,25 @@ try {
 '''
 
 
-def screen2_caption_command(loc, *, target_process='msedge'):
+def _display_device(display_device):
+    if not isinstance(display_device, str) or not re.fullmatch(r'\\\\\.\\DISPLAY[1-9]\d{0,2}', display_device):
+        raise ValueError('INVALID_DISPLAY_DEVICE')
+    return display_device
+
+
+def screen2_caption_command(loc, *, target_process='msedge', display_device=r'\\.\DISPLAY2'):
+    _display_device(display_device)
     if target_process not in ('msedge', 'WXWork'):
         raise ValueError('INVALID_SCREEN2_APP')
     if (not isinstance(loc, list) or len(loc) != 2
             or any(type(value) is not int or not -32768 <= value <= 32767 for value in loc)):
         raise ValueError('INVALID_SCREEN2_POINT')
     return (_SCREEN2_CAPTION_COMMAND.replace('__X__', str(loc[0])).replace('__Y__', str(loc[1]))
-            .replace('__PROCESS__', target_process))
+            .replace('__PROCESS__', target_process).replace(r'\\.\DISPLAY2', display_device))
 
 
-def parse_screen2_caption(record, loc, *, target_process='msedge'):
-    screen2_caption_command(loc, target_process=target_process)
+def parse_screen2_caption(record, loc, *, target_process='msedge', display_device=r'\\.\DISPLAY2'):
+    screen2_caption_command(loc, target_process=target_process, display_device=display_device)
     if (record.get('tool') != 'PowerShell' or record.get('is_error') is not False
             or len(record.get('content', [])) != 1):
         raise ValueError('SCREEN2_PROBE_UNCONFIRMED')
@@ -109,7 +116,7 @@ def parse_screen2_caption(record, loc, *, target_process='msedge'):
                 'screen_bottom', 'window_left', 'window_top', 'window_right', 'window_bottom'}
     if (not isinstance(value, dict) or set(value) != integers | {'device', 'process'}
             or any(type(value[key]) is not int for key in integers)
-            or value['device'] != r'\\.\DISPLAY2' or value['process'] != target_process
+            or value['device'] != display_device or value['process'] != target_process
             or value['handle'] <= 0 or value['hit_test'] != 2 or [value['x'], value['y']] != loc):
         raise ValueError('SCREEN2_TARGET_UNCONFIRMED')
     for prefix in ('screen', 'window'):
@@ -197,8 +204,7 @@ WECOM_SCREEN2_CAPTION_COMMAND = _WECOM_SCREEN2_WINDOW_QUERY + r'''
 
 def wecom_window_command(display_device=r'\\.\DISPLAY2'):
     """Fixed native reads on one explicitly configured Windows display."""
-    if not isinstance(display_device, str) or not re.fullmatch(r'\\\\\.\\DISPLAY[1-9]\d{0,2}', display_device):
-        raise ValueError('INVALID_DISPLAY_DEVICE')
+    _display_device(display_device)
     return WECOM_SCREEN2_WINDOW_COMMAND.replace(r'\\.\DISPLAY2', display_device)
 
 

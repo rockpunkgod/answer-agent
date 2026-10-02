@@ -127,6 +127,52 @@ class Screen2ActivationTests(unittest.TestCase):
         self.assertFalse(attempts[0]['automatic_retry_allowed'])
         self.assertEqual(output[-1]['content'], [])
 
+    def edge_on_primary(self):
+        request = {'tool': 'ActivateEdgeOnDisplay', 'arguments': {
+            'loc': [900, 150], 'display_device': r'\\.\DISPLAY1'}}
+        target = caption_result(device=r'\\.\DISPLAY1', x=900, y=150,
+            screen_top=0, screen_bottom=1600, window_top=100, window_bottom=1140)
+        after = foreground_result(process='msedge', left=0, top=100, width=1200, height=1040)
+        return request, target, after
+
+    def test_edge_current_display_checks_native_caption_then_same_window(self):
+        request, target, after = self.edge_on_primary()
+        calls, attempts, output = self.exercise(request, caption=target, after=after)
+        self.assertEqual([tool for tool, _ in calls], ['PowerShell', 'PowerShell', 'Click', 'PowerShell'])
+        self.assertEqual(calls[1][1]['command'], screen2_caption_command(
+            [900, 150], display_device=r'\\.\DISPLAY1'))
+        self.assertEqual(calls[2][1], {'loc': [900, 150], 'button': 'left', 'clicks': 1})
+        self.assertEqual(attempts[0]['screen2_activation_preflight']['display_device'], r'\\.\DISPLAY1')
+        self.assertEqual(attempts[0]['status'], 'TOOL_RETURNED')
+        self.assertEqual(output[-1]['tool'], 'ActivateEdgeOnDisplay')
+        self.assertNotIn('INPUT_ECHO', json.dumps(output))
+
+    def test_edge_current_display_blocks_wrong_device_application_and_non_caption(self):
+        request, target, after = self.edge_on_primary()
+        for changes in ({'display_device': "\\\\.\\DISPLAY1'; Get-Clipboard #"},
+                {'display_device': None}, {'loc': [True, 150]}, {'target_process': 'WXWork'}):
+            with self.subTest(changes=changes):
+                calls, attempts, _ = self.exercise(request | {'arguments': request['arguments'] | changes})
+                self.assertEqual(calls, [])
+                self.assertEqual(attempts, [])
+        raw = json.loads(target['content'][0]['text'][len('Response: '):].rsplit('\nStatus Code:', 1)[0])
+        for changes in ({'process': 'ChatGPT'}, {'device': r'\\.\DISPLAY2'}, {'hit_test': 1}, {'x': 899}):
+            with self.subTest(changes=changes):
+                calls, attempts, _ = self.exercise(request, caption=caption_result(**(raw | changes)), after=after)
+                self.assertNotIn('Click', [tool for tool, _ in calls])
+                self.assertEqual(attempts[0]['status'], 'INPUT_BLOCKED_BY_SCREEN2_GUARD')
+
+    def test_edge_current_display_unknown_click_or_moved_window_never_replays(self):
+        request, target, after = self.edge_on_primary()
+        for failure, postflight in ((TimeoutError('private error'), after),
+                (None, foreground_result(process='msedge', left=1, top=100, width=1200, height=1040)),
+                (None, foreground_result(process='msedge', handle=999, left=0, top=100, width=1200, height=1040))):
+            calls, attempts, output = self.exercise(request, caption=target, click=failure, after=postflight)
+            self.assertEqual(sum(tool == 'Click' for tool, _ in calls), 1)
+            self.assertNotEqual(attempts[0]['status'], 'TOOL_RETURNED')
+            self.assertFalse(attempts[0]['automatic_retry_allowed'])
+            self.assertNotIn('private error', json.dumps(output))
+
     def test_app_switch_uses_exact_cached_screen2_window_without_a_caption_click(self):
         calls, attempts, output = self.exercise({'tool': 'ActivateWeComOnScreen2ByApp', 'arguments': {}})
         self.assertEqual([tool for tool, _ in calls], ['PowerShell', 'Snapshot', 'PowerShell', 'App', 'PowerShell'])

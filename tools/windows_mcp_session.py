@@ -28,7 +28,9 @@ from helpdesk.mcp_transport import runtime_home
 
 ALLOWED = {"Screenshot", "Snapshot", "Click", "Type", "Scroll", "Move", "Shortcut", "Wait", "WaitFor", "DisplayInventory", "App", "Clipboard", "PowerShell"}
 SCREEN2_ACTIVATE = 'ActivateEdgeOnScreen2'  # Local entry; native operation is Click.
-SCREEN2_ACTIVATIONS = {SCREEN2_ACTIVATE: 'msedge', 'ActivateWeComOnScreen2': 'WXWork'}
+DISPLAY_EDGE_ACTIVATION = 'ActivateEdgeOnDisplay'
+SCREEN2_ACTIVATIONS = {SCREEN2_ACTIVATE: 'msedge', 'ActivateWeComOnScreen2': 'WXWork',
+                      DISPLAY_EDGE_ACTIVATION: 'msedge'}
 SCREEN2_APP_ACTIVATION = 'ActivateWeComOnScreen2ByApp'
 DISPLAY_APP_ACTIVATION = 'ActivateWeComOnDisplayByApp'
 
@@ -145,14 +147,17 @@ async def check_screen2_activation(client, loc, attempt, attempt_path, *, target
                             for item in snapshot.content]}
             preflight['snapshot_sha256'] = sha256(json.dumps(snapshot_record, ensure_ascii=False,
                 sort_keys=True).encode('utf-8')).hexdigest()
-        command = wecom_window_command(display_device) if by_app else screen2_caption_command(loc, target_process=target_process)
+        command = wecom_window_command(display_device) if by_app else screen2_caption_command(
+            loc, target_process=target_process, display_device=display_device)
         result = await client.call_tool('PowerShell', {'command': command, 'timeout': 10},
                                        timeout=15, raise_on_error=False)
         record = {'tool': 'PowerShell', 'is_error': result.is_error,
                   'content': [{'type': item.type, **({'text': item.text} if item.type == 'text' else {})}
                               for item in result.content]}
         preflight['probe_record'] = record
-        target = parse_wecom_window_location(record, display_device=display_device) if by_app else parse_screen2_caption(record, loc, target_process=target_process)
+        target = parse_wecom_window_location(record, display_device=display_device) if by_app else parse_screen2_caption(
+            record, loc, target_process=target_process, display_device=display_device)
+        preflight['display_device'] = display_device
         if by_app:
             verify_wecom_switch_snapshot(snapshot_record, target, display_index=display_index)
             preflight.update(display_index=display_index, display_device=display_device)
@@ -217,11 +222,15 @@ async def main():
                     display_index, display_device = arguments['display_index'], arguments['display_device']
                     wecom_window_command(display_device)  # Validate before recording or invoking any tool.
                 if name in SCREEN2_ACTIVATIONS:
+                    keys = {'loc', 'display_device'} if name == DISPLAY_EDGE_ACTIVATION else {'loc'}
                     if (set(request) != {'tool', 'arguments'} or not isinstance(request['arguments'], dict)
-                            or set(request['arguments']) != {'loc'}):
+                            or set(request['arguments']) != keys):
                         raise ValueError('INVALID_SCREEN2_ACTIVATION')
                     activation_loc = request['arguments']['loc']
-                    screen2_caption_command(activation_loc, target_process=SCREEN2_ACTIVATIONS[name])
+                    if name == DISPLAY_EDGE_ACTIVATION:
+                        display_device = request['arguments']['display_device']
+                    screen2_caption_command(activation_loc, target_process=SCREEN2_ACTIVATIONS[name],
+                                            display_device=display_device)
                 if name == "list":
                     tools = await client.list_tools()
                     print(json.dumps({"tools": [{"name": t.name, "schema": t.inputSchema} for t in tools]}), flush=True)
@@ -269,7 +278,7 @@ async def main():
                         postflight['observed'] = observed
                         if observed['process'] != target['process'] or observed['handle'] != target['handle']:
                             raise ValueError('ACTIVATION_TARGET_CHANGED')
-                        if by_app and (observed['left'] != target['window_left'] or observed['top'] != target['window_top']
+                        if (by_app or name == DISPLAY_EDGE_ACTIVATION) and (observed['left'] != target['window_left'] or observed['top'] != target['window_top']
                                 or observed['width'] != target['window_right'] - target['window_left']
                                 or observed['height'] != target['window_bottom'] - target['window_top']):
                             raise ValueError('ACTIVATION_WINDOW_MOVED')
