@@ -75,7 +75,7 @@ class AutomaticDelivery:
     def _guard(self, message):
         if self.pause_requested() or self.flow._stopped():
             raise ValueError('AUTOMATIC_DELIVERY_PAUSED')
-        row = self.store.one('SELECT * FROM outbox WHERE id=?', (message.outbox_id,))
+        row = self.store.one('SELECT * FROM outbox WHERE id=?', (message.batch_outbox_id or message.outbox_id,))
         if not row or row['state'] not in ('PENDING', 'SENDING'):
             raise ValueError('AUTOMATIC_DELIVERY_STATE_CHANGED')
         if self.flow._delivery_mode(row) != 'AUTO':
@@ -96,10 +96,12 @@ class AutomaticDelivery:
         self.flow._event(event, outbox=row['id'], run=row['run_id'], details=details)
 
     def _retry(self, row):
-        attempts = self.store.one("SELECT COUNT(*) FROM audit WHERE outbox_id=? AND event='TASK_SEND_STARTED'",
-                                  (row['id'],))[0]
-        latest = self.store.one("SELECT event,details FROM audit WHERE outbox_id=? AND event LIKE 'TASK_SEND_%' ORDER BY rowid DESC LIMIT 1",
-                                (row['id'],))
+        from .delivery_batches import attempt_part
+        part = attempt_part(self.store, row)
+        attempts = self.store.one("""SELECT COUNT(*) FROM audit WHERE outbox_id=? AND event='TASK_SEND_STARTED'
+            AND COALESCE(json_extract(details,'$.part_number'),1)=?""", (row['id'], part))[0]
+        latest = self.store.one("""SELECT event,details FROM audit WHERE outbox_id=? AND event LIKE 'TASK_SEND_%'
+            AND COALESCE(json_extract(details,'$.part_number'),1)=? ORDER BY rowid DESC LIMIT 1""", (row['id'], part))
         value = json.loads(latest['details']) if latest else {}
         return attempts, latest['event'] if latest else None, value
 
@@ -121,6 +123,12 @@ class AutomaticDelivery:
                     'simulated': bool(row['simulated'])}
             item.update(group_key=binding['group_key'] if binding else None,
                         student_name=binding['display_name'] if binding else None)
+            from .delivery_batches import progress
+            batch = progress(self.store, row)
+            if batch:
+                item['delivery_batch'] = {'total_parts': len(batch['plan']['parts']),
+                    'verified_parts': len(batch['verified']), 'current_part': batch['next_part'],
+                    'unknown_part': batch['unknown'], 'complete': batch['next_part'] is None}
             result['ack_tasks' if task.kind == 'ACK' else 'answer_tasks'].append(item)
         return result
 
@@ -175,23 +183,24 @@ class AutomaticDelivery:
                                                    'reason': 'AUTOMATIC_SENDER_INTERRUPTED'})
                     self._event(row, 'TASK_SEND_NEEDS_ATTENTION', {'reason': 'SEND_UNKNOWN', 'automatic_retry_allowed': False})
 
-    def _finish_attempt(self, row, attempt, state, *, retryable=False, reason=None):
+    def _finish_attempt(self, row, attempt, state, *, retryable=False, reason=None, part_number=1):
         with self.store.transaction():
             if retryable and attempt < self.policy.max_attempts:
                 seconds = min(self.policy.initial_retry_seconds * 2 ** (attempt - 1), self.policy.max_retry_seconds)
                 self._event(row, 'TASK_SEND_RETRY_SCHEDULED', {
-                    'attempt': attempt, 'reason': reason, 'submission_attempted': False,
+                    'attempt': attempt, 'part_number': part_number, 'reason': reason, 'submission_attempted': False,
                     'next_attempt_at': (self._clock() + timedelta(seconds=seconds)).isoformat()})
             else:
                 if retryable and state == 'PENDING':
                     state = 'FAILED'
                     self.store.execute("UPDATE outbox SET state='FAILED',last_error='AUTOMATIC_SEND_RETRIES_EXHAUSTED' WHERE id=?", (row['id'],))
-                event = 'TASK_SEND_CONFIRMED' if state == 'SENT_UI_CONFIRMED' else 'TASK_SEND_NEEDS_ATTENTION'
-                self._event(row, event, {'attempt': attempt, 'state': state, 'reason': reason,
+                event = ('TASK_SEND_CONFIRMED' if state == 'SENT_UI_CONFIRMED' else
+                         'TASK_SEND_PART_CONFIRMED' if state == 'PART_DELIVERED' else 'TASK_SEND_NEEDS_ATTENTION')
+                self._event(row, event, {'attempt': attempt, 'part_number': part_number, 'state': state, 'reason': reason,
                                         'automatic_retry_allowed': False})
                 if retryable:
                     self.flow._human(row['message_id'], 'AUTOMATIC_SEND_RETRIES_EXHAUSTED:' + row['id'])
-        return {'task_id': row['id'], 'kind': task_for(row).kind, 'state': state, 'attempt': attempt,
+        return {'task_id': row['id'], 'kind': task_for(row).kind, 'state': state, 'attempt': attempt, 'part_number': part_number,
                 'retry_scheduled': retryable and attempt < self.policy.max_attempts}
 
     def tick(self):
@@ -218,17 +227,19 @@ class AutomaticDelivery:
                         self._event(row, 'TASK_SEND_NEEDS_ATTENTION', {'reason': 'ACK_SOURCE_REQUIRES_REVIEW'})
                     return {'state': 'FAILED', 'task_id': row['id'], 'kind': 'ACK'}
                 attempt = self._retry(row)[0] + 1
+                from .delivery_batches import attempt_part
+                part_number = attempt_part(self.store, row)
                 with self.store.transaction():
                     if row['state'] == 'FAILED':
                         self.store.execute("UPDATE outbox SET state='PENDING',last_error=NULL WHERE id=?", (row['id'],))
-                    self._event(row, 'TASK_SEND_STARTED', {'kind': task_for(row).kind, 'attempt': attempt})
+                    self._event(row, 'TASK_SEND_STARTED', {'kind': task_for(row).kind, 'attempt': attempt, 'part_number': part_number})
                 try:
                     state = self.flow.dispatch(row['id'])
                 except Exception as exc:
                     current = self.store.one('SELECT * FROM outbox WHERE id=?', (row['id'],))
                     if (isinstance(exc, TimeoutError) and str(exc) == 'Resource busy; bounded wait expired'
                             and current['state'] == 'PENDING'):
-                        return self._finish_attempt(row, attempt, 'PENDING', retryable=True, reason='DESKTOP_BUSY')
+                        return self._finish_attempt(row, attempt, 'PENDING', retryable=True, reason='DESKTOP_BUSY', part_number=part_number)
                     with self.store.transaction():
                         if current['state'] == 'SENDING':
                             state = self.flow._record_check(current, {'confirmed': False,
@@ -239,14 +250,14 @@ class AutomaticDelivery:
                             self.flow._human(row['message_id'], 'AUTOMATIC_DISPATCH_REQUIRES_REVIEW:' + row['id'])
                         else:
                             state = current['state']
-                    return self._finish_attempt(current, attempt, state, reason='AUTOMATIC_DISPATCH_FAILED')
+                    return self._finish_attempt(current, attempt, state, reason='AUTOMATIC_DISPATCH_FAILED', part_number=part_number)
                 current = self.store.one('SELECT * FROM outbox WHERE id=?', (row['id'],))
                 proof = self.store.one("SELECT details FROM audit WHERE outbox_id=? AND event='SEND_PREFLIGHT_FAILED' ORDER BY rowid DESC LIMIT 1", (row['id'],))
                 evidence = json.loads(proof[0]) if proof else {}
                 retryable = (state == 'FAILED' and evidence.get('retryable') is True
                              and evidence.get('submission_attempted') is False
                              and current['last_error'] in RetryablePreflightFailure.CODES)
-                return self._finish_attempt(current, attempt, state, retryable=retryable, reason=current['last_error'])
+                return self._finish_attempt(current, attempt, state, retryable=retryable, reason=current['last_error'], part_number=part_number)
         except TimeoutError as exc:
             if str(exc) != 'Resource busy; bounded wait expired':
                 raise

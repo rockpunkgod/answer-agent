@@ -518,6 +518,9 @@ class Workflow:
             self.desktop.authorize(bound)
             return bound
         bound = self._bound(row)
+        if transport and row['purpose'] in ('ANSWER', 'CORRECTION'):
+            from .delivery_batches import part_bound
+            bound = part_bound(self.db, row, bound)
         if transport and self.desktop.simulated:
             if row["simulated"] != 1:
                 raise ValueError("REAL_SEND_DISABLED")
@@ -559,6 +562,12 @@ class Workflow:
         expected_simulation = self.desktop.simulated if simulated is None else simulated
         if type(expected_simulation) is not bool:
             raise ValueError('Delivery simulation mode must be explicit')
+        from .delivery_batches import read_plan, record_part
+        if read_plan(self.db, row):
+            partial, aggregate = record_part(self, row, evidence, expected_simulation)
+            if aggregate is None:
+                return partial
+            evidence = aggregate
         confirmed = (evidence.get("confirmed") is True and evidence.get("simulated") is expected_simulation
                      and evidence.get("body_hash") == sha256(row["body"].encode()).hexdigest())
         if row["purpose"] == "TEST_ANSWER":
@@ -595,6 +604,9 @@ class Workflow:
             raise ValueError('Trusted manual group draft adapter required')
         with self.db.transaction():
             row = self.db.one('SELECT * FROM outbox WHERE id=?', (outbox_id,))
+            from .delivery_batches import START_EVENT
+            if self.db.one('SELECT 1 FROM audit WHERE outbox_id=? AND event=?', (outbox_id, START_EVENT)):
+                raise ValueError('DELIVERY_BATCH_STARTED_USE_PART_RECONCILIATION')
             if not row or row['purpose'] not in ('ANSWER', 'CORRECTION') or row['simulated'] != 0:
                 raise ValueError('Real original answer Outbox required')
             if self._stopped():
@@ -696,6 +708,9 @@ class Workflow:
                 or row['state'] not in ('PENDING', 'SENDING', 'SEND_UNKNOWN', 'SENT_UI_CONFIRMED', 'STALE')):
             raise ValueError('Original manual answer Outbox required')
         self._bound(row)
+        from .delivery_batches import START_EVENT
+        if self.db.one('SELECT 1 FROM audit WHERE outbox_id=? AND event=?', (outbox_id, START_EVENT)):
+            raise ValueError('DELIVERY_BATCH_STARTED_USE_PART_RECONCILIATION')
         if row['state'] != 'SENT_UI_CONFIRMED':
             if not self.db.one("SELECT id FROM audit WHERE event='MANUAL_DRAFT_REQUESTED' AND outbox_id=?",
                                (outbox_id,)):
@@ -745,6 +760,10 @@ class Workflow:
                 if row["purpose"] == "TEST_ANSWER" and not (self.desktop.simulated is False and getattr(self.desktop, "test_only", False) is True and getattr(self.desktop, "test_answer_transport", False) is True):
                     return "TEST_ANSWER_TRANSPORT_DISABLED"
                 try:
+                    if row['purpose'] in ('ANSWER', 'CORRECTION'):
+                        self._validate(row, transport=False)
+                        from .delivery_batches import ensure_plan
+                        ensure_plan(self, row)
                     bound = self._validate(row)
                 except (ValueError, PreflightFailure) as exc:
                     if str(exc) == "MANUAL_REVIEW_REQUIRED":
@@ -770,6 +789,8 @@ class Workflow:
                 if current['state'] != 'PENDING':
                     return current['state']
                 self.db.execute("UPDATE outbox SET state='SENDING' WHERE id=?", (row["id"],))
+                from .delivery_batches import start_part
+                start_part(self, row)
                 self._event("SEND_STARTED", outbox=row["id"], run=row["run_id"])
             # Commit SENDING before the side effect. A crash from here onwards is never retried.
             with self.db.transaction():
@@ -820,11 +841,19 @@ class Workflow:
                 with self.db.transaction():
                     try:
                         bound = test_copy_reconcile_bound(self.db, row) if row["purpose"] == "TEST_ANSWER" else self._bound(row)
+                        from .delivery_batches import part_bound
+                        bound = part_bound(self.db, row, bound, reconcile=True)
                         evidence = self.desktop.reconcile(bound)
                     except Exception:
                         evidence = {"confirmed": False, "simulated": self.desktop.simulated, "reason": "RECOVERY_CHECK_FAILED"}
                     state = self._record_check(row, evidence)
                     recovered.append({"outbox_id": row["id"], "state": state})
+            if self.desktop.simulated is False:
+                for result in recovered:
+                    if result['state'] == 'SENT_UI_CONFIRMED':
+                        row = self.db.one('SELECT * FROM outbox WHERE id=?', (result['outbox_id'],))
+                        if row['purpose'] in ('ANSWER', 'CORRECTION'):
+                            self._project_verified_manual_counting(row)
         return recovered
 
     def inspect_unknown(self, outbox_id):
@@ -835,12 +864,14 @@ class Workflow:
                 raise ValueError("Only uncertain sends can be inspected")
             try:
                 bound = test_copy_reconcile_bound(self.db, row) if row["purpose"] == "TEST_ANSWER" else self._bound(row)
+                from .delivery_batches import part_bound
+                bound = part_bound(self.db, row, bound, reconcile=True)
                 evidence = self.desktop.reconcile(bound)
             except Exception:
                 evidence = {"confirmed": False, "simulated": self.desktop.simulated, "reason": "RECOVERY_CHECK_FAILED"}
             with self.db.transaction():
                 state = self._record_check(row, evidence)
-                if state == "SENT_UI_CONFIRMED":
+                if state in ("SENT_UI_CONFIRMED", "PART_DELIVERED", "STALE"):
                     prefix = "TEST_SEND_UNKNOWN:" if row["purpose"] == "TEST_ANSWER" else "SEND_UNKNOWN:"
                     self.db.execute("UPDATE human_tasks SET state='RESOLVED' WHERE message_id=? AND reason=?",
                         (row["message_id"], prefix + row["id"]))

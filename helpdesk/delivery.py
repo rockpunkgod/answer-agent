@@ -47,6 +47,7 @@ class BoundMessage:
     group_key: str
     student_key: str
     body: str
+    batch_outbox_id: str | None = None
 
     @property
     def body_hash(self):

@@ -169,7 +169,8 @@ class SingleInputReviewTests(unittest.TestCase):
         self.flow.set_answer_review_required(False)
         flow, first, _ = self.real_answer()
         # Historical delivery fixture only; no desktop interaction occurs.
-        self.db.execute("UPDATE outbox SET state='SENT_UI_CONFIRMED' WHERE id=?", (first["outbox_id"],))
+        self.db.execute("UPDATE outbox SET state='SENT_UI_CONFIRMED',sent_at=? WHERE id=?",
+                        ('2026-10-03T08:00:00+00:00', first["outbox_id"]))  # Synthetic historical timestamp.
         follow = self.app.ingest(Incoming(self.binding, "请重新核验", Intent.DISPUTE,
                                         quote_message_id=self.first.message_id))
         _, done, original = self.real_answer(follow.turn_id)

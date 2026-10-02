@@ -235,6 +235,8 @@ class MCPGroupDesktop:
             record['confirmed_at'] = record.get('confirmed_at') or now()
         self._save(path, record)
         return {'confirmed': confirmed, 'simulated': False, 'body_hash': message.body_hash,
+                'outbox_id': message.outbox_id, 'binding_id': message.binding_id,
+                'group_key': message.group_key, 'student_key': message.student_key,
                 'confirmed_at': record.get('confirmed_at'), 'evidence': str(path),
                 'verification': 'fresh group + exact clipboard + appended own-sender UI message',
                 'reason': None if confirmed else 'NEW_OWN_MESSAGE_NOT_UNAMBIGUOUS'}

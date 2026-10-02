@@ -419,6 +419,9 @@ class PerformanceLedger:
             if evidence.get('verification_method') == 'MANUAL_ATTESTATION':
                 from .manual_delivery import validate_manual_package
                 validate_manual_package(self.db, row, evidence)
+            from .delivery_batches import read_plan, validate_complete
+            if read_plan(self.db, row) or evidence.get('verification_method') == 'ORDERED_TEXT_BATCH':
+                validate_complete(self.db, row, evidence)
             if row['answer_id'] or row['run_id']:
                 if (evidence.get('confirmed') is not True or evidence.get('simulated') is not False
                         or evidence.get('body_hash') != sha256(row['body'].encode('utf-8')).hexdigest()):

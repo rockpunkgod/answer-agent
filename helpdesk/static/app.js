@@ -189,6 +189,9 @@ function renderAutomaticDelivery(data){
   const item=el('details','entry');
   item.append(el('summary','',`${task.group_name||''} · ${task.student_name||''} · ${task.kind==='ACK'?'收到':'答案'} · ${names[task.state]||task.state} · ${task.delivery_mode} · 尝试 ${task.attempts}`));
   item.append(el('pre','native-text',task.content||''));
+  if(task.delivery_batch){const batch=task.delivery_batch;
+   item.append(el('p','',`答案交付：已核验 ${batch.verified_parts}/${batch.total_parts} 段${batch.unknown_part?`，第 ${batch.unknown_part} 段结果待核验`:batch.complete?'，完整交付':''}`));
+  }
   if(task.simulated)item.append(el('p','','模拟记录，不向真实群发送或计绩效。'));
   if(task.next_attempt_at)item.append(el('p','','下次尝试：'+display(task.next_attempt_at,'created_at')));
   if(task.last_error)item.append(el('p','','处理原因：'+task.last_error));

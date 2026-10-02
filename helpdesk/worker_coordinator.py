@@ -113,6 +113,9 @@ class WorkerCoordinator:
                 if not original or json.loads(original[0])['outbox_id'] != command.outbox_id:
                     return False
                 return True  # Actual old delivery may be observed, never resent.
+            from .delivery_batches import PLAN_EVENT
+            if self.db.one('SELECT 1 FROM audit WHERE event=? AND outbox_id=?', (PLAN_EVENT, row['id'])):
+                return False  # The local ordered sender owns this immutable batch.
             if row['state'] != 'PENDING':
                 own = self.db.one('SELECT status FROM worker_commands WHERE command_id=?',(command.command_id,))
                 if not (command.action==Action.EXECUTE_APPROVED_OUTBOX and row['state']=='SENDING' and own and own[0]=='RUNNING'):

@@ -59,6 +59,9 @@ class ManualGroupDraft:
         if (not row or row['purpose'] not in ('ANSWER', 'CORRECTION') or row['simulated'] != 0
                 or row['state'] not in allowed):
             raise PreflightFailure('REAL_ORIGINAL_ANSWER_OUTBOX_REQUIRED')
+        from .delivery_batches import START_EVENT
+        if store.one('SELECT 1 FROM audit WHERE event=? AND outbox_id=?', (START_EVENT, row['id'])):
+            raise PreflightFailure('DELIVERY_BATCH_STARTED_USE_PART_RECONCILIATION')
         if not readback and policy._stopped():
             raise PreflightFailure('STOPPED')
         if not readback and policy._delivery_mode(row) != 'MANUAL':

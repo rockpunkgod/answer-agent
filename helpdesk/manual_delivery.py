@@ -283,6 +283,9 @@ class ManualDeliveries:
                     or origin['idempotency_key'].startswith(PREFIX)):
                 raise ValueError('请选择原任务的正式答疑稿，测试副本不能登记正式交付')
             bound = flow._bound(origin)
+            from .delivery_batches import START_EVENT
+            if self.db.one('SELECT 1 FROM audit WHERE outbox_id=? AND event=?', (origin['id'], START_EVENT)):
+                raise ValueError('自动分段已开始，请先只读核验当前段，不能重复登记整份答案')
             message = self.db.one('SELECT * FROM messages WHERE id=?', (origin['message_id'],))
             turn = self.db.one('SELECT * FROM turns WHERE id=?', (origin['turn_id'],))
             if not turn or message['source'].upper() in ('OPERATOR_TEST','MOCK'):

@@ -436,17 +436,30 @@ class Helpdesk:
             AND (case_id IS NULL OR case_id=?) LIMIT 1""", (message["binding_id"], turn["case_id"]))
         if pending or not q.complete or not material or material["verified_text"] is None:
             raise ValueError("Unresolved input blocks generation")
-        history = [dict(row) for row in self.db.all("""SELECT o.body,o.question_version,o.sent_at,o.simulated,o.id AS outbox_id
+        history = [dict(row) for row in self.db.all("""SELECT o.body,o.question_version,o.sent_at,o.simulated,o.id AS outbox_id,
+            COALESCE((SELECT MAX(d.rowid) FROM delivery_checks d WHERE d.outbox_id=o.id AND d.status='SENT_UI_CONFIRMED'),0) AS _delivery_order
             FROM outbox o JOIN turns t ON t.id=o.turn_id WHERE t.question_id=?
             AND o.state='SENT_UI_CONFIRMED' AND o.purpose IN ('ANSWER','CORRECTION') ORDER BY o.sent_at,o.rowid""", (turn["question_id"],))]
         for delivered in history:
             check = self.db.one('SELECT evidence FROM delivery_checks WHERE outbox_id=? ORDER BY rowid DESC LIMIT 1',
                                 (delivered['outbox_id'],))
             proof = json.loads(check['evidence']) if check else {}
+            from .delivery_batches import read_plan, validate_complete
+            original = self.db.one('SELECT * FROM outbox WHERE id=?', (delivered['outbox_id'],))
+            if read_plan(self.db, original) or proof.get('verification_method') == 'ORDERED_TEXT_BATCH':
+                validate_complete(self.db, original, proof)
             if proof.get('verification_method') == 'MANUAL_ATTESTATION':
                 delivered.update(delivery_method='MANUAL_ATTESTATION', attachments=proof.get('attachments', []),
                                  part_number=proof['part_number'], total_parts=proof['total_parts'],
                                  verified_by=proof['reviewer'])
+        from .delivery_batches import partial_history
+        from .performance_rules import timestamp
+        history.extend(partial_history(self.db, turn['question_id'], turn_id))
+        # Receipt sequence breaks equal timestamps across both partial and
+        # complete replies; transport IDs are not chronological sequence numbers.
+        history.sort(key=lambda item: (timestamp(item['sent_at']), item['_delivery_order']))
+        for delivered in history:
+            delivered.pop('_delivery_order')
         return {"case_id": turn["case_id"], "question_id": turn["question_id"], "turn_id": turn_id,
                 "question_version": turn["question_version"], "context_revision": turn["context_revision"],
                 "student_question": q.to_dict(), "student_material": material["verified_text"],
