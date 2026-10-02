@@ -38,6 +38,8 @@ $env:HELPDESK_WINDOWS_MCP_HOME = 'E:\作业帮\.venv-windows-mcp'
 
 Luna定位工具`suggest(..., display_index=...)`可选择当前获准的一块显示器，默认仍为1。位置按本次截图的实际区域和图像比例换算，支持负坐标、主屏及布局变化；显示器编号不等于Windows设备名末尾的数字。返回的是定位建议，调用方仍须用新快照和原生窗口信息核验后才能操作。当前本人已授权所有现有屏幕的只读联调；此授权不自动启用群发送或DeepSeek提交。
 
+现有MCP连接中的`ActivateWeComOnDisplayByApp`接受已核对的`display_index`与`display_device`，先检查该屏幕的唯一企业微信原生窗口及缓存中的同一窗口，再切换一次并复核结果；目标应用不能由请求改写。旧屏幕2入口保持兼容。屏幕0/DISPLAY1上的真实激活与快速Screenshot定位已验证；群内容的Snapshot读取失败，可见画面未提供每条消息的原始时间。截图仅用于定位，不作为消息导出或绩效计数输入。
+
 ## 收到与答案独立发送
 
 `AckTask`直接消费原消息的ACK Outbox，不等待OCR、题面审核或DeepSeek；`AnswerTask`消费原有答案/更正Outbox。二者复用同一发送台账和已有阶段策略，没有新增数据库或迁移。后台每秒调度一条到期任务，收到优先；生成等待不会占用该发送循环，UI操作期间不持有业务数据库写锁。审核是否必需仍由`stage.answer_review_required`控制：需要审核时批准后自动发，不需要时按原题面确认流程继续。MANUAL/DISABLED目的保持原义，开启发送循环不会改成AUTO。

@@ -21,7 +21,8 @@ sys.path.insert(0, str(ROOT))
 from helpdesk.mcp_window_probe import (FOREGROUND_COMMAND, parse_foreground_process,
                                        screen2_caption_command, parse_screen2_caption,
                                        WECOM_SCREEN2_CAPTION_COMMAND, WECOM_SCREEN2_WINDOW_COMMAND,
-                                       parse_wecom_window_location, verify_wecom_switch_snapshot)
+                                       parse_wecom_window_location, verify_wecom_switch_snapshot,
+                                       wecom_window_command)
 from helpdesk.windows_worker_probe import DESKTOP_STATUS_COMMAND, parse_desktop_status
 from helpdesk.mcp_transport import runtime_home
 
@@ -29,6 +30,7 @@ ALLOWED = {"Screenshot", "Snapshot", "Click", "Type", "Scroll", "Move", "Shortcu
 SCREEN2_ACTIVATE = 'ActivateEdgeOnScreen2'  # Local entry; native operation is Click.
 SCREEN2_ACTIVATIONS = {SCREEN2_ACTIVATE: 'msedge', 'ActivateWeComOnScreen2': 'WXWork'}
 SCREEN2_APP_ACTIVATION = 'ActivateWeComOnScreen2ByApp'
+DISPLAY_APP_ACTIVATION = 'ActivateWeComOnDisplayByApp'
 
 
 GUARDED_INPUTS = {"Click", "Type", "Shortcut", "Scroll", "Move"}
@@ -115,7 +117,8 @@ async def check_foreground(client, expected, attempt, attempt_path, *, pointer_l
     save()
 
 
-async def check_screen2_activation(client, loc, attempt, attempt_path, *, target_process='msedge', by_app=False):
+async def check_screen2_activation(client, loc, attempt, attempt_path, *, target_process='msedge', by_app=False,
+                                  display_index=1, display_device=r'\\.\DISPLAY2'):
     preflight = {'status': 'PROBE_UNCONFIRMED'}
     attempt['screen2_activation_preflight'] = preflight
     def save():
@@ -131,26 +134,28 @@ async def check_screen2_activation(client, loc, attempt, attempt_path, *, target
         if not status.unlocked or status.remote is not False:
             raise ValueError('DESKTOP_NOT_AVAILABLE')
         preflight['desktop_available'] = True
-        # App uses the cached exact window, so inspect only display 2 first.
+        # App uses the cached exact window; never let it fall back to an
+        # unscoped desktop refresh. Device/region and index are cross-checked.
         # It does not click a title bar; a covered caption is irrelevant here.
         if by_app:
             snapshot = await client.call_tool('Snapshot', {'use_vision': False, 'use_dom': False,
-                'use_annotation': False, 'use_ui_tree': True, 'display': [1]}, timeout=45, raise_on_error=False)
+                'use_annotation': False, 'use_ui_tree': True, 'display': [display_index]}, timeout=45, raise_on_error=False)
             snapshot_record = {'tool': 'Snapshot', 'is_error': snapshot.is_error,
                 'content': [{'type': item.type, **({'text': item.text} if item.type == 'text' else {})}
                             for item in snapshot.content]}
             preflight['snapshot_sha256'] = sha256(json.dumps(snapshot_record, ensure_ascii=False,
                 sort_keys=True).encode('utf-8')).hexdigest()
-        command = WECOM_SCREEN2_WINDOW_COMMAND if by_app else screen2_caption_command(loc, target_process=target_process)
+        command = wecom_window_command(display_device) if by_app else screen2_caption_command(loc, target_process=target_process)
         result = await client.call_tool('PowerShell', {'command': command, 'timeout': 10},
                                        timeout=15, raise_on_error=False)
         record = {'tool': 'PowerShell', 'is_error': result.is_error,
                   'content': [{'type': item.type, **({'text': item.text} if item.type == 'text' else {})}
                               for item in result.content]}
         preflight['probe_record'] = record
-        target = parse_wecom_window_location(record) if by_app else parse_screen2_caption(record, loc, target_process=target_process)
+        target = parse_wecom_window_location(record, display_device=display_device) if by_app else parse_screen2_caption(record, loc, target_process=target_process)
         if by_app:
-            verify_wecom_switch_snapshot(snapshot_record, target)
+            verify_wecom_switch_snapshot(snapshot_record, target, display_index=display_index)
+            preflight.update(display_index=display_index, display_device=display_device)
         preflight.update(status='SCREEN2_WECOM_WINDOW_VERIFIED' if by_app else 'SCREEN2_EDGE_CAPTION_VERIFIED' if target_process == 'msedge'
                          else 'SCREEN2_WECOM_CAPTION_VERIFIED', target=target)
         save()
@@ -199,9 +204,18 @@ async def main():
                             or any(type(value) is not int for value in pointer_loc)):
                         raise ValueError('EXPLICIT_WECOM_POINTER_LOCATION_REQUIRED')
                 activation_loc = None
-                by_app = name == SCREEN2_APP_ACTIVATION
-                if by_app and (set(request) != {'tool', 'arguments'} or request['arguments'] != {}):
+                by_app = name in (SCREEN2_APP_ACTIVATION, DISPLAY_APP_ACTIVATION)
+                display_index, display_device = 1, r'\\.\DISPLAY2'
+                if name == SCREEN2_APP_ACTIVATION and (set(request) != {'tool', 'arguments'} or request['arguments'] != {}):
                     raise ValueError('INVALID_SCREEN2_ACTIVATION')
+                if name == DISPLAY_APP_ACTIVATION:
+                    arguments = request.get('arguments')
+                    if (set(request) != {'tool', 'arguments'} or not isinstance(arguments, dict)
+                            or set(arguments) != {'display_index', 'display_device'}
+                            or type(arguments['display_index']) is not int or arguments['display_index'] < 0):
+                        raise ValueError('INVALID_DISPLAY_ACTIVATION')
+                    display_index, display_device = arguments['display_index'], arguments['display_device']
+                    wecom_window_command(display_device)  # Validate before recording or invoking any tool.
                 if name in SCREEN2_ACTIVATIONS:
                     if (set(request) != {'tool', 'arguments'} or not isinstance(request['arguments'], dict)
                             or set(request['arguments']) != {'loc'}):
@@ -234,7 +248,8 @@ async def main():
                 target = None
                 if activation_loc is not None or by_app:
                     target = await check_screen2_activation(client, activation_loc, attempt, attempt_path,
-                                                           target_process='WXWork' if by_app else SCREEN2_ACTIVATIONS[name], by_app=by_app)
+                        target_process='WXWork' if by_app else SCREEN2_ACTIVATIONS[name], by_app=by_app,
+                        display_index=display_index, display_device=display_device)
                 native_name = 'App' if by_app else 'Click' if activation_loc is not None else name
                 native_arguments = ({'mode': 'switch', 'name': '企业微信'} if by_app else
                     {'loc': activation_loc, 'button': 'left', 'clicks': 1} if activation_loc is not None else request.get('arguments', {}))
@@ -286,7 +301,7 @@ async def main():
                 attempt_path.write_text(json.dumps(attempt, ensure_ascii=False, indent=2), encoding="utf-8")
                 print(json.dumps(record), flush=True)
             except Exception as exc:
-                print(json.dumps({"tool": name if isinstance(name, str) and (name in ALLOWED or name == 'list' or name in SCREEN2_ACTIVATIONS or name == SCREEN2_APP_ACTIVATION) else None, "error": type(exc).__name__, "detail": error_code(exc),
+                print(json.dumps({"tool": name if isinstance(name, str) and (name in ALLOWED or name == 'list' or name in SCREEN2_ACTIVATIONS or name in (SCREEN2_APP_ACTIVATION, DISPLAY_APP_ACTIVATION)) else None, "error": type(exc).__name__, "detail": error_code(exc),
                                   "attempt_path": str(attempt_path) if attempt_path else None,
                                   "automatic_retry_allowed": False}), flush=True)
 

@@ -17,7 +17,8 @@ from unittest.mock import patch
 from helpdesk.mcp_window_probe import (FOREGROUND_COMMAND, parse_screen2_caption,
                                        screen2_caption_command, WECOM_SCREEN2_CAPTION_COMMAND,
                                        parse_wecom_caption_location, WECOM_SCREEN2_WINDOW_COMMAND,
-                                       parse_wecom_window_location, verify_wecom_switch_snapshot)
+                                       parse_wecom_window_location, verify_wecom_switch_snapshot,
+                                       wecom_window_command)
 from helpdesk.windows_worker_probe import DESKTOP_STATUS_COMMAND
 from tests.test_mcp_window_probe import result as foreground_result
 
@@ -59,8 +60,8 @@ class Screen2ActivationTests(unittest.TestCase):
     def exercise(self, request=None, *, caption=None, desktop=None, click=None, after=None, app_snapshot=None):
         calls = []
         request = request or self.request()
-        by_app = request['tool'] == 'ActivateWeComOnScreen2ByApp'
-        target_process = 'WXWork' if request['tool'] in {'ActivateWeComOnScreen2', 'ActivateWeComOnScreen2ByApp'} else 'msedge'
+        by_app = request['tool'] in {'ActivateWeComOnScreen2ByApp', 'ActivateWeComOnDisplayByApp'}
+        target_process = 'WXWork' if by_app or request['tool'] == 'ActivateWeComOnScreen2' else 'msedge'
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             class Client:
@@ -89,7 +90,8 @@ class Screen2ActivationTests(unittest.TestCase):
                             content=[SimpleNamespace(**item) for item in record['content']])
                     if tool == 'Snapshot' and by_app:
                         self_outer.assertEqual(args, {'use_vision': False, 'use_dom': False,
-                            'use_annotation': False, 'use_ui_tree': True, 'display': [1]})
+                            'use_annotation': False, 'use_ui_tree': True,
+                            'display': [request['arguments'].get('display_index', 1)]})
                         record = app_snapshot or switch_snapshot()
                         return SimpleNamespace(is_error=record['is_error'], content=[SimpleNamespace(**item) for item in record['content']])
                     self_outer.assertEqual(tool, 'App' if by_app else 'Click')
@@ -135,6 +137,67 @@ class Screen2ActivationTests(unittest.TestCase):
         self.assertFalse(attempts[0]['automatic_retry_allowed'])
         self.assertNotIn('untrusted UI content', json.dumps(attempts))
         self.assertEqual(output[-1]['content'], [])
+
+    def primary_display(self):
+        request = {'tool': 'ActivateWeComOnDisplayByApp', 'arguments': {
+            'display_index': 0, 'display_device': r'\\.\DISPLAY1'}}
+        target = window_result(device=r'\\.\DISPLAY1', screen_top=0, screen_bottom=1600,
+            window_top=0, window_bottom=1040)
+        snapshot = switch_snapshot()
+        snapshot['content'][0]['text'] = snapshot['content'][0]['text'].replace(
+            '1:', '0:').replace('DISPLAY2', 'DISPLAY1').replace(
+            'Selected Displays: 1', 'Selected Displays: 0').replace('(0,-1440,2560,0)', '(0,0,2560,1600)')
+        after = foreground_result(left=0, top=0, width=1200, height=1040)
+        return request, target, snapshot, after
+
+    def test_configured_display_uses_unique_native_window_and_cached_handle(self):
+        request, target, snapshot, after = self.primary_display()
+        calls, attempts, output = self.exercise(request, caption=target, app_snapshot=snapshot, after=after)
+        self.assertEqual([tool for tool, _ in calls], ['PowerShell', 'Snapshot', 'PowerShell', 'App', 'PowerShell'])
+        self.assertEqual(calls[2][1]['command'], wecom_window_command(r'\\.\DISPLAY1'))
+        self.assertEqual(calls[3][1], {'mode': 'switch', 'name': '企业微信'})
+        proof = attempts[0]['screen2_activation_preflight']
+        self.assertEqual((proof['display_index'], proof['display_device']), (0, r'\\.\DISPLAY1'))
+        self.assertEqual(attempts[0]['status'], 'TOOL_RETURNED')
+        self.assertEqual(output[-1]['tool'], 'ActivateWeComOnDisplayByApp')
+        self.assertEqual(output[-1]['content'], [])
+        self.assertNotIn('untrusted UI content', json.dumps(attempts))
+
+    def test_configured_display_rejects_scope_and_cached_identity_changes(self):
+        request, target, snapshot, after = self.primary_display()
+        for changed in (switch_snapshot(), switch_snapshot(rows='企业微信 2 Normal 1200 1040 999'),
+                {'tool': 'Snapshot', 'is_error': False, 'content': [{'type': 'text', 'text':
+                    snapshot['content'][0]['text'].replace(' 123', ' 999')}]}):
+            with self.subTest(snapshot=changed):
+                calls, attempts, _ = self.exercise(request, caption=target, app_snapshot=changed, after=after)
+                self.assertFalse(any(tool in ('App', 'Click') for tool, _ in calls))
+                self.assertEqual(attempts[0]['status'], 'INPUT_BLOCKED_BY_SCREEN2_GUARD')
+        calls, _, _ = self.exercise(request, caption=window_result(), app_snapshot=snapshot, after=after)
+        self.assertNotIn('App', [tool for tool, _ in calls])
+
+    def test_configured_display_parameters_cannot_become_native_code_or_other_targets(self):
+        request, _, _, _ = self.primary_display()
+        for changes in ({'display_index': True}, {'display_index': -1}, {'display_index': '0'},
+                {'display_device': "\\\\.\\DISPLAY1'; Get-Clipboard #"}, {'display_device': None},
+                {'display_device': r'\\.\DISPLAY0'}, {'name': '微信'}, {'mode': 'launch'}):
+            with self.subTest(changes=changes):
+                calls, attempts, _ = self.exercise(request | {'arguments': request['arguments'] | changes})
+                self.assertEqual(calls, [])
+                self.assertEqual(attempts, [])
+        command = wecom_window_command(r'\\.\DISPLAY1')
+        for forbidden in ('SetForegroundWindow', 'ShowWindow', 'SetWindowPos', 'SendKeys'):
+            self.assertNotIn(forbidden, command)
+
+    def test_configured_display_timeout_or_window_move_is_not_replayed(self):
+        request, target, snapshot, after = self.primary_display()
+        for failure, postflight in ((TimeoutError('private native error'), after),
+                (None, foreground_result(left=1, top=0, width=1200, height=1040))):
+            calls, attempts, output = self.exercise(request, caption=target, app_snapshot=snapshot,
+                click=failure, after=postflight)
+            self.assertEqual(sum(tool == 'App' for tool, _ in calls), 1)
+            self.assertNotEqual(attempts[0]['status'], 'TOOL_RETURNED')
+            self.assertFalse(attempts[0]['automatic_retry_allowed'])
+            self.assertNotIn('private native error', json.dumps(output))
 
     def test_app_switch_rejects_missing_ambiguous_changed_or_other_screen_windows(self):
         for snapshot, target in ((switch_snapshot(rows='企业微信 2 Normal 1200 1040 124'), window_result()),

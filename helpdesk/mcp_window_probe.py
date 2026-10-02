@@ -195,8 +195,16 @@ WECOM_SCREEN2_CAPTION_COMMAND = _WECOM_SCREEN2_WINDOW_QUERY + r'''
 '''
 
 
-def parse_wecom_window_location(record):
+def wecom_window_command(display_device=r'\\.\DISPLAY2'):
+    """Fixed native reads on one explicitly configured Windows display."""
+    if not isinstance(display_device, str) or not re.fullmatch(r'\\\\\.\\DISPLAY[1-9]\d{0,2}', display_device):
+        raise ValueError('INVALID_DISPLAY_DEVICE')
+    return WECOM_SCREEN2_WINDOW_COMMAND.replace(r'\\.\DISPLAY2', display_device)
+
+
+def parse_wecom_window_location(record, *, display_device=r'\\.\DISPLAY2'):
     """A covered title bar may still be switched by App; no click is authorized."""
+    wecom_window_command(display_device)
     if record.get('tool') != 'PowerShell' or record.get('is_error') is not False:
         raise ValueError('WECOM_WINDOW_PROBE_FAILED')
     content = record.get('content', [])
@@ -210,7 +218,7 @@ def parse_wecom_window_location(record):
                            for side in ('left', 'top', 'right', 'bottom')}
     if (not isinstance(value, dict) or set(value) != integers | {'device', 'process', 'title'}
             or any(type(value[key]) is not int for key in integers)
-            or value['device'] != r'\\.\DISPLAY2' or value['process'] != 'WXWork'
+            or value['device'] != display_device or value['process'] != 'WXWork'
             or value['title'] != '企业微信' or value['handle'] <= 0):
         raise ValueError('WECOM_WINDOW_PROBE_FORMAT_CHANGED')
     for prefix in ('screen_', 'window_'):
@@ -223,15 +231,18 @@ def parse_wecom_window_location(record):
     return value
 
 
-def verify_wecom_switch_snapshot(record, target):
-    """Pin App's exact cached window name/handle before its fuzzy-name lookup."""
+def verify_wecom_switch_snapshot(record, target, *, display_index=1):
+    """Pin App's exact cached window name/handle on the configured display."""
+    if type(display_index) is not int or display_index < 0:
+        raise ValueError('INVALID_DISPLAY_INDEX')
+    wecom_window_command(target['device'])
     from .mcp_page_contract import snapshot_text
     summary = snapshot_text(record).split('UI Tree:', 1)[0]
     bounds = tuple(target['screen_' + side] for side in ('left', 'top', 'right', 'bottom'))
     regions = re.findall(r'^Screenshot Region: \((-?\d+),(-?\d+),(-?\d+),(-?\d+)\)\s*$', summary, re.M)
-    if (re.findall(r'^Selected Displays: (.*)$', summary, re.M) != ['1']
+    if (re.findall(r'^Selected Displays: (.*)$', summary, re.M) != [str(display_index)]
             or len(regions) != 1 or tuple(map(int, regions[0])) != bounds
-            or not re.search(r'1:\s*' + re.escape(r'\\.\DISPLAY2') + r'\s', summary)):
+            or not re.search(r'(?<!\d)' + str(display_index) + r':\s*' + re.escape(target['device']) + r'\s', summary)):
         raise ValueError('SWITCH_SNAPSHOT_OUTSIDE_SCREEN2')
     tables = summary.split('Focused Window:', 1)
     if len(tables) != 2 or tables[1].count('Opened Windows:') != 1:
