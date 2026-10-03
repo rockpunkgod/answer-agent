@@ -217,6 +217,18 @@ REAL仅为无界面本机OS实验：本轮自己创建的安静Python测试进�
 
 本批没有真实桌面操作、MCP浏览器启动、DeepSeek新请求、群发送、实际交付、正式库/配置修改或日报提交。真实生成疑点、入口/SLA、Top2、追问和A–H/20任务试运行仍需原授权边界内的实际证据，结论**NOT_READY**。SDK文件和两项符号链接历史SKIPPED未复验，仍不算通过。
 
+### 后续实施：工具清单响应与主程序一致（2026-10-03）
+
+从干净的`788110b0c7aa62eb64ac503bfab589d97f6a0119`继续。实际检查发现`list`回复仅有`tools`，而现有`MCPProcess`要求回复中的`tool`与请求相同；因此主程序调用真实封装的清单时会报`MCP_RESPONSE_TOOL_MISMATCH`。新增用例直接将实际封装产生的清单回复交给主程序传输层，修补前1项错误，修补后通过。最小修改只补`tool: list`，保留响应绑定检查、App启动禁用及所有未知结果停止规则，没有替换连接或进程管理。
+
+相关UNIT/MOCK命令与上一批相同，新增上述用例后94项全部通过、0失败、0跳过，5.929秒，退出码0。源码前后为`sha256:677520e5073fcbd771e70c62b9dd8ab82c400264b096b79d344a82bf02abf57f`，未变化；日志为忽略目录`artifacts/verification/20261003-mcp-list-envelope/unittest.log`，SHA256为`039e8132b2f65cade6905bb126ad7ce7853aa6250411535319f289fe9cc9d742`。原业务数据库、ANSWER、生产配置及外发权限未修改。
+
+修补前Luna的一次真实元数据尝试在取得清单之后失去exec句柄，未能调用DisplayInventory或正常quit，不计通过。Luna报告可见Schema与当前源码不一致，但该次没有保存原始清单，具体原因仍UNVERIFIED；不能仅检查源码就声称真实过滤已生效，也不能把当前无匹配进程等同于正常退出。
+
+随后同一Luna medium用现有`MCPProcess`进行一次真实连接，保持输入管道，顺序调用`list`与`DisplayInventory`；未调用App、截图、页面读取或输入。助手首次因本地模块路径缺失在创建连接前失败，原记录保留；仅修正助手路径后才开始这一连接。原始清单已核对App仅含四个窗口字段、显式mode及switch/resize；原生显示器结果为索引0、DISPLAY1、2560×1600、缩放1.5。退出前bridge仍存活，上下文请求quit后退出码0，无pending；主Agent独立核对当时记录的7个进程均已不存在。没有独立原生quit回执，不把上下文返回称为此类回执。
+
+该REAL元数据验证于UTC 07:13:57—07:14:02完成，当前封装文件前后SHA256为`fb01e70c4ec5a46df918fde999079d6230b5d65236f97c38eef7e2d7029ce650`。原始清单、显示器返回、进程身份与失败记录在忽略的`data/private/verification/windows-mcp-metadata/run-20261003T070856Z-4a7ebe00b24e4b81bc9f9427f689f1fb/`，不上传Git。仅连接及清单契约升级为REAL VERIFIED；没有追加DeepSeek请求、群发送、实际交付或正式计量。此前真实草稿疑点与网页自动队列、入口SLA、Top2及完整试运行仍未验收，结论**NOT_READY**。
+
 ## 本轮审计与最小改动
 
 业务检出目录为 `E:\作业帮\tmp\answer-agent-publish-20261001`，审计起点为 `main / 126747e1fed4a70c78c6fca46f802dfa9f8984c1`，远端为 `rockpunkgod/answer-agent`。后续提交可从该基线追溯。审计当时原工作目录运行8767工作台；最新只读检查未发现该端口监听，HTTP不可连接，不能沿用早期运行状态。本批未部署或迁移正式数据库。

@@ -4,13 +4,14 @@ import importlib.util
 import io
 import json
 from pathlib import Path
+import queue
 import sys
 import tempfile
 from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import patch
 from tests.test_mcp_window_probe import result as foreground_result
-from helpdesk.mcp_transport import TREE_LIMIT_ENV
+from helpdesk.mcp_transport import MCPProcess, TREE_LIMIT_ENV
 
 
 class WindowsMcpAuditTests(unittest.TestCase):
@@ -125,6 +126,18 @@ class WindowsMcpAuditTests(unittest.TestCase):
         self.assertEqual(next(item['schema'] for item in entries if item['name'] == 'Snapshot'),
                          {'type': 'object', 'properties': {}})
         self.assertEqual(self.last_native_calls, [])
+
+    def test_actual_list_reply_is_accepted_by_the_persistent_adapter(self):
+        self.exercise(False, json.dumps({'tool': 'list', 'arguments': {}}))
+        reply = json.loads(self.last_stdout.splitlines()[-1])
+        responses = queue.Queue()
+        responses.put(reply)
+        adapter = MCPProcess(timeout=.1, response_queue=responses)
+        adapter._proc = SimpleNamespace(stdin=io.StringIO())
+        self.assertEqual(adapter.call('list', {}), reply)
+        self.assertFalse(adapter.uncertain)
+        self.assertEqual(json.loads(adapter._proc.stdin.getvalue()),
+                         {'tool': 'list', 'arguments': {}})
 
     def test_tool_error_does_not_become_success(self):
         self.assertEqual(self.exercise(True)['status'], 'TOOL_ERROR_UNCONFIRMED')

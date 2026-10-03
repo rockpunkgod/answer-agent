@@ -257,7 +257,7 @@ async def main():
                                             display_device=display_device)
                 if name == "list":
                     tools = await client.list_tools()
-                    print(json.dumps({"tools": [{"name": t.name,
+                    print(json.dumps({"tool": "list", "tools": [{"name": t.name,
                         "schema": app_window_schema(t.inputSchema) if t.name == 'App' else t.inputSchema}
                         for t in tools]}), flush=True)
                     continue
