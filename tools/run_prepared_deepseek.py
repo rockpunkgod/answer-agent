@@ -12,7 +12,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from helpdesk.mcp_generation import PreparedDeepSeekGenerator, input_fingerprint
+from helpdesk.mcp_generation import PreparedDeepSeekGenerator, CompletedOutputFailure, input_fingerprint
 from helpdesk.mcp_transport import MCPProcess
 from helpdesk.locking import resource_lock
 from helpdesk.storage import Store, now
@@ -20,20 +20,23 @@ from helpdesk.workflow import Workflow
 
 
 def run_existing(store, run_id, preparation_path, manifest, *,
-                 evidence_dir=None, transport_factory=None, recovery_only=False):
+                 evidence_dir=None, transport_factory=None, recovery_only=False, max_attempts=1):
     """Resume one frozen run; recovery_only never opens a desktop or submits."""
     if not isinstance(run_id, str) or not run_id:
         raise ValueError('A frozen run ID is required')
+    if type(max_attempts) is not int or not 1 <= max_attempts <= 2:
+        raise ValueError('Generation attempts must be 1 or 2')
     lock_path = (str(Path(store.path).resolve()) + '.prepared-' +
                  sha256(run_id.encode('utf-8')).hexdigest() + '.lock')
     with resource_lock(lock_path, timeout=5):
         return _run_existing_locked(store, run_id, preparation_path, manifest,
                                     evidence_dir=evidence_dir,
-                                    transport_factory=transport_factory, recovery_only=recovery_only)
+                                    transport_factory=transport_factory, recovery_only=recovery_only,
+                                    max_attempts=max_attempts)
 
 
 def _run_existing_locked(store, run_id, preparation_path, manifest, *,
-                         evidence_dir=None, transport_factory=None, recovery_only=False):
+                         evidence_dir=None, transport_factory=None, recovery_only=False, max_attempts=1):
     row = store.one('SELECT * FROM runs WHERE id=?', (run_id,))
     if row is None:
         raise ValueError('Unknown frozen run')
@@ -77,7 +80,7 @@ def _run_existing_locked(store, run_id, preparation_path, manifest, *,
                     'resubmitted': False}
     elif recovery_only:
         return {'existing_attempt': None, 'resubmitted': False}
-    generator = PreparedDeepSeekGenerator(None, preparation_path, evidence_dir)
+    generator = PreparedDeepSeekGenerator(None, preparation_path, evidence_dir, max_attempts=max_attempts)
     generator._preparation(snapshot)
     workflow = Workflow(store, generation_adapter=generator, teaching_manifest=manifest)
     if input_fingerprint(workflow.app.context(row['turn_id'])) != input_fingerprint(snapshot):
@@ -101,19 +104,20 @@ def _run_existing_locked(store, run_id, preparation_path, manifest, *,
             result = generator.generate(snapshot)
             if not isinstance(result, dict):
                 raise TypeError('Generation adapter must return a result dict')
-    except Exception:
+    except Exception as exc:
         # An external action may have committed before an error surfaced.
+        reason = 'GENERATION_FAILED_CONFIRMED' if isinstance(exc, CompletedOutputFailure) else 'GENERATION_UNCERTAIN'
         with store.transaction():
-            store.execute("UPDATE runs SET state='REJECTED',error='GENERATION_UNCERTAIN',completed_at=? "
-                          "WHERE id=? AND state='RUNNING'", (now(), run_id))
+            store.execute("UPDATE runs SET state='REJECTED',error=?,completed_at=? "
+                          "WHERE id=? AND state='RUNNING'", (reason, now(), run_id))
             turn = store.one('SELECT message_id FROM turns WHERE id=?', (row['turn_id'],))
-            workflow._human(turn['message_id'], 'GENERATION_UNCERTAIN')
+            workflow._human(turn['message_id'], reason)
             store.execute("UPDATE questions SET status='REVIEW' WHERE id=?", (row['question_id'],))
             workflow._event('GENERATION_FINISHED', run=run_id,
-                            details={'state': 'REJECTED', 'reason': 'GENERATION_UNCERTAIN',
+                            details={'state': 'REJECTED', 'reason': reason,
                                      'adapter': identity, 'simulated': False})
         return {'answer_id': None, 'outbox_id': None, 'state': 'REJECTED',
-                'reason': 'GENERATION_UNCERTAIN'}
+                'reason': reason}
     return workflow.finish(run_id, result)
 
 
@@ -125,11 +129,14 @@ def main():
     target.add_argument('--run', help='Resume an existing frozen RUNNING run without creating another')
     parser.add_argument('--preparation', type=Path, required=True)
     parser.add_argument('--manifest', type=Path, required=True)
+    parser.add_argument('--max-generation-attempts', type=int, choices=(1, 2), default=1,
+                        help='Bounded completed-output retries; default submits once')
     args = parser.parse_args()
     # Avoid opening a second desktop server just to report a previously run turn.
     with closing(Store(args.database)) as store:
         if args.run:
-            print(json.dumps(run_existing(store, args.run, args.preparation, args.manifest),
+            print(json.dumps(run_existing(store, args.run, args.preparation, args.manifest,
+                                          max_attempts=args.max_generation_attempts),
                              ensure_ascii=False))
             return
         prior = store.one('SELECT id,state,error FROM runs WHERE turn_id=? ORDER BY rowid DESC LIMIT 1', (args.turn,))
@@ -139,7 +146,8 @@ def main():
         Workflow(store)._require_confirmed_ack(args.turn)
         with MCPProcess() as transport:
             generator = PreparedDeepSeekGenerator(transport, args.preparation,
-                                                  ROOT / 'data/private/mcp-generation')
+                                                  ROOT / 'data/private/mcp-generation',
+                                                  max_attempts=args.max_generation_attempts)
             workflow = Workflow(store, generation_adapter=generator, teaching_manifest=args.manifest)
             result = workflow.generate(args.turn)
             print(json.dumps(result, ensure_ascii=False))

@@ -54,13 +54,16 @@ class AutomaticAnswerRuntime:
                  if isinstance(config, (str, Path)) else deepcopy(config))
         value = {'enabled': False} if value is None else value
         if (not isinstance(value, dict) or type(value.get('enabled')) is not bool
-                or set(value) - {'enabled', 'display_index', 'new_chat_button', 'preparation_controls'}):
+                or set(value) - {'enabled', 'display_index', 'new_chat_button', 'preparation_controls', 'max_generation_attempts'}):
             raise ValueError('Explicit local automatic answer configuration required')
         self.enabled = value['enabled']
         self.database = Path(database)
         self.workspace = Path(__file__).resolve().parents[1]
         self.manifest, self.reference_config = manifest, reference_config
         self.config = value
+        self.max_generation_attempts = value.get('max_generation_attempts', 2)
+        if type(self.max_generation_attempts) is not int or not 1 <= self.max_generation_attempts <= 2:
+            raise ValueError('Generation attempts must be 1 or 2')
         self.transport_factory, self.navigator = transport_factory, navigator
         if navigator is not None and transport_factory is None:
             raise ValueError('Injected navigation requires a simulated transport')
@@ -311,7 +314,8 @@ class AutomaticAnswerRuntime:
             # connection without entering or closing its native process twice.
             from contextlib import nullcontext
             return run_existing(store, snapshot['run_id'], task['preparation_path'], task['manifest_path'],
-                evidence_dir=task['evidence_dir'], transport_factory=lambda: nullcontext(transport))
+                evidence_dir=task['evidence_dir'], transport_factory=lambda: nullcontext(transport),
+                max_attempts=self.max_generation_attempts)
 
     def _execute_ready(self, store, queued):
         from .reviewed_question_queue import advance, get, _phase

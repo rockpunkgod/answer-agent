@@ -316,6 +316,22 @@ class LiveGenerationBoundaryTests(unittest.TestCase):
         self.assertEqual(adapter.calls, 0)
         self.assertEqual(self.db.one("SELECT COUNT(*) FROM runs WHERE id=?", (run_id,))[0], 1)
 
+    def test_completed_output_failure_stays_manual_without_restart_replay(self):
+        from helpdesk.mcp_generation import CompletedOutputFailure
+        adapter = StubAdapter()
+        flow, verified = self.flow(adapter)
+        with patch("helpdesk.workflow.verify_bundle", return_value=verified), patch.object(
+                adapter, 'generate', side_effect=CompletedOutputFailure('SYNTHETIC invalid completed output')) as calls:
+            first = flow.generate(self.turn)
+            second = flow.generate(self.turn)
+        self.assertEqual((first['state'], first['reason']), ('REJECTED', 'GENERATION_FAILED_CONFIRMED'))
+        self.assertEqual(second['reason'], 'GENERATION_FAILED_CONFIRMED')
+        calls.assert_called_once()
+        self.assertEqual(self.db.one("SELECT COUNT(*) FROM human_tasks WHERE reason='GENERATION_FAILED_CONFIRMED'")[0], 1)
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM answers')[0], 0)
+        self.assertEqual(self.db.one("SELECT COUNT(*) FROM outbox WHERE purpose='ANSWER'")[0], 0)
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM performance_units')[0], 0)
+
     def test_default_mock_still_generates_simulated_answer(self):
         result = Workflow(self.db).generate(self.turn)
         self.assertEqual(result["state"], "GENERATED")

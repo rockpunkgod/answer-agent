@@ -1,12 +1,13 @@
 import copy
 from hashlib import sha256
 import json
+import re
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
 
-from helpdesk.mcp_generation import PreparedDeepSeekGenerator, input_fingerprint
+from helpdesk.mcp_generation import PreparedDeepSeekGenerator, CompletedOutputFailure, input_fingerprint
 from helpdesk.mcp_page_contract import PageUnconfirmed
 
 
@@ -45,6 +46,34 @@ class Transport:
                         '    ├── text "BEGIN_answer_run_1234567890123456"\n'
                         '    ├── text "{"option_label":"A","text":"同学，我们来分析一下。选A。"}"\n'
                         '    └── text "END_answer_run_1234567890123456"\n')
+
+
+class CompletedOutputs(Transport):
+    """Synthetic completed responses; retained history has distinct markers."""
+    def __init__(self, outputs, *, unknown_second=False):
+        super().__init__()
+        self.outputs, self.unknown_second = outputs, unknown_second
+        self.submissions, self.staged = [], False
+
+    def call(self, tool, arguments):
+        self.calls.append(tool)
+        if tool == 'Type':
+            self.prompt, self.staged = arguments['text'], True
+            return {}
+        if tool == 'Shortcut':
+            self.submissions.append(self.prompt)
+            self.staged = False
+            if self.unknown_second and len(self.submissions) == 2:
+                raise TimeoutError('SYNTHETIC second submission outcome unknown')
+            return {}
+        if self.staged:
+            return snapshot(f'    └── (100,200) 编辑 "给 DeepSeek 发送消息" [focused] [value:"{self.prompt}"]\n')
+        tree = '    ├── (100,200) 编辑 "给 DeepSeek 发送消息"\n'
+        for index, prompt in enumerate(self.submissions):
+            token = re.search(r'BEGIN_([A-Za-z0-9_]+)', prompt)[1]
+            tree += ('    ├── 按钮 "朗读"\n' + f'    ├── text "BEGIN_{token}"\n'
+                     + f'    ├── text "{self.outputs[index]}"\n' + f'    ├── text "END_{token}"\n')
+        return snapshot(tree)
 
 
 class PreparedGenerationTests(unittest.TestCase):
@@ -111,6 +140,76 @@ class PreparedGenerationTests(unittest.TestCase):
         record = json.loads((self.base/'runs/1234567890123456.json').read_text(encoding='utf-8'))
         self.assertEqual(record['status'], 'OUTCOME_REQUIRES_REVIEW')
         self.assertEqual(transport.calls.count('Shortcut'), 1)
+
+    def test_completed_malformed_output_retries_once_in_same_session(self):
+        transport = CompletedOutputs(['SYNTHETIC invalid JSON',
+            '{"option_label":"A","text":"同学，我们来分析一下。选A。"}'])
+        result = PreparedDeepSeekGenerator(transport, self.path, self.base/'runs').generate(self.context)
+        self.assertEqual(result['correct_option_id'], 'option-a')
+        self.assertEqual(result['session_id'], self.context['session_id'])
+        self.assertEqual(len(transport.submissions), 2)
+        self.assertIn('学生疑问：test', transport.submissions[1])
+        self.assertNotEqual(re.search(r'BEGIN_([A-Za-z0-9_]+)', transport.submissions[0])[1],
+                            re.search(r'BEGIN_([A-Za-z0-9_]+)', transport.submissions[1])[1])
+        record = json.loads(Path(result['web_session_evidence']).read_text(encoding='utf-8'))
+        self.assertEqual(record['status'], 'FINAL_OUTPUT_CAPTURED')
+        self.assertEqual(record['generation_attempt'], 2)
+        failed = record['failed_outputs'][0]
+        self.assertEqual(sha256(Path(failed['evidence']).read_bytes()).hexdigest(), failed['sha256'])
+        before = list(transport.calls)
+        with self.assertRaises(FileExistsError):
+            PreparedDeepSeekGenerator(transport, self.path, self.base/'runs').generate(self.context)
+        self.assertEqual(transport.calls, before)
+
+    def test_completed_failures_exhaust_budget_and_restart_never_resets_it(self):
+        transport = CompletedOutputs(['SYNTHETIC invalid JSON', '{"option_label":"E","text":"选E。"}'])
+        generator = PreparedDeepSeekGenerator(transport, self.path, self.base/'runs')
+        with self.assertRaises(CompletedOutputFailure):
+            generator.generate(self.context)
+        record = json.loads((self.base/'runs/1234567890123456.json').read_text(encoding='utf-8'))
+        self.assertEqual(record['status'], 'GENERATION_FAILED_CONFIRMED')
+        self.assertEqual(len(transport.submissions), 2)
+        self.assertEqual(len(record['failed_outputs']), 2)
+        with self.assertRaises(FileExistsError):
+            PreparedDeepSeekGenerator(transport, self.path, self.base/'runs').generate(self.context)
+        self.assertEqual(len(transport.submissions), 2)
+
+    def test_explicit_single_call_budget_does_not_add_an_unapproved_request(self):
+        transport = CompletedOutputs(['SYNTHETIC invalid JSON'])
+        with self.assertRaises(CompletedOutputFailure):
+            PreparedDeepSeekGenerator(transport, self.path, self.base/'runs', max_attempts=1).generate(self.context)
+        self.assertEqual(len(transport.submissions), 1)
+
+    def test_second_submission_unknown_stops_and_preserves_first_failure(self):
+        transport = CompletedOutputs(['SYNTHETIC invalid JSON', '{}'], unknown_second=True)
+        with self.assertRaises(TimeoutError):
+            PreparedDeepSeekGenerator(transport, self.path, self.base/'runs').generate(self.context)
+        record = json.loads((self.base/'runs/1234567890123456.json').read_text(encoding='utf-8'))
+        self.assertEqual(record['status'], 'OUTCOME_REQUIRES_REVIEW')
+        self.assertEqual(len(record['failed_outputs']), 1)
+        with self.assertRaises(FileExistsError):
+            PreparedDeepSeekGenerator(transport, self.path, self.base/'runs').generate(self.context)
+        self.assertEqual(len(transport.submissions), 2)
+
+    def test_teaching_file_changed_after_first_failure_blocks_second_submission(self):
+        course = Path(self.context['teaching_skills'][0]['path'])
+        class Changed(CompletedOutputs):
+            def call(self, tool, arguments):
+                result = super().call(tool, arguments)
+                if tool == 'Snapshot' and self.submissions and not self.staged:
+                    course.write_text('SYNTHETIC changed course file', encoding='utf-8')
+                return result
+        transport = Changed(['SYNTHETIC invalid JSON'])
+        with self.assertRaisesRegex(ValueError, 'Teaching file changed'):
+            PreparedDeepSeekGenerator(transport, self.path, self.base/'runs').generate(self.context)
+        self.assertEqual(len(transport.submissions), 1)
+
+    def test_invalid_generation_budget_rejected_before_desktop(self):
+        transport = Transport()
+        for maximum in (0, 3, True, 1.5, '2'):
+            with self.subTest(maximum=maximum), self.assertRaisesRegex(ValueError, 'attempts'):
+                PreparedDeepSeekGenerator(transport, self.path, self.base/'runs', max_attempts=maximum)
+        self.assertEqual(transport.calls, [])
 
     def test_truncated_final_tree_stops_without_accepting_visible_partial_or_resubmitting(self):
         class Truncated(Transport):

@@ -15,7 +15,7 @@
 | 5. Top2 | `reference_lookup.top_candidates`；`test_reference_lookup` | 本批确定性最多两项、同内容去重和真实候选 ID 通过 Mock；尚未交到真实 DeepSeek |
 | 6. 两次 DeepSeek | `question_matching.py`、`mcp_preparation.py`、`mcp_generation.py`、`automatic_answer_runtime.py`；两阶段/队列测试 | 授权真实专项已完成同一会话两次上传、提交和结构解析，草稿待复核；没有检索候选，未走生产队列。已补首次请求后认领真实链接、提交消息证据及截断保护的Unit/Mock；修补后的自动队列、完整正文采集及真实Top2路径仍未验收 |
 | 7. 会话及追问 | `workflow.py`、`session_isolation.py`、`followup_reuse.py`、`mcp_generation.delivery_context`；`test_question_session_isolation`、`test_mcp_followup_context`、`test_followup_reuse` | 普通追问沿用原核验与课程上传证据、同一会话仅上传本轮上下文已有 Mock；真实网页复用未验收 |
-| 8. Answer 安全重试 | `reviewed_question_queue.py`、`delivery_tasks.py`、`question_matching.begin_attempt`、`followup_reuse.begin_upload`；相关队列与两阶段测试 | 未知网页提交或追问上传不能改文件名重提；自动文字逐段重试已持久化，UNKNOWN不重发。原调用已确认的完整生成捕获可核验后回写；普通追问复用已接线，其他网页阶段恢复和真实验证仍缺 |
+| 8. Answer 安全重试 | `reviewed_question_queue.py`、`delivery_tasks.py`、`mcp_generation.py`、`question_matching.begin_attempt`、`followup_reuse.begin_upload`；相关队列与两阶段测试 | 第二阶段完整回复的格式失败可同会话有限重试，保留原调用和失败证据；未知网页提交或追问上传不能改文件名重提，UNKNOWN不重发。原调用已确认的完整生成捕获可核验后回写；教学疑点仍转人工，其他网页阶段恢复和真实验证仍缺 |
 | 9. 自动发送 | `workflow._validate`、`mcp_group_delivery.py`；`test_mcp_group_delivery`、`test_automatic_delivery_workbench` | 目标/版本/未知结果/接管防护已有 Mock，当前测试群真实自动发送未授权执行或验收 |
 | 10. 实际交付回流 | `delivery_batches.py`、`manual_delivery.py`、`workflow._record_check`；`test_delivery_batches`及原交付测试 | 一个完整稿对应一个Outbox分段计划；顺序核验、部分不计量、全部成功回流原绩效已接通Mock；真实多段发送未验证 |
 | 11. 中途更正 | `service.py`、`workflow.py`；`test_delivery_batches`及原版本测试 | 保留旧版本拦截；多段中途更正停止余段并保留已发事实通过Mock，真实更正链路未验收 |
@@ -184,6 +184,24 @@ REAL：本批没有追加DeepSeek请求、进行桌面操作、修改生产库�
 最终相关回归命令：`python -X utf8 -B -m unittest -v tests.test_automatic_answer_runtime tests.test_prepared_run_resume tests.test_prepared_generation_reconcile tests.test_reviewed_question_queue tests.test_mcp_generation tests.test_call_costs tests.test_mcp_page_contract tests.test_followup_reuse tests.test_ack_before_generation tests.test_question_matching`。136项全部通过、0失败、0跳过，819.459秒，退出码0；2026-10-03 05:28:37—05:42:17 UTC运行期间源码未变化，前后快照均为`sha256:404204a70a6e2d46dee9cda59ed6baaf4a47c7592f87ef1295941ce4ef19338d`。原始日志保存在忽略的`artifacts/verification/20261003-captured-generation-final/unittest.log`。范围是上述十个模块的UNIT/MOCK，不是全项目或真实闭环验收。既有两项符号链接和官方SDK文件SKIPPED未在本批复验，仍保持未验证，不计通过。
 
 REAL仅由Luna medium执行一次只读DisplayInventory和固定前台探针：当前显示器0为2560×1600、缩放1.5，前台是ChatGPT，因此没有截取或读取群消息、激活其他应用、输入或提交请求。官方MCP桥正常退出；原始证据留在忽略的data/private/windows-mcp。不能据此前台状态宣布群里没有消息，也不能证明持续消息入口或15分钟ACK时效。本批未追加DeepSeek测试、外发、登记真实交付、修改正式数据库或提交日报；此前网页专项的教学疑点仍保留，当前结论NOT_READY。
+
+### 后续实施：完整回复格式失败的有限重试（2026-10-03）
+
+基线为`ef03990969ffa96488c0ca5137b48a45f044222b`。本批修改`mcp_generation.py`、`automatic_answer_runtime.py`、`workflow.py`、`followup_reuse.py`、`tools/run_prepared_deepseek.py`、网页配置示例、四个相关测试文件、README及本进度文件。没有新增数据库表、迁移、消息通道或服务。再次只读核对ANSWER main、干净工作树和`b04ebc26d7fa096404111a0bb12f6c77cc8525b9`；未fetch或修改教学文件。
+
+仅同一真实会话、独立本次BEGIN/END标记、非截断完整页面并已完成的回复，出现JSON解析失败、空讲解或学生选项字母不成立时，才允许第二阶段再提交一次。运行器配置`max_generation_attempts`只接受1或2，默认2；手动生成命令默认1，可显式设置`--max-generation-attempts 2`。本轮已结束的一次核验加一次教学网页专项不能因该默认值而增加请求；此类专项显式保持1。提交未知、超时、截断、验证码、暂停、题目或课程变化均不进入此重试，教学检查疑点仍转人工。
+
+重试保留原run、Question和Session，不重复MATCH、检索、课程上传或ACK；第二次使用不同响应标记。第一次完整失败快照以排他创建的`<run>.failed-1.json`保留，原audit分别记录两次实际尝试，调用确认仅说明回复已经观察到，不等于教学通过或已交付。重启及普通追问复用第二次成稿时，核对最终捕获、第一次失败文件的原始字节哈希、两次调用确认和当前有效题面；错误历史证据不能被第二次成功覆盖。达到上限仍无效为`GENERATION_FAILED_CONFIRMED`，没有确认结果仍为`GENERATION_UNCERTAIN`，均不新增答疑完成或绩效。
+
+已用合成输入验证：一次格式失败后两次TEACH仍对应同一个run/会话，MATCH仅一次，重试调用计数为1、费用仍未知；同库重启只读回写原答案/Outbox，追问沿用原会话而不再检索，未发送草稿不进入实际交付历史。故意改写第一次失败证据时拒绝恢复，恢复原字节后方可继续。第一回复完成后通过现有`correct_material`登记合成更正，第二次提交被阻止，旧run保留STALE与失败快照。2项定向用例通过（83.771秒），固定源码未变化；这些不是实际学生消息、真实DeepSeek或正式绩效样本。
+
+初轮新增测试的错误预期将合法NEEDS_ATTENTION误写成EXECUTION_UNCERTAIN，已改为保留教学拒绝、单次调用和零交付断言；扩展重启测试误用已关闭的Store绑定，已重建原OperatorTasks句柄。同一次执行输出丢失且已无运行进程时，结果记为无法确认，使用独立日志再执行定向测试，不推断成功。另一次手动测试命令类名错误未运行目标测试；改为实际类名后1项通过（0.061秒）。没有削弱实现或删除保护断言来消除这些测试错误。
+
+首轮相关长回归观察到3个证据篡改子用例失败后停止，无完整测试总数，日志及中断记录保留在`artifacts/verification/20261003-completed-output-retry-final/`，不能记为通过。单独复现1项、3个失败子用例（18.037秒），确认新捕获校验正确拒绝了改写，但没有返回原追问接口的业务错误码。`followup_reuse._origin`恢复既有`REUSE_GENERATED_ANSWER_EVIDENCE_CHANGED`并保留异常原因，未修改原测试；定向复验1项通过（18.047秒）。
+
+最终相关回归命令：`python -X utf8 -B -m unittest -v -f tests.test_mcp_generation tests.test_prepared_run_resume tests.test_prepared_generation_reconcile tests.test_live_generation tests.test_workflow tests.test_call_costs tests.test_lesson_checks tests.test_followup_reuse tests.test_reviewed_question_queue tests.test_automatic_answer_runtime tests.test_ack_before_generation tests.test_delivery_tasks`。177项全部通过、0失败、0跳过，934.843秒，退出码0；2026-10-03 06:27:42—06:43:18 UTC运行期间源码未变化，前后快照均为`sha256:22f9d12f6d57b3c7ebb4e73648c8412dfd180ec53e2407f0dc69dadf0eb44f69`，配置示例哈希均为`778d62bbb66cba120c786803e50ff7dddb736b622d286dde96a529110b5f9094`。原始日志在忽略的`artifacts/verification/20261003-completed-output-retry-final-v2/unittest.log`，SHA256为`878e67407f2ef64b3e754ad62c826f3bdb9f11784c01b79b9befd2bcaa07ede5`。这是12个相关模块的UNIT/MOCK回归，不是全项目或真实环境通过；命令帮助及diff空白检查也通过。
+
+本批仅后台代码与UNIT/MOCK验证，没有新增真实网页请求、桌面操作、群发送、实际交付登记、生产配置修改、8767部署或正式日报提交。前述真实阅读稿的method_visibility疑点仍未解决；真实入口时效、Top2、自动队列和A–H/至少20任务试运行仍未验收，结论保持**NOT_READY**。既有SDK及两项符号链接SKIPPED仍未复验，不算通过。
 
 ## 本轮审计与最小改动
 

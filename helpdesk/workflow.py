@@ -486,16 +486,18 @@ class Workflow:
             result = self.generation_adapter.generate(snapshot)
             if not isinstance(result, dict):
                 raise TypeError("Generation adapter must return a result dict")
-        except Exception:
+        except Exception as exc:
             # The external call may have committed remotely. Never invoke it again on retry.
+            from .mcp_generation import CompletedOutputFailure
+            reason = 'GENERATION_FAILED_CONFIRMED' if isinstance(exc, CompletedOutputFailure) else 'GENERATION_UNCERTAIN'
             with self.db.transaction():
-                self.db.execute("UPDATE runs SET state='REJECTED',error='GENERATION_UNCERTAIN',completed_at=? WHERE id=?", (now(), rid))
+                self.db.execute("UPDATE runs SET state='REJECTED',error=?,completed_at=? WHERE id=?", (reason, now(), rid))
                 turn = self.db.one("SELECT message_id FROM turns WHERE id=?", (turn_id,))
-                self._human(turn["message_id"], "GENERATION_UNCERTAIN")
+                self._human(turn["message_id"], reason)
                 self.db.execute("UPDATE questions SET status='REVIEW' WHERE id=?", (snapshot["question_id"],))
-                self._event("GENERATION_FINISHED", run=rid, details={"state": "REJECTED", "reason": "GENERATION_UNCERTAIN",
+                self._event("GENERATION_FINISHED", run=rid, details={"state": "REJECTED", "reason": reason,
                     "adapter": snapshot["generation_adapter"], "simulated": snapshot["simulated"]})
-            return {"answer_id": None, "outbox_id": None, "state": "REJECTED", "reason": "GENERATION_UNCERTAIN"}
+            return {"answer_id": None, "outbox_id": None, "state": "REJECTED", "reason": reason}
         return self.finish(rid, result)
 
     def _bound(self, row):

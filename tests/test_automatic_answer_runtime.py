@@ -1,8 +1,9 @@
 """Anonymous synthetic page/queue tests; no model, account or real desktop."""
-from contextlib import nullcontext
+from contextlib import nullcontext, contextmanager
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
+import re
 from pathlib import Path
 from threading import Event
 import tempfile
@@ -140,6 +141,105 @@ class AutomaticAnswerTests(unittest.TestCase):
         self.assertEqual(self.db.one('SELECT COUNT(*) FROM answers')[0], 0)
         self.assertEqual(get(self.db, self.task['id'])['attempts'][-1]['state'], 'STARTED')
         return attempt
+
+    @contextmanager
+    def first_teaching_output_invalid(self, on_invalid=None):
+        original = self.desktop.call
+        submitted = []
+        def response(tool, arguments):
+            observed = original(tool, arguments)
+            if tool == 'Shortcut' and arguments.get('shortcut') == 'enter' and 'BEGIN_answer_run_' in self.desktop.prompt:
+                submitted.append(self.desktop.prompt)
+            if tool == 'Snapshot' and self.desktop.submitted and not self.desktop.picker and submitted:
+                tree = observed['content'][0]['text']
+                if len(submitted) == 1:
+                    tree = tree.replace('SYNTHETIC ANSWER。选A。', '')
+                    if on_invalid:
+                        on_invalid()
+                else:
+                    token = re.search(r'BEGIN_([A-Za-z0-9_]+)', submitted[-1])[1]
+                    base = 'answer_run_' + self.task['run_id']
+                    tree = tree.replace('text "BEGIN_' + base + '"', 'text "BEGIN_' + token + '"')
+                    tree = tree.replace('text "END_' + base + '"', 'text "END_' + token + '"')
+                observed['content'][0]['text'] = tree
+            return observed
+        with patch.object(self.desktop, 'call', side_effect=response):
+            yield submitted
+
+    def test_completed_output_retry_recovers_same_run_and_keeps_call_history(self):
+        with self.first_teaching_output_invalid() as submitted:
+            capture_path = self.capture_before_finish()
+        self.assertEqual(len(submitted), 2)
+        calls, navigation = len(self.desktop.calls), self.navigator.call_count
+        self.db.close()
+        self.db = Store(self.base / 'business.db')
+        self.addCleanup(self.db.close)
+        from helpdesk.operator_tasks import OperatorTasks
+        self.tasks = OperatorTasks(self.db)
+        # Altering a failed attempt is also evidence corruption; the final
+        # successful page cannot erase or replace the earlier call history.
+        failed_path = Path(json.loads(capture_path.read_bytes())['failed_outputs'][0]['evidence'])
+        saved_failure = failed_path.read_bytes()
+        failed_path.write_bytes(saved_failure + b' ')
+        self.assertEqual(advance(self.db, self.task['id'])['phase'], 'NEEDS_ATTENTION')
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM answers')[0], 0)
+        failed_path.write_bytes(saved_failure)
+        with patch('tools.run_prepared_deepseek.MCPProcess', side_effect=AssertionError('Recovery must not open desktop')):
+            self.assertEqual(advance(self.db, self.task['id'])['phase'], 'GENERATED')
+        self.assertEqual((len(self.desktop.calls), self.navigator.call_count), (calls, navigation))
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM runs')[0], 1)
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM answers')[0], 1)
+        self.assertEqual(self.db.one("SELECT COUNT(*) FROM outbox WHERE purpose='ANSWER'")[0], 1)
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM delivery_checks')[0], 0)
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM performance_units')[0], 0)
+        usage = task_cost(self.db, self.task['run_id'])
+        self.assertEqual((usage['call_attempts']['DEEPSEEK_MATCH'], usage['call_attempts']['DEEPSEEK_TEACH']), (1, 2))
+        self.assertEqual(usage['retry_calls'], 1)
+        self.assertIsNone(usage['total_cny'])
+        self.assertEqual(len(self.desktop.uploaded), len(set(self.desktop.uploaded)))
+        payload = self.tasks.get_draft(self.task['draft_id'])['payload'] | {'request_text': 'SYNTHETIC followup 为什么不选B？'}
+        draft = self.tasks.create_draft(payload, parent_task_id=self.task['id'], intent='FOLLOWUP')
+        follow = self.tasks.review(draft['id'], expected_revision=draft['revision'], reviewer='SYNTHETIC REVIEWER',
+                                  source_evidence='SYNTHETIC followup; no real student or delivery')
+        directory = self.base / follow['id']
+        follow = self.tasks.freeze(follow['id'], teaching_manifest=self.manifest,
+                                  preparation_path=directory / 'prepared.json', evidence_dir=directory / 'generation')
+        lookup = Mock(side_effect=AssertionError('A retry must not force a new search on followup'))
+        frozen = fixtures.matching.prepare_input(self.db, follow['run_id'], lookup)
+        self.assertEqual(frozen['followup_reuse']['origin_run_id'], self.task['run_id'])
+        self.assertEqual(frozen['session_id'], self.snapshot['session_id'])
+        self.assertIsNone(frozen['previous_sent_answer'])
+        lookup.run_for_question.assert_not_called()
+
+    def test_student_correction_after_invalid_response_blocks_retry_and_keeps_history(self):
+        from helpdesk.service import Helpdesk
+        material = self.db.one('SELECT material_id FROM questions WHERE id=?', (self.task['question_id'],))[0]
+        message = self.db.one('SELECT message_id FROM turns WHERE id=?', (self.task['turn_id'],))[0]
+        def correct():
+            Helpdesk(self.db).correct_material(material, message, 'SYNTHETIC corrected material',
+                                               'SYNTHETIC corrected material')
+        self.assertEqual(self.runtime.tick()['state'], 'READY_FOR_PREPARATION')
+        self.assertEqual(self.runtime.tick()['state'], 'ATTACHMENTS_READY')
+        with self.first_teaching_output_invalid(correct) as submitted:
+            self.assertEqual(self.runtime.tick()['state'], 'NEEDS_ATTENTION')
+        self.assertEqual(len(submitted), 1)
+        self.assertEqual(self.db.one('SELECT state FROM runs WHERE id=?', (self.task['run_id'],))[0], 'STALE')
+        self.assertTrue((Path(self.task['evidence_dir']) / (self.task['run_id'] + '.failed-1.json')).is_file())
+        self.assertEqual(task_cost(self.db, self.task['run_id'])['call_attempts']['DEEPSEEK_TEACH'], 1)
+        self.assertEqual(self.db.one("SELECT COUNT(*) FROM outbox WHERE purpose='ANSWER'")[0], 0)
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM performance_units')[0], 0)
+
+    def test_teaching_check_flags_do_not_trigger_automatic_regeneration(self):
+        self.assertEqual(self.runtime.tick()['state'], 'READY_FOR_PREPARATION')
+        self.assertEqual(self.runtime.tick()['state'], 'ATTACHMENTS_READY')
+        with patch('helpdesk.lesson_checks.check_lesson', return_value={'status': 'REVIEW_REQUIRED',
+              'source': 'SYNTHETIC teaching check flag, not an actual ANSWER result'}):
+            self.assertEqual(self.runtime.tick()['state'], 'NEEDS_ATTENTION')
+        run = self.db.one('SELECT state,error FROM runs WHERE id=?', (self.task['run_id'],))
+        self.assertEqual((run['state'], run['error']), ('REJECTED', 'ANSWER_DRAFT_CHECK_REQUIRES_REVIEW'))
+        self.assertEqual(task_cost(self.db, self.task['run_id'])['call_attempts']['DEEPSEEK_TEACH'], 1)
+        self.assertEqual(self.db.one("SELECT COUNT(*) FROM outbox WHERE purpose='ANSWER'")[0], 0)
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM performance_units')[0], 0)
 
     def test_captured_final_answer_recovers_after_restart_without_desktop_or_resubmit(self):
         self.capture_before_finish()
@@ -541,6 +641,14 @@ class AutomaticAnswerTests(unittest.TestCase):
 
 
 class AutomaticAnswerConfigurationTests(unittest.TestCase):
+    def test_invalid_retry_budget_rejected_without_creating_database(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / 'missing.db'
+            for maximum in (0, 3, True, '2'):
+                with self.subTest(maximum=maximum), self.assertRaisesRegex(ValueError, 'attempts'):
+                    AutomaticAnswerRuntime(path, {'enabled': False, 'max_generation_attempts': maximum})
+            self.assertFalse(path.exists())
+
     def test_disabled_runtime_never_creates_database_or_starts_connection(self):
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / 'missing.db'

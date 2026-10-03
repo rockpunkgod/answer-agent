@@ -11,7 +11,7 @@ from unittest.mock import patch, Mock
 
 from helpdesk.__main__ import demo_question
 from helpdesk.domain import Intent
-from helpdesk.mcp_generation import PreparedDeepSeekGenerator, input_fingerprint
+from helpdesk.mcp_generation import PreparedDeepSeekGenerator, CompletedOutputFailure, input_fingerprint
 from helpdesk.locking import resource_lock as real_resource_lock
 from helpdesk.service import Helpdesk, Incoming
 from helpdesk.storage import Store
@@ -162,6 +162,15 @@ class ResumeTests(unittest.TestCase):
                                         (self.run,))['state'], 'REJECTED')
         self.assertEqual(self.store.one('SELECT COUNT(*) FROM runs')[0], 1)
         generated.assert_called_once()
+        self.assertFalse(self.resume(lambda: self.fail('Desktop started'))['resubmitted'])
+
+    def test_known_completed_output_failure_keeps_distinct_reason_without_draft(self):
+        with patch.object(PreparedDeepSeekGenerator, 'generate', side_effect=CompletedOutputFailure('INVALID_COMPLETED_OUTPUT')):
+            result = self.resume()
+        self.assertEqual(result['reason'], 'GENERATION_FAILED_CONFIRMED')
+        self.assertEqual(self.store.one('SELECT error FROM runs WHERE id=?', (self.run,))[0], 'GENERATION_FAILED_CONFIRMED')
+        self.assertEqual(self.store.one('SELECT COUNT(*) FROM answers')[0], 0)
+        self.assertEqual(self.store.one('SELECT COUNT(*) FROM outbox WHERE run_id=?', (self.run,))[0], 0)
         self.assertFalse(self.resume(lambda: self.fail('Desktop started'))['resubmitted'])
 
     def test_concurrent_resume_is_busy_without_rejecting_active_run(self):

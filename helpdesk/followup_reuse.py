@@ -71,7 +71,8 @@ def _origin(store, snapshot, link):
              'REUSE_UPLOAD_EVIDENCE_CHANGED')
     path = Path(materials['preparation_path'])
     _require(sha256(path.read_bytes()).hexdigest() == materials['preparation_sha256'], 'REUSE_PREPARATION_CHANGED')
-    preparation, page = PreparedDeepSeekGenerator(None, path, path.parent)._preparation(origin)
+    generator = PreparedDeepSeekGenerator(None, path, Path(materials['generation_path']).parent)
+    preparation, page = generator._preparation(origin)
     _require(preparation.get('preparation_mode') == 'VERIFY_THEN_TEACH'
              and materials['session_url'] == page.url, 'REUSE_ORIGINAL_PREPARATION_REQUIRED')
     receipt = validate_receipt(store, origin, session_url=page.url)
@@ -80,15 +81,18 @@ def _origin(store, snapshot, link):
     _require(captured.get('status') == 'FINAL_OUTPUT_CAPTURED' and captured.get('run_id') == row['id']
              and captured.get('session_url') == page.url
              and captured.get('input_fingerprint') == input_fingerprint(origin), 'REUSE_GENERATION_EVIDENCE_UNCONFIRMED')
-    result = captured.get('result', {})
+    try:
+        result = generator._capture_result(store, origin, preparation, page)
+    except ValueError as exc:
+        # Keep the existing business reason while retaining the detailed cause.
+        raise ValueError('REUSE_GENERATED_ANSWER_EVIDENCE_CHANGED') from exc
     answer = store.one('''SELECT a.*,e.correct_option_id,e.complete,e.uploads_confirmed,e.simulated,e.session_id
         FROM answers a JOIN answer_evidence e ON e.answer_id=a.id WHERE e.run_id=?''', (row['id'],))
-    data = json.loads(page.completed_text(captured['final_snapshot'], 'answer_run_' + row['id']))
-    option = next((o for o in origin['student_question']['options'] if o['label'] == data.get('option_label')), None)
+    option = next((o for o in origin['student_question']['options'] if o['id'] == result['correct_option_id']), None)
     _require(answer is not None and answer['state'] in ('GENERATED', 'STALE') and answer['simulated'] == 0
              and answer['complete'] == 1 and answer['uploads_confirmed'] == 1 and option is not None
              and answer['session_id'] == origin['session_id'] and answer['correct_option_id'] == option['id']
-             and answer['text'] == data.get('text') == result.get('text')
+             and answer['text'] == result.get('text')
              and result.get('run_id') == row['id'] and result.get('session_id') == origin['session_id']
              and result.get('simulated') is False and result.get('complete') is True
              and result.get('uploads_confirmed') is True and result.get('adapter') == origin['generation_adapter']

@@ -2,6 +2,7 @@
   "enabled": false,
   "display_index": 0,
   "new_chat_button": "开启新对话",
+  "max_generation_attempts": 2,
   "preparation_controls": {
     "preparation_mode": "VERIFY_THEN_TEACH",
     "upload_button": "Upload files",
