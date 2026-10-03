@@ -34,6 +34,7 @@ class SyntheticDesktop(fixtures.TwoStageDesktop):
         self.root = root
         self.url = 'https://chat.deepseek.com/a/chat/s/old-fixture'
         self.blank_new, self.moved = blank_new, False
+        self.url_after_submit = None
         self.archive = root / 'data/private/windows-mcp'
         self.archive.mkdir(parents=True)
         self.screen = self.archive / 'SYNTHETIC-screen.png'
@@ -57,10 +58,14 @@ class SyntheticDesktop(fixtures.TwoStageDesktop):
                 self.url = 'https://chat.deepseek.com/' if self.blank_new else URL
             return {'is_error': False}
         result = super().call(tool, args)
+        if tool == 'Shortcut' and args.get('shortcut') == 'enter' and self.url_after_submit:
+            self.url = self.url_after_submit
         if tool == 'Snapshot':
             result['content'][0]['text'] = META + result['content'][0]['text'].replace(URL, self.url)
             if not self.picker:
                 result['content'][0]['text'] += '\n    └── (11,12) 按钮 "开启新对话"\n'
+                if self.submitted:
+                    result['content'][0]['text'] += '\n    └── 组 "' + self.prompt + '"\n'
                 if self.moved:
                     result['content'][0]['text'] = result['content'][0]['text'].replace('(11,12)', '(21,12)')
         return result
@@ -133,15 +138,156 @@ class AutomaticAnswerTests(unittest.TestCase):
         self.assertEqual(self.make_runtime().tick()['state'], 'IDLE')
         self.assertEqual(self.navigator.call_count, 1)
 
-    def test_blank_new_chat_never_claimed_or_submitted_or_clicked_twice(self):
+    def test_blank_root_without_url_after_first_request_is_not_claimed_or_resubmitted(self):
         self.desktop.blank_new = True
-        with patch('helpdesk.automatic_answer_runtime.time.sleep'):
+        with patch('helpdesk.mcp_preparation.time.sleep'):
             self.assertEqual(self.runtime.tick()['state'], 'EXECUTION_UNCERTAIN')
-        self.assertEqual(self.clicks(), [[11, 12]])
+        self.assertEqual(self.clicks().count([11, 12]), 1)
         self.assertEqual(self.db.one('SELECT COUNT(*) FROM deepseek_chats')[0], 0)
-        self.assertEqual(self.desktop.uploaded, [])
-        self.assertEqual(self.desktop.submission_uploads, [])
+        self.assertEqual(len(self.desktop.submission_uploads), 1)
+        self.assertFalse(any(name.endswith('.md') for name in self.desktop.uploaded))
         self.assertEqual(self.make_runtime().tick()['state'], 'IDLE')
+        self.assertEqual(len(self.desktop.submission_uploads), 1)
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM performance_units')[0], 0)
+
+    def test_first_real_request_creates_owned_url_and_restart_does_not_repeat_matching(self):
+        self.desktop.blank_new = True
+        self.desktop.url_after_submit = URL
+        self.assertEqual(self.runtime.tick()['state'], 'READY_FOR_PREPARATION')
+        self.assertEqual(self.db.one('SELECT session_url FROM deepseek_chats')[0], URL)
+        self.assertEqual(len(self.desktop.submission_uploads), 1)
+        self.assertFalse(any(name.endswith('.md') for name in self.desktop.submission_uploads[0]))
+        first = list(self.desktop.uploaded)
+        self.assertEqual(self.make_runtime().tick()['state'], 'GENERATED')
+        self.assertEqual(len(self.desktop.submission_uploads), 2)
+        self.assertEqual(self.desktop.uploaded, first)
+        self.assertEqual(self.clicks().count([11, 12]), 1)
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM runs')[0], 1)
+        self.assertEqual(self.db.one("SELECT state FROM outbox WHERE purpose='ANSWER'")[0], 'PENDING')
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM performance_units')[0], 0)
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM delivery_checks')[0], 0)
+        usage = task_cost(self.db, self.task['run_id'])
+        self.assertEqual((usage['call_attempts']['DEEPSEEK_MATCH'], usage['call_attempts']['DEEPSEEK_TEACH']), (1, 1))
+        self.assertEqual(usage['call_attempts']['SCHEDULER'], 3)
+        self.assertEqual(usage['retry_calls'], 0)
+
+    def test_first_root_submission_unknown_never_claims_chat_or_uploads_course(self):
+        self.desktop.blank_new, self.desktop.unknown = True, True
+        self.desktop.url_after_submit = URL
+        self.assertEqual(self.runtime.tick()['state'], 'EXECUTION_UNCERTAIN')
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM deepseek_chats')[0], 0)
+        self.assertEqual(len(self.desktop.submission_uploads), 1)
+        self.assertFalse(any(name.endswith('.md') for name in self.desktop.uploaded))
+        self.assertEqual(self.make_runtime().tick()['state'], 'IDLE')
+        self.assertEqual(len(self.desktop.submission_uploads), 1)
+
+    def test_blank_upload_requires_the_original_queue_creation_evidence(self):
+        from helpdesk.mcp_preparation import DeepSeekSessionPreparer
+        controls = dict(self.controls, display_index=0)
+        with self.assertRaisesRegex(ValueError, 'NEW_CHAT_OBSERVATION_REQUIRED'):
+            DeepSeekSessionPreparer(self.desktop, self.snapshot, None, self.path, controls,
+                                    store_path=self.db.path)
+        self.assertEqual(self.desktop.calls, [])
+
+    def test_unconfigured_search_stops_before_navigation_or_new_chat_click(self):
+        stored = json.loads(self.db.one('SELECT input_json FROM runs WHERE id=?', (self.task['run_id'],))[0])
+        stored.pop('question_match_input')
+        with self.db.transaction():
+            self.db.execute('UPDATE runs SET input_json=? WHERE id=?', (json.dumps(stored), self.task['run_id']))
+        self.assertEqual(self.runtime.tick()['state'], 'EXECUTION_UNCERTAIN')
+        self.navigator.assert_not_called()
+        self.assertEqual(self.clicks(), [])
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM deepseek_chats')[0], 0)
+
+    def test_unrelated_url_without_original_submitted_prompt_is_not_claimed(self):
+        self.desktop.blank_new, self.desktop.url_after_submit = True, URL
+        original = self.desktop.call
+        def unrelated(tool, args):
+            result = original(tool, args)
+            if tool == 'Snapshot' and self.desktop.submitted and not self.desktop.picker:
+                result['content'][0]['text'] = result['content'][0]['text'].replace(self.desktop.prompt, 'SYNTHETIC other request')
+            return result
+        with patch.object(self.desktop, 'call', side_effect=unrelated):
+            self.assertEqual(self.runtime.tick()['state'], 'EXECUTION_UNCERTAIN')
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM deepseek_chats')[0], 0)
+        self.assertFalse(any(name.endswith('.md') for name in self.desktop.uploaded))
+        self.assertEqual(len(self.desktop.submission_uploads), 1)
+
+    def test_changed_new_chat_evidence_stops_resume_before_generation_or_new_input(self):
+        self.desktop.blank_new, self.desktop.url_after_submit = True, URL
+        self.assertEqual(self.runtime.tick()['state'], 'READY_FOR_PREPARATION')
+        row = self.db.one("SELECT id,details FROM audit WHERE event='QUESTION_MATCH_CHAT_BOUND'")
+        details = json.loads(row['details'])
+        details['submitted_prompt_sha256'] = '0' * 64
+        with self.db.transaction():
+            self.db.execute('UPDATE audit SET details=? WHERE id=?', (json.dumps(details), row['id']))
+        calls = len(self.desktop.calls)
+        self.assertEqual(self.make_runtime().tick()['state'], 'NEEDS_ATTENTION')
+        self.assertEqual(len(self.desktop.calls), calls)
+        self.assertEqual(len(self.desktop.submission_uploads), 1)
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM answers')[0], 0)
+
+    def test_created_url_with_prompt_still_in_editor_is_not_claimed(self):
+        self.desktop.blank_new, self.desktop.url_after_submit = True, URL
+        original = self.desktop.call
+        def unsubmitted(tool, args):
+            result = original(tool, args)
+            if tool == 'Snapshot' and self.desktop.submitted and not self.desktop.picker:
+                tree = result['content'][0]['text']
+                tree = tree.replace('\n    └── 组 "' + self.desktop.prompt + '"\n', '')
+                result['content'][0]['text'] = tree.replace('编辑 "给 DeepSeek 发送消息"',
+                    '编辑 "给 DeepSeek 发送消息" [value:"' + self.desktop.prompt + '"]')
+            return result
+        with patch.object(self.desktop, 'call', side_effect=unsubmitted):
+            self.assertEqual(self.runtime.tick()['state'], 'EXECUTION_UNCERTAIN')
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM deepseek_chats')[0], 0)
+        self.assertEqual(len(self.desktop.submission_uploads), 1)
+        self.assertFalse(any(name.endswith('.md') for name in self.desktop.uploaded))
+        calls = len(self.desktop.calls)
+        self.assertEqual(self.make_runtime().tick()['state'], 'IDLE')
+        self.assertEqual(len(self.desktop.calls), calls)
+
+    def test_failed_binding_evidence_rolls_back_chat_ownership_and_never_replays(self):
+        self.desktop.blank_new, self.desktop.url_after_submit = True, URL
+        self.db.execute('''CREATE TRIGGER synthetic_binding_failure BEFORE INSERT ON audit
+            WHEN NEW.event='QUESTION_MATCH_CHAT_BOUND'
+            BEGIN SELECT RAISE(ABORT, 'SYNTHETIC binding write failure'); END''')
+        self.assertEqual(self.runtime.tick()['state'], 'EXECUTION_UNCERTAIN')
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM deepseek_chats')[0], 0)
+        self.assertEqual(self.db.one("SELECT COUNT(*) FROM audit WHERE event='QUESTION_MATCH_CHAT_BOUND'")[0], 0)
+        self.assertEqual(self.db.one("SELECT COUNT(*) FROM audit WHERE event='QUESTION_MATCH_ATTEMPT_STARTED'")[0], 1)
+        self.assertEqual(len(self.desktop.submission_uploads), 1)
+        self.assertFalse(any(name.endswith('.md') for name in self.desktop.uploaded))
+        calls = len(self.desktop.calls)
+        self.assertEqual(self.make_runtime().tick()['state'], 'IDLE')
+        self.assertEqual(len(self.desktop.calls), calls)
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM performance_units')[0], 0)
+
+    def test_owned_chat_without_binding_evidence_stops_before_resume_navigation(self):
+        self.desktop.blank_new, self.desktop.url_after_submit = True, URL
+        self.assertEqual(self.runtime.tick()['state'], 'READY_FOR_PREPARATION')
+        self.db.execute("DELETE FROM audit WHERE event='QUESTION_MATCH_CHAT_BOUND'")
+        calls = len(self.desktop.calls)
+        self.assertEqual(self.make_runtime().tick()['state'], 'NEEDS_ATTENTION')
+        self.assertEqual(len(self.desktop.calls), calls)
+        self.assertEqual(self.navigator.call_count, 2)
+        self.assertEqual(len(self.desktop.submission_uploads), 1)
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM answers')[0], 0)
+
+    def test_changed_binding_observation_with_unsent_prompt_stops_resume(self):
+        self.desktop.blank_new, self.desktop.url_after_submit = True, URL
+        self.assertEqual(self.runtime.tick()['state'], 'READY_FOR_PREPARATION')
+        row = self.db.one("SELECT id,details FROM audit WHERE event='QUESTION_MATCH_CHAT_BOUND'")
+        details = json.loads(row['details'])
+        tree = details['observation']['content'][0]['text']
+        details['observation']['content'][0]['text'] = tree.replace('编辑 "给 DeepSeek 发送消息"',
+            '编辑 "给 DeepSeek 发送消息" [value:"' + details['submitted_prompt'] + '"]')
+        self.db.execute('UPDATE audit SET details=? WHERE id=?', (json.dumps(details), row['id']))
+        calls = len(self.desktop.calls)
+        self.assertEqual(self.make_runtime().tick()['state'], 'NEEDS_ATTENTION')
+        self.assertEqual(len(self.desktop.calls), calls)
+        self.assertEqual(len(self.desktop.submission_uploads), 1)
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM answers')[0], 0)
 
     def test_wrong_foreground_does_not_call_luna(self):
         original = self.desktop.call

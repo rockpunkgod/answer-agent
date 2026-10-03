@@ -10,7 +10,7 @@ import json
 from pathlib import Path
 import time
 
-from .mcp_page_contract import DeepSeekPage, PageUnconfirmed
+from .mcp_page_contract import DeepSeekPage, PageUnconfirmed, require_complete_tree
 from .teaching_bundle import verify_frozen_teaching
 
 
@@ -363,6 +363,7 @@ class PreparedDeepSeekGenerator:
                 # Wrong foreground/session is an immediate pause; an incomplete
                 # response is only observed again, never re-submitted.
                 page.inspect(observed)
+                require_complete_tree(observed)
                 try:
                     answer = page.completed_text(observed, token)
                 except PageUnconfirmed:

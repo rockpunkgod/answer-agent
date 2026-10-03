@@ -10,8 +10,18 @@ from .storage import Store, now
 
 
 def claim_deepseek_chat(snapshot, session_url, *, store_path=None, reserve=True):
-    """Reserve before any upload/submit; keep ownership even after failures."""
+    """Keep ownership even after failures; None only checks an unbound session.
+
+    Before the first request creates a webpage URL, reserve=False still checks
+    the original student/question owner and refuses an already-owned chat.
+    """
     path = store_path or snapshot.get('session_store_path')
+    if session_url is None:
+        if reserve or path is None:
+            raise ValueError('EXACT_DEEPSEEK_CHAT_URL_REQUIRED')
+    else:
+        from .mcp_page_contract import DeepSeekPage
+        DeepSeekPage(session_url)
     if path is None:
         return  # Pure offline page fixtures have no workflow database.
     store = Store(path)

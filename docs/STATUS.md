@@ -13,7 +13,7 @@
 | 3. Ack 时效 | `delivery_tasks.py`、`automatic_delivery_runtime.py`、`automatic_answer_runtime.py`、`message_sla.py`；相关发送/等待/时延测试 | 发送层及后台执行循环已分离并持久化，可选详细队列已接线。状态接口已按有证据的source_sent_at及完整真实回执计时，包含采集等待，迟到成功仍标超时；匿名边界通过，真实端到端15分钟未验收 |
 | 4. 检索备用 | `reference_lookup.py`、`reference_fetch.py`；`test_reference_lookup`、`test_reference_fetch` | 已补有界备用调度；默认检索和网络访问关闭，示例选择 Brave，实际 Provider、凭据和来源准入仍未验证；网页专项不把未配置记为无搜索结果 |
 | 5. Top2 | `reference_lookup.top_candidates`；`test_reference_lookup` | 本批确定性最多两项、同内容去重和真实候选 ID 通过 Mock；尚未交到真实 DeepSeek |
-| 6. 两次 DeepSeek | `question_matching.py`、`mcp_preparation.py`、`mcp_generation.py`、`automatic_answer_runtime.py`；两阶段/队列测试 | 已接准备/生成及可选本机队列回调。授权真实专项已完成同一会话两次上传、提交和结构解析，草稿待复核；本次没有检索候选，未走生产队列。自动新会话链接取得、完整正文采集及真实 Top2 路径仍未验收 |
+| 6. 两次 DeepSeek | `question_matching.py`、`mcp_preparation.py`、`mcp_generation.py`、`automatic_answer_runtime.py`；两阶段/队列测试 | 授权真实专项已完成同一会话两次上传、提交和结构解析，草稿待复核；没有检索候选，未走生产队列。已补首次请求后认领真实链接、提交消息证据及截断保护的Unit/Mock；修补后的自动队列、完整正文采集及真实Top2路径仍未验收 |
 | 7. 会话及追问 | `workflow.py`、`session_isolation.py`、`followup_reuse.py`、`mcp_generation.delivery_context`；`test_question_session_isolation`、`test_mcp_followup_context`、`test_followup_reuse` | 普通追问沿用原核验与课程上传证据、同一会话仅上传本轮上下文已有 Mock；真实网页复用未验收 |
 | 8. Answer 安全重试 | `reviewed_question_queue.py`、`delivery_tasks.py`、`question_matching.begin_attempt`、`followup_reuse.begin_upload`；相关队列与两阶段测试 | 未知网页提交或追问上传不能改文件名重提；自动文字逐段重试已持久化，UNKNOWN不重发。普通追问复用已接线，完整网页阶段恢复仍缺 |
 | 9. 自动发送 | `workflow._validate`、`mcp_group_delivery.py`；`test_mcp_group_delivery`、`test_automatic_delivery_workbench` | 目标/版本/未知结果/接管防护已有 Mock，当前测试群真实自动发送未授权执行或验收 |
@@ -146,6 +146,30 @@
 REAL 为上述网页上传、两次提交、完整结果取回、固定来源及原脚本 SOURCE/DRAFT 检查；DRAFT 的一项疑点保留待复核。执行命令为专项 `capture_pilot.py --stage MATCH`、`capture_pilot.py --stage TEACH`（均需已绑定网址及原生 URL/回复记录），以及只读 `python -X utf8 -B -m tools.report_task_costs --db <专项库> --run <本轮run>`；结构捕获命令均返回 0，DRAFT 子检查返回 1。没有重跑 UNIT/MOCK 全套；此前官方 SDK 文件与两项符号链接 SKIPPED 未复验，仍不算通过。准备时的中文损坏和回传未确认均记录并处理，不计为通过。
 
 所有原图、数据库、网页会话链接、工具快照和专项脚本在 Git 忽略的 data/private 内。生产库、启动配置与发送白名单未改；当前仍为 NOT_READY。这是一条受控的网页生成练习，不代替生产收题、ACK、审核交付、追问、绩效与稳定试运行验收。
+
+### 后续实施：首次请求后的会话绑定与页面截断保护（2026-10-03）
+
+业务修改基线为 `7fe5a45e1e6987a3ffaa9101dfa3ecd2c3f3f2a9`。本批只修复上述真实网页练习暴露的自动入口缺口，未新增生产渠道、数据库结构或独立服务。ANSWER仍为 `b04ebc26d7fa096404111a0bb12f6c77cc8525b9`；本地工作树干净，未fetch、更新或修改教学内容。
+
+`automatic_answer_runtime.py`、`mcp_preparation.py`保留原持久化队列：在新建网页前核对业务归属并完成有界检索。空白主页仅限当前Luna创建尝试，上传学生原图和核验输入后提交一次正式MATCH，再最多观察三次真实会话链接；不提交占位请求，也不自动重提未知请求。普通追问仍走原会话复用。不同导航动作分别记录调用身份，修复同一创建步骤中定位新会话与定位输入框误用同一成本尝试ID的问题，模拟调用不声明实际费用。
+
+`question_matching.py`、`session_isolation.py`、`mcp_page_contract.py`在认领链接前检查原始学生/题目归属、当前版本、唯一真实网址、已发消息中的完整原prompt及唯一空输入框。仅有网址、prompt仍在编辑器或观察不完整时停止。会话URL归属与绑定审计使用同一个原Store事务，写入失败一起回滚；恢复时复用相同证据检查。`reviewed_question_queue.py`遇到有网址而缺少首次提交绑定证据的记录，直接转NEEDS_ATTENTION，不定位输入框或重新上传。生成稿仍由原run/Outbox处理，未实际交付不完成任务、不计绩效。
+
+`mcp_transport.py`、`tools/windows_mcp_session.py`通过已安装Windows-MCP支持的环境参数将默认树预算从500设为4000，允许当前进程配置500—10000，保留工具超时且不修改上游安装文件。准备、输入、生成结果与会话绑定发现截断标记均停止；增加上限本身不证明真实完整正文采集成功。
+
+相关模拟专项：`python -X utf8 -B -m unittest tests.test_mcp_page_contract`为9项通过；五项新会话定向回归为5项通过（105.974秒），覆盖prompt未发出、绑定证据写入失败完整回滚、孤立URL停止、恢复证据被改，以及一题两次调用并在重启后不重复入账。Luna medium只读静态复核确认所发现的两处缺口已修复；未把该复核当作运行测试。
+
+只读比对既有真实快照还发现原生消息节点与属性之间使用两个空格，已兼容这种格式并补匿名节点测试，没有改变完整消息和空输入框要求。旧真实快照仍含截断标记，不删除标记或冒充完整记录。第一轮126项运行返回OK，但期间代码变化，只保留为初步结果；第二轮因这个格式修补主动中断，没有完整测试结果，不能计为通过。最终验证使用修补后保持固定的源码。
+
+最终相关回归实际执行如下命令：
+
+```powershell
+python -X utf8 -B -m unittest -v tests.test_automatic_answer_runtime tests.test_question_matching tests.test_question_session_isolation tests.test_reviewed_question_queue tests.test_mcp_preparation tests.test_mcp_preparation_review tests.test_mcp_generation tests.test_mcp_page_contract tests.test_mcp_transport tests.test_windows_mcp_audit tests.test_followup_reuse
+```
+
+结果为132项全部通过、0失败、0跳过，718.519秒，退出码0。运行时间为2026-10-03 04:57:41—05:09:40 UTC，开始与结束源码均为 `sha256:a3f70753fa61d329b92ba6f29db8726abe3df70a1408b63f54e2da780bcd717c`，期间未变化。日志保存在忽略的 `artifacts/verification/20261003-new-chat-page-final-v3/unittest.log`。这是上述11个模块的UNIT/MOCK相关回归，不是全项目回归或真实环境通过；既有符号链接和SDK文件SKIPPED本批未复验，仍不算通过。
+
+REAL：本批没有追加DeepSeek请求、进行桌面操作、修改生产库、部署8767或启用外发。前述授权网页专项保留真实证据与DRAFT_REVIEW_REQUIRED限制；这次自动入口修补仍为UNIT/MOCK，不替代真实队列、首次应答SLA、实际Top2及A–H/20任务试运行。当前仍为NOT_READY。
 
 ## 本轮审计与最小改动
 
@@ -443,7 +467,7 @@ ANSWER仍为干净固定提交`57159d7a8b03a0743225ed27f3f1e6128bbcd45d`，客�
 - 本机登记人工实际交付及多部分结果，回到原任务与原计量台账；不依赖重新生成AI草稿，缺归属时明确待核对。
 - 完整讲解展示和复制，三栏日报及明细导出；绩效检查实际交付资格，已提交报表不静默覆盖。
 - 本机已验证屏幕2的企业微信标题栏激活、原题文字复制与原生图片保存；一题历史练习已通过真实 DeepSeek 网页上传原教学文件和生成完整讲解。练习没有向群发送，也没有增加绩效。
-- 已登录的本机 Codex 可进行 Luna medium 有限导航定位；输出只是控件位置建议，程序仍核验新鲜的窗口身份、物理坐标和目录。此连接未接入持续观察及业务队列。
+- 已登录的本机 Codex 可进行 Luna medium 有限导航定位；输出只是控件位置建议，程序仍核验新鲜的窗口身份、物理坐标和目录。可选网页执行已接入原业务队列并通过Mock，持续观察及修补后的真实队列仍待验证。
 
 ## 尚未贯通
 
@@ -464,7 +488,7 @@ ANSWER仍为干净固定提交`57159d7a8b03a0743225ed27f3f1e6128bbcd45d`，客�
 
 测试范围为匿名数据、模拟适配器、本地HTTP、PowerShell入口和无界面浏览器；没有实际企业微信发送、实时新题完整答疑、付费Provider调用或正式日报提交。原始测试日志和源码校验结果保留在本机发布副本的忽略目录中。
 
-真实原图已从客户端保存并校验为原生 JPEG；题面识别清楚，但完整原始提问时间仍待补证据。此前真实 DeepSeek 历史练习使用已核对的文本，不能声称它已使用这份后来取得的图片。
+早期真实原图已从客户端保存并校验为原生 JPEG；题面识别清楚，但完整原始提问时间仍待补证据。该早期DeepSeek历史练习使用已核对文本，不能声称它使用了后来取得的图片；2026-10-03获准原图上传的专项另见上文，不补造原始时间或交付。
 
 ## 暂缓扩建
 

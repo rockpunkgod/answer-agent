@@ -7,7 +7,7 @@ import time
 import unittest
 from unittest.mock import patch
 
-from helpdesk.mcp_transport import MCPCallError, MCPProcess, MCPTimeout, MCPTransportError, runtime_home, RUNTIME_HOME_ENV
+from helpdesk.mcp_transport import MCPCallError, MCPProcess, MCPTimeout, MCPTransportError, runtime_home, RUNTIME_HOME_ENV, tree_capture_limit, TREE_LIMIT_ENV
 
 
 FAKE = r'''import json, sys, time
@@ -37,6 +37,14 @@ for line in sys.stdin:
 
 
 class MCPTransportTests(unittest.TestCase):
+    def test_tree_budget_is_finite_and_invalid_or_unlimited_values_fail_closed(self):
+        self.assertEqual(tree_capture_limit(environ={}), 4000)
+        for value in ('500', '8000', '10000'):
+            self.assertEqual(tree_capture_limit(environ={TREE_LIMIT_ENV: value}), int(value))
+        for value in ('0', '499', '10001', '-1', '', ' 500 ', '1.5', 'unlimited', '５００', None, '9' * 10000):
+            with self.subTest(value=str(value)[:20]), self.assertRaisesRegex(MCPTransportError, 'TREE_LIMIT_INVALID'):
+                tree_capture_limit(environ={TREE_LIMIT_ENV: value})
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.root = Path(self.tmp.name)

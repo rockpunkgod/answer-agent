@@ -328,6 +328,11 @@ def _authoritative_result(store, task_id, *, recover_attempts=True):
     if owned:
         _require(not queue['session_url'] or queue['session_url'] == owned[0], 'QUEUE_CHAT_CHANGED')
         claim_deepseek_chat(snapshot, owned[0], reserve=False)
+        starts = store.all("SELECT details FROM audit WHERE run_id=? AND event='QUESTION_MATCH_ATTEMPT_STARTED'",
+                           (snapshot['run_id'],))
+        if starts and json.loads(starts[0][0]).get('session_url') is None:
+            from .question_matching import _attempt
+            _attempt(store, snapshot, json.loads(starts[0][0])['proof_path'], owned[0])
         _phase(store, task_id, 'READY_FOR_PREPARATION', session_url=owned[0])
     elif queue['session_url']:
         raise ValueError('QUEUE_CHAT_OWNERSHIP_MISSING')
@@ -406,8 +411,10 @@ def advance(store, task_id, *, executor=None, session_creator=None, preparer=Non
             result = callback(**arguments)
             if stage == 'SESSION_CREATION':
                 _require(isinstance(result, str), 'EXACT_CREATED_CHAT_URL_REQUIRED')
-                _source_review(store, task_id)
-                claim_deepseek_chat(snapshot, result)
+                # A blank webpage may acquire its real URL during the first
+                # matching request. Recheck the now-persisted frozen context.
+                _, current_snapshot, _ = _source_review(store, task_id)
+                claim_deepseek_chat(current_snapshot, result)
                 _phase(store, task_id, 'READY_FOR_PREPARATION', session_url=result)
             elif stage == 'PREPARATION':
                 preparation = complete_automatic_preparation(store, task_id, queue['candidate_path'])

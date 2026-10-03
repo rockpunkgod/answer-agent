@@ -49,6 +49,24 @@ class QuestionSessionsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'DEEPSEEK_CHAT_ALREADY_OWNED'):
             claim_deepseek_chat(b, URL)
 
+    def test_pending_webpage_checks_business_owner_without_reserving_a_root_url(self):
+        a = self.start(self.first())
+        claim_deepseek_chat(a, None, reserve=False)
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM deepseek_chats')[0], 0)
+        for url in (None, 'https://chat.deepseek.com/'):
+            with self.subTest(url=url), self.assertRaises(ValueError):
+                claim_deepseek_chat(a, url)
+        self.db.execute('DELETE FROM session_owners WHERE session_id=?', (a['session_id'],))
+        with self.assertRaisesRegex(ValueError, 'SESSION_OWNERSHIP_MISSING'):
+            claim_deepseek_chat(a, None, reserve=False)
+
+    def test_existing_chat_cannot_be_treated_as_unbound_for_another_first_request(self):
+        a = self.start(self.first())
+        claim_deepseek_chat(a, URL)
+        with self.assertRaisesRegex(ValueError, 'DEEPSEEK_SESSION_URL_CHANGED'):
+            claim_deepseek_chat(a, None, reserve=False)
+        self.assertEqual(self.db.one('SELECT session_url FROM deepseek_chats')[0], URL)
+
     def test_two_students_cannot_reuse_browser_chat_after_restart(self):
         a = self.start(self.first())
         other = self.app.bind('group', 'member2', '同名学生', verified=True)

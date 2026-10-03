@@ -36,6 +36,12 @@ def snapshot_text(record: dict, *, tool='Snapshot') -> str:
     return '\n'.join(parts)
 
 
+def require_complete_tree(record: dict):
+    # A captured marker does not prove uniqueness if later nodes were omitted.
+    if '[truncated: reached ' in snapshot_text(record):
+        raise PageUnconfirmed('PAGE_TREE_TRUNCATED')
+
+
 @dataclass(frozen=True)
 class DeepSeekPage:
     url: str
@@ -94,15 +100,20 @@ class DeepSeekPage:
         first_window = re.search(r'window "([^\n]+)"', tree)
         if not first_window or not re.search(r'Microsoft\u200b? Edge', first_window[1]):
             raise PageUnconfirmed('WRONG_FOREGROUND_APPLICATION')
-        urls = re.findall(r'文档 .*?\[value:"(https://chat\.deepseek\.com/[^"\n]+)"\]', tree)
+        urls = re.findall(r'文档 .*?\[value:"(https://chat\.deepseek\.com/[^"\n]*)"\]', tree)
         if urls != [self.url]:
             raise PageUnconfirmed('CONVERSATION_MISMATCH')
+        controls = re.findall(r'(?:按钮|编辑) "([^"\n]+)"', tree)
+        if any(name in ('登录', '登录 / 注册', '登录/注册', 'Sign in', 'Log in')
+               or re.search(r'验证码|安全验证|captcha', name, re.I) for name in controls):
+            raise PageUnconfirmed('LOGIN_OR_VERIFICATION_REQUIRED')
         return tree
 
     def stage_action(self, record: dict, prompt: str) -> dict:
         if not prompt.strip() or '\n' in prompt or '\r' in prompt:
             raise ValueError('Only a nonempty single-line prompt can be staged')
         tree = self.inspect(record)
+        require_complete_tree(record)
         editors = re.findall(r'\((-?\d+),(-?\d+)\) 编辑 "给 DeepSeek 发送消息"([^\n]*)', tree)
         if len(editors) != 1 or '[value:' in editors[0][2]:
             raise PageUnconfirmed('EDITOR_NOT_EMPTY_OR_AMBIGUOUS')
@@ -113,6 +124,7 @@ class DeepSeekPage:
 
     def submit_action(self, record: dict, prompt: str) -> dict:
         tree = self.inspect(record)
+        require_complete_tree(record)
         editors = re.findall(r'编辑 "给 DeepSeek 发送消息"([^\n]*)', tree)
         if (len(editors) != 1 or '[focused]' not in editors[0]
                 or f'[value:"{prompt}"]' not in editors[0]):
@@ -124,6 +136,24 @@ class DeepSeekPage:
             self.checked_point(snapshot_text(record), points[0])
         return {'tool': 'Shortcut', 'arguments': {'shortcut': 'enter'}}
 
+    def require_submitted_prompt(self, record: dict, prompt: str):
+        """Read-only proof of the sent message; an editor value is not proof.
+
+        Generation may still be in progress. Binding only needs the original
+        request in a message node and one cleared composer on the exact page.
+        """
+        tree = self.inspect(record)
+        require_complete_tree(record)
+        editors = re.findall(r'编辑 "给 DeepSeek 发送消息"([^\n]*)', tree)
+        if len(editors) != 1 or '[value:' in editors[0]:
+            raise PageUnconfirmed('SUBMITTED_PROMPT_EDITOR_NOT_EMPTY_OR_AMBIGUOUS')
+        if not isinstance(prompt, str) or not prompt.strip() or '\n' in prompt or '\r' in prompt:
+            raise PageUnconfirmed('SUBMITTED_PROMPT_NOT_VISIBLE')
+        message = (r'^[ \t│├└─]*(?:\(-?\d+,-?\d+\) )?(?:组|text) "'
+                   + re.escape(prompt) + r'"(?:[ \t]+\[[^\r\n]*\])?[ \t]*$')
+        if not re.search(message, tree, re.M):
+            raise PageUnconfirmed('SUBMITTED_PROMPT_NOT_VISIBLE')
+
     def expand_pasted_text_action(self, record: dict) -> dict:
         """Restore DeepSeek's long-paste attachment to its empty composer.
 
@@ -131,6 +161,7 @@ class DeepSeekPage:
         prompt again before requesting submit_action.
         """
         tree = self.inspect(record)
+        require_complete_tree(record)
         editors = re.findall(r'编辑 "给 DeepSeek 发送消息"([^\n]*)', tree)
         buttons = re.findall(r'\((-?\d+),(-?\d+)\) 按钮 "粘贴原文至输入框"[^\n]*', tree)
         if (len(editors) != 1 or '[value:' in editors[0] or '[focused]' not in editors[0]
@@ -152,6 +183,7 @@ class DeepSeekPage:
         if not re.fullmatch(r'[a-zA-Z0-9_]{12,80}', token):
             raise ValueError('Invalid run-specific response token')
         tree = self.inspect(record)
+        require_complete_tree(record)
         if '正在思考' in tree or '按钮 "朗读"' not in tree:
             raise PageUnconfirmed('OUTPUT_NOT_COMPLETE')
         nodes = re.findall(r'^[ \t│├└─]*text "(.*)"\s*$', tree, re.M)
@@ -173,3 +205,22 @@ class DeepSeekPage:
         if not answer:
             raise PageUnconfirmed('EMPTY_RESPONSE')
         return answer
+
+
+class DeepSeekNewChatPage(DeepSeekPage):
+    """A blank root page before its first real MATCH request creates a URL.
+
+    This is never a stored chat identity. Only the queue's durable new-chat
+    observation may enable it; final results still require DeepSeekPage.
+    """
+    def __post_init__(self):
+        if (self.url != 'https://chat.deepseek.com/' or type(self.display_index) is not int
+                or self.display_index < 0):
+            raise ValueError('An explicitly scoped blank DeepSeek page is required')
+
+    def inspect(self, record: dict) -> str:
+        tree = super().inspect(record)
+        require_complete_tree(record)
+        if '按钮 "朗读"' in tree or '正在思考' in tree or re.search(r'text "(?:BEGIN|END)_', tree):
+            raise PageUnconfirmed('NEW_CHAT_NOT_BLANK')
+        return tree

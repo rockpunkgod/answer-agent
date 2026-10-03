@@ -16,6 +16,18 @@ _MAX_LINE = 1024 * 1024
 GUARDED_INPUTS = frozenset({'Click', 'Type', 'Shortcut', 'Scroll', 'Move'})
 _INPUT_PROCESSES = frozenset({'WXWork', 'msedge'})
 RUNTIME_HOME_ENV = 'HELPDESK_WINDOWS_MCP_HOME'
+TREE_LIMIT_ENV = 'HELPDESK_WINDOWS_MCP_MAX_TREE_ELEMENTS'
+
+
+def tree_capture_limit(*, environ=None):
+    """Bound the installed MCP's tree budget without changing upstream files."""
+    raw = (os.environ if environ is None else environ).get(TREE_LIMIT_ENV, '4000')
+    if not isinstance(raw, str) or len(raw) > 5 or not raw.isascii() or not raw.isdecimal():
+        raise MCPTransportError('MCP_TREE_LIMIT_INVALID')
+    value = int(raw)
+    if not 500 <= value <= 10000:
+        raise MCPTransportError('MCP_TREE_LIMIT_INVALID')
+    return value
 
 
 def runtime_home(root=ROOT, *, environ=None):

@@ -14,7 +14,7 @@ import time
 from PIL import Image
 
 from .mcp_generation import delivery_context, input_fingerprint, requires_question_text
-from .mcp_page_contract import DeepSeekPage, PageUnconfirmed, snapshot_text
+from .mcp_page_contract import DeepSeekPage, DeepSeekNewChatPage, PageUnconfirmed, snapshot_text, require_complete_tree
 from .teaching_bundle import verify_frozen_teaching
 
 
@@ -155,11 +155,14 @@ class DeepSeekSessionPreparer:
         self.transport = transport
         self.store_path = store_path
         self.snapshot = snapshot
-        self.page = DeepSeekPage(session_url, display_index=controls.get('display_index'))
+        self.binding_pending = session_url is None
+        page_type = DeepSeekNewChatPage if self.binding_pending else DeepSeekPage
+        self.page = page_type(session_url or 'https://chat.deepseek.com/', display_index=controls.get('display_index'))
         if isinstance(transport, MCPProcess) and self.page.display_index is None:
             raise ValueError('Explicit display_index is required for real desktop preparation')
         from .session_isolation import claim_deepseek_chat
-        claim_deepseek_chat(snapshot, self.page.url, store_path=store_path)
+        if not self.binding_pending:
+            claim_deepseek_chat(snapshot, self.page.url, store_path=store_path)
         self.evidence_path = Path(evidence_path)
         self.controls = controls
         self.preparation_mode = controls.get('preparation_mode', 'STRICT_READBACK')
@@ -167,12 +170,18 @@ class DeepSeekSessionPreparer:
             raise ValueError('Unsupported preparation_mode')
         if manifest.get('format_version') == 3 and self.preparation_mode != 'VERIFY_THEN_TEACH':
             raise ValueError('ANSWER_REQUIRES_VERIFY_THEN_TEACH')
+        if self.binding_pending and (self.preparation_mode != 'VERIFY_THEN_TEACH'
+                or snapshot.get('intent') == 'FOLLOWUP' or snapshot.get('followup_reuse')):
+            raise ValueError('NEW_CHAT_REQUIRES_FIRST_QUESTION_MATCH')
         if self.preparation_mode == 'VERIFY_THEN_TEACH':
             from .question_matching import prepare_text, validate_input
             from .storage import Store
             store = Store(Path(store_path or snapshot['session_store_path']).resolve(strict=True))
             try:
                 validate_input(store, snapshot)
+                if self.binding_pending:
+                    from .question_matching import validate_new_chat_start
+                    validate_new_chat_start(store, snapshot)
             finally:
                 store.close()
             if snapshot.get('followup_reuse'):
@@ -240,7 +249,7 @@ class DeepSeekSessionPreparer:
                         or not re.fullmatch(r'[0-9a-f]{64}', str(region['sha256']))):
                     raise ValueError('Invalid visual picker region')
         self.record = {
-            'status': 'UPLOAD_NOT_STARTED', 'session_url': self.page.url,
+            'status': 'UPLOAD_NOT_STARTED', 'session_url': None if self.binding_pending else self.page.url,
             'display_index': self.page.display_index,
             'run_id': snapshot['run_id'], 'input_fingerprint': input_fingerprint(snapshot),
             'uploaded_teaching_hashes': {x['path']: x['sha256'] for x in self.files if x['kind'] == 'course'},
@@ -299,6 +308,7 @@ class DeepSeekSessionPreparer:
         if vision:
             arguments['use_annotation'] = False
         result = self._call('Snapshot', arguments)
+        require_complete_tree(result)
         tree = self.page.inspect(result) if page else snapshot_text(result)
         if not page:
             self.page.display_region(tree)
@@ -599,6 +609,8 @@ class DeepSeekSessionPreparer:
                            matching_prompt_sha256=sha256(prompt.encode('utf-8')).hexdigest())
         self._save()
         self._call(submit['tool'], submit['arguments'], intent='submit question verification once')
+        if self.binding_pending:
+            self._bind_submitted_chat(prompt)
         deadline = time.monotonic() + self.timeout
         while time.monotonic() < deadline:
             observed, _ = self._snap()
@@ -632,6 +644,33 @@ class DeepSeekSessionPreparer:
             return
         raise PreparationUnconfirmed('Question verification not complete before deadline')
 
+    def _bind_submitted_chat(self, prompt):
+        """Only observe the first real request; never send a placeholder/retry."""
+        from .question_matching import bind_new_chat
+        from .storage import Store
+        for index in range(3):
+            observed = self._call('Snapshot', self.page.observation_arguments())
+            text = snapshot_text(observed)
+            require_complete_tree(observed)
+            urls = re.findall(r'文档 .*?\[value:"(https://chat\.deepseek\.com/[^"\n]*)"\]', text)
+            if urls == ['https://chat.deepseek.com/']:
+                # Read-only waiting may see a submitted message on the root.
+                # It does not authorize any more input on that page.
+                DeepSeekPage.inspect(self.page, observed)
+                if index < 2:
+                    time.sleep(self.poll_interval)
+                continue
+            store = Store(Path(self.store_path or self.snapshot['session_store_path']).resolve(strict=True))
+            try:
+                page = bind_new_chat(store, self.snapshot, observed, prompt, self.page.display_index)
+            finally:
+                store.close()
+            self.page, self.binding_pending = page, False
+            self.record.update(session_url=page.url, first_request_binding_snapshot=observed)
+            self._save()
+            return
+        raise PreparationUnconfirmed('NEW_CHAT_EXACT_URL_UNCONFIRMED_AFTER_SUBMISSION')
+
     def run(self):
         self.evidence_path.parent.mkdir(parents=True, exist_ok=True)
         with self.evidence_path.open('x', encoding='utf-8') as stream:
@@ -639,7 +678,8 @@ class DeepSeekSessionPreparer:
         try:
             # Recheck every byte before the first desktop observation/mutation.
             from .session_isolation import claim_deepseek_chat
-            claim_deepseek_chat(self.snapshot, self.page.url, store_path=self.store_path, reserve=False)
+            if not self.binding_pending:
+                claim_deepseek_chat(self.snapshot, self.page.url, store_path=self.store_path, reserve=False)
             if self.preparation_mode == 'VERIFY_THEN_TEACH':
                 from .question_matching import begin_attempt
                 from .storage import Store
@@ -649,7 +689,8 @@ class DeepSeekSessionPreparer:
                         from .followup_reuse import begin_upload
                         begin_upload(store, self.snapshot, self.evidence_path, self.page.url)
                     else:
-                        begin_attempt(store, self.snapshot, self.evidence_path, self.page.url)
+                        begin_attempt(store, self.snapshot, self.evidence_path,
+                                      None if self.binding_pending else self.page.url)
                 finally:
                     store.close()
             text = next((x['path'] for x in self.files if x['kind'] == 'question_text'), None)

@@ -24,7 +24,7 @@ from helpdesk.mcp_window_probe import (FOREGROUND_COMMAND, parse_foreground_proc
                                        parse_wecom_window_location, verify_wecom_switch_snapshot,
                                        wecom_window_command)
 from helpdesk.windows_worker_probe import DESKTOP_STATUS_COMMAND, parse_desktop_status
-from helpdesk.mcp_transport import runtime_home
+from helpdesk.mcp_transport import runtime_home, tree_capture_limit
 
 ALLOWED = {"Screenshot", "Snapshot", "Click", "Type", "Scroll", "Move", "Shortcut", "Wait", "WaitFor", "DisplayInventory", "App", "Clipboard", "PowerShell"}
 SCREEN2_ACTIVATE = 'ActivateEdgeOnScreen2'  # Local entry; native operation is Click.
@@ -179,7 +179,8 @@ async def main():
         command=str(runtime_home(ROOT) / 'Scripts/windows-mcp.exe'),
         args=["serve", "--transport", "stdio", "--tools", ",".join(sorted(ALLOWED))],
         cwd=str(ROOT), env={"ANONYMIZED_TELEMETRY": "false", "POSTHOG_API_KEY": "",
-                            "WINDOWS_MCP_SCREENSHOT_BACKEND": "pillow"},
+                            "WINDOWS_MCP_SCREENSHOT_BACKEND": "pillow",
+                            "WINDOWS_MCP_MAX_TREE_ELEMENTS": str(tree_capture_limit())},
         log_file=private / "server.log")
     async with Client(transport) as client:
         print(json.dumps({"ready": True, "transport": "stdio", "server": "Windows-MCP"}), flush=True)

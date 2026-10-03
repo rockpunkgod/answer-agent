@@ -7,6 +7,7 @@ import unittest
 from unittest.mock import patch
 
 from helpdesk.mcp_generation import PreparedDeepSeekGenerator, input_fingerprint
+from helpdesk.mcp_page_contract import PageUnconfirmed
 
 
 URL = 'https://chat.deepseek.com/a/chat/s/prepared-test'
@@ -109,6 +110,25 @@ class PreparedGenerationTests(unittest.TestCase):
             generator.generate(self.context)
         record = json.loads((self.base/'runs/1234567890123456.json').read_text(encoding='utf-8'))
         self.assertEqual(record['status'], 'OUTCOME_REQUIRES_REVIEW')
+        self.assertEqual(transport.calls.count('Shortcut'), 1)
+
+    def test_truncated_final_tree_stops_without_accepting_visible_partial_or_resubmitting(self):
+        class Truncated(Transport):
+            def call(self, tool, arguments):
+                result = super().call(tool, arguments)
+                if tool == 'Snapshot' and 'Shortcut' in self.calls:
+                    result['content'][0]['text'] += '\n... [truncated: reached the 4000-element capture limit — some elements were not visited.]'
+                return result
+        transport = Truncated()
+        generator = PreparedDeepSeekGenerator(transport, self.path, self.base/'runs', timeout=1, poll_interval=0)
+        with self.assertRaisesRegex(PageUnconfirmed, 'PAGE_TREE_TRUNCATED'):
+            generator.generate(self.context)
+        record = json.loads((self.base/'runs/1234567890123456.json').read_text(encoding='utf-8'))
+        self.assertEqual(record['status'], 'OUTCOME_REQUIRES_REVIEW')
+        self.assertNotIn('result', record)
+        self.assertEqual(transport.calls.count('Snapshot'), 3)
+        with self.assertRaises(FileExistsError):
+            generator.generate(self.context)
         self.assertEqual(transport.calls.count('Shortcut'), 1)
 
     def test_review_feedback_keeps_original_question_context(self):

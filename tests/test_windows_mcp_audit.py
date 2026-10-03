@@ -10,6 +10,7 @@ from types import ModuleType, SimpleNamespace
 import unittest
 from unittest.mock import patch
 from tests.test_mcp_window_probe import result as foreground_result
+from helpdesk.mcp_transport import TREE_LIMIT_ENV
 
 
 class WindowsMcpAuditTests(unittest.TestCase):
@@ -45,7 +46,10 @@ class WindowsMcpAuditTests(unittest.TestCase):
             fake = ModuleType('fastmcp')
             fake.Client = Client
             transport = ModuleType('fastmcp.client.transports')
-            transport.StdioTransport = lambda **kwargs: kwargs
+            def configured_transport(**kwargs):
+                self.last_transport_env = kwargs['env']
+                return kwargs
+            transport.StdioTransport = configured_transport
             with patch.dict(sys.modules, {'fastmcp': fake, 'fastmcp.client': ModuleType('fastmcp.client'),
                                           'fastmcp.client.transports': transport}):
                 source = Path(__file__).resolve().parents[1] / 'tools/windows_mcp_session.py'
@@ -69,6 +73,11 @@ class WindowsMcpAuditTests(unittest.TestCase):
 
     def test_timeout_retains_uncertain_intent_without_retry(self):
         self.assertEqual(self.exercise(TimeoutError('unknown outcome'))['status'], 'OUTCOME_UNCONFIRMED')
+
+    def test_tree_limit_reaches_the_native_server_environment(self):
+        with patch.dict('os.environ', {TREE_LIMIT_ENV: '6000'}):
+            self.exercise(False, json.dumps({'tool': 'Clipboard', 'arguments': {'mode': 'get'}}))
+        self.assertEqual(self.last_transport_env['WINDOWS_MCP_MAX_TREE_ELEMENTS'], '6000')
 
     def test_multiline_chat_input_rejected_before_any_mcp_call(self):
         request = json.dumps({'tool': 'Type', 'arguments': {'loc': [1, 2], 'text': 'part1\npart2'}})

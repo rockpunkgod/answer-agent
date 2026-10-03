@@ -174,6 +174,32 @@ def validate_result(snapshot, result):
             'comparison': asdict(comparison), 'model_result': result}
 
 
+def validate_new_chat_start(store, snapshot, *, active=True):
+    """A blank page is usable only inside this run's one durable Luna attempt."""
+    from .mcp_page_contract import DeepSeekNewChatPage
+    if active:
+        _current(store, snapshot)
+        from .session_isolation import claim_deepseek_chat
+        claim_deepseek_chat(snapshot, None, store_path=store.path, reserve=False)
+    rows = store.all("SELECT details FROM audit WHERE run_id=? AND event='LUNA_NEW_CHAT_OBSERVED'",
+                     (snapshot['run_id'],))
+    _require(len(rows) == 1, 'NEW_CHAT_OBSERVATION_REQUIRED')
+    details = json.loads(rows[0][0])
+    _require(details.get('state') == 'BLANK_AWAITING_FIRST_REQUEST'
+             and details.get('binding') == _binding(snapshot), 'NEW_CHAT_BINDING_CHANGED')
+    page = DeepSeekNewChatPage('https://chat.deepseek.com/', details.get('display_index'))
+    page.stage_action(details['observation'], 'probe')
+    attempt = store.one('''SELECT a.state FROM reviewed_question_attempts a
+        JOIN reviewed_question_queue q ON q.task_id=a.task_id
+        WHERE a.id=? AND a.stage='SESSION_CREATION' AND a.executor='LUNA' AND q.run_id=?''',
+        (details.get('attempt_id'), snapshot['run_id']))
+    _require(attempt is not None and (not active or attempt[0] == 'STARTED'), 'NEW_CHAT_ATTEMPT_REQUIRED')
+    if active:
+        _require(not store.one('SELECT session_url FROM deepseek_chats WHERE session_id=?',
+                               (snapshot['session_id'],)), 'NEW_CHAT_SESSION_ALREADY_BOUND')
+    return details
+
+
 def begin_attempt(store, snapshot, preparation_path, session_url):
     """Commit before the first upload. A new filename cannot bypass UNKNOWN."""
     preparation_path = Path(preparation_path).resolve()
@@ -183,10 +209,50 @@ def begin_attempt(store, snapshot, preparation_path, session_url):
     with store.transaction():
         _current(store, snapshot)
         validate_input(store, snapshot)
+        if session_url is None:
+            details['new_chat_start_sha256'] = sha256(encode(
+                validate_new_chat_start(store, snapshot)).encode('utf-8')).hexdigest()
         _require(not store.one("SELECT id FROM audit WHERE run_id=? AND event='QUESTION_MATCH_ATTEMPT_STARTED'",
                                (snapshot['run_id'],)), 'MATCH_ATTEMPT_REQUIRES_REVIEW')
         store.execute('INSERT INTO audit(run_id,event,details,created_at) VALUES(?,?,?,?)',
                       (snapshot['run_id'], 'QUESTION_MATCH_ATTEMPT_STARTED', encode(details), now()))
+
+
+def bind_new_chat(store, snapshot, observed, prompt, display_index):
+    """Claim the real URL after the already-submitted MATCH request is visible."""
+    import re
+    from .mcp_page_contract import DeepSeekPage, snapshot_text
+    from .session_isolation import claim_deepseek_chat
+    urls = re.findall(r'文档 .*?\[value:"(https://chat\.deepseek\.com/[^"\n]*)"\]', snapshot_text(observed))
+    _require(len(urls) == 1, 'NEW_CHAT_URL_NOT_UNIQUE')
+    page = DeepSeekPage(urls[0], display_index)
+    page.require_submitted_prompt(observed, prompt)
+    _require('BEGIN_match_run_' + snapshot['run_id'] in prompt,
+             'NEW_CHAT_SUBMISSION_NOT_VISIBLE')
+    details = {'binding': _binding(snapshot), 'session_url': page.url, 'display_index': display_index,
+               'observation': observed, 'submitted_prompt': prompt,
+               'submitted_prompt_sha256': sha256(prompt.encode('utf-8')).hexdigest()}
+    with store.transaction():
+        _current(store, snapshot)
+        validate_input(store, snapshot)
+        start = validate_new_chat_start(store, snapshot)
+        rows = store.all("SELECT details FROM audit WHERE run_id=? AND event='QUESTION_MATCH_ATTEMPT_STARTED'",
+                         (snapshot['run_id'],))
+        _require(len(rows) == 1, 'NEW_CHAT_MATCH_ATTEMPT_REQUIRED')
+        saved = json.loads(rows[0][0])
+        _require(saved.get('session_url') is None and saved.get('binding') == _binding(snapshot)
+                 and saved.get('new_chat_start_sha256') == sha256(encode(start).encode('utf-8')).hexdigest(),
+                 'NEW_CHAT_MATCH_ATTEMPT_REQUIRED')
+        _require(not store.one("SELECT id FROM audit WHERE run_id=? AND event='QUESTION_MATCH_CHAT_BOUND'",
+                               (snapshot['run_id'],)), 'NEW_CHAT_ALREADY_BOUND')
+        # Reuse ownership/reference checks without a second write transaction.
+        # The BEGIN IMMEDIATE lock keeps the claim and its evidence atomic.
+        claim_deepseek_chat(snapshot, page.url, store_path=store.path, reserve=False)
+        store.execute('INSERT INTO deepseek_chats VALUES(?,?,?,?)',
+                      (page.url, snapshot['session_id'], snapshot['run_id'], now()))
+        store.execute('INSERT INTO audit(run_id,event,details,created_at) VALUES(?,?,?,?)',
+                      (snapshot['run_id'], 'QUESTION_MATCH_CHAT_BOUND', encode(details), now()))
+    return page
 
 
 def _attempt(store, snapshot, proof_path, session_url):
@@ -194,7 +260,25 @@ def _attempt(store, snapshot, proof_path, session_url):
                      (snapshot['run_id'],))
     _require(len(rows) == 1, 'MATCH_ATTEMPT_EVIDENCE_MISSING')
     saved = json.loads(rows[0][0])
-    _require(saved.get('binding') == _binding(snapshot) and saved.get('session_url') == session_url
+    bound_url = saved.get('session_url')
+    if bound_url is None:
+        from .mcp_page_contract import DeepSeekPage
+        start = validate_new_chat_start(store, snapshot, active=False)
+        _require(saved.get('new_chat_start_sha256') == sha256(encode(start).encode('utf-8')).hexdigest(),
+                 'NEW_CHAT_START_EVIDENCE_CHANGED')
+        bound = store.all("SELECT details FROM audit WHERE run_id=? AND event='QUESTION_MATCH_CHAT_BOUND'",
+                          (snapshot['run_id'],))
+        _require(len(bound) == 1, 'NEW_CHAT_BOUND_EVIDENCE_MISSING')
+        details = json.loads(bound[0][0])
+        _require(details.get('binding') == _binding(snapshot), 'NEW_CHAT_BINDING_CHANGED')
+        page = DeepSeekPage(details['session_url'], details.get('display_index'))
+        prompt = details.get('submitted_prompt')
+        _require(isinstance(prompt, str) and 'BEGIN_match_run_' + snapshot['run_id'] in prompt
+                 and details.get('submitted_prompt_sha256') == sha256(prompt.encode('utf-8')).hexdigest(),
+                 'NEW_CHAT_SUBMISSION_EVIDENCE_CHANGED')
+        page.require_submitted_prompt(details['observation'], prompt)
+        bound_url = page.url
+    _require(saved.get('binding') == _binding(snapshot) and bound_url == session_url
              and saved.get('proof_path') == str(Path(proof_path).resolve()), 'MATCH_ATTEMPT_EVIDENCE_CHANGED')
 
 

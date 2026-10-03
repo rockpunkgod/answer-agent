@@ -16,7 +16,7 @@ from types import SimpleNamespace
 from . import luna_navigation
 from .call_costs import RunMeter
 from .locking import resource_lock
-from .mcp_page_contract import DeepSeekPage, PageUnconfirmed, snapshot_text
+from .mcp_page_contract import DeepSeekPage, DeepSeekNewChatPage, PageUnconfirmed, snapshot_text, require_complete_tree
 from .mcp_transport import MCPProcess
 from .storage import Store, encode, now
 
@@ -148,6 +148,7 @@ class AutomaticAnswerRuntime:
 
     def _page(self, observed, *, expected_url=None):
         text = snapshot_text(observed)
+        require_complete_tree(observed)
         tree = text.split('UI Tree:', 1)
         if len(tree) != 2:
             raise PageUnconfirmed('NO_ACTIVE_TREE')
@@ -159,12 +160,13 @@ class AutomaticAnswerRuntime:
         if any(name in ('登录', '登录 / 注册', '登录/注册', 'Sign in', 'Log in')
                or re.search(r'验证码|安全验证|captcha', name, re.I) for name in controls):
             raise PageUnconfirmed('LOGIN_OR_VERIFICATION_REQUIRED')
-        # The root is observable only for locating New chat, never for upload,
-        # matching, generation or claiming a business session.
+        # The root is not a chat identity. Only the same durable creation
+        # attempt can upload and submit its first real MATCH on a blank root.
         url = urls[0]
-        if url == 'https://chat.deepseek.com/' and expected_url is None:
+        if url == 'https://chat.deepseek.com/' and expected_url in (None, url):
             page = None
             self._region(text)
+            DeepSeekNewChatPage(url, self.config['display_index']).stage_action(observed, 'probe')
         else:
             page = DeepSeekPage(url, self.config['display_index'])
             page.inspect(observed)
@@ -209,7 +211,8 @@ class AutomaticAnswerRuntime:
             raise RuntimeError('LUNA_CODEX_NOT_INSTALLED')
         action = 'DEEPSEEK_NEW_CHAT' if new_chat else 'DEEPSEEK_COMPOSER'
         meter = RunMeter(store.path, snapshot['run_id'], injected=self.simulation)
-        call = meter.start('SCHEDULER', luna_navigation.MODEL, action, attempt_id)
+        navigation_key = attempt_id + ':' + action
+        call = meter.start('SCHEDULER', luna_navigation.MODEL, navigation_key, navigation_key)
         try:
             proposal = (self.navigator or luna_navigation.suggest)(record_path,
                 'Locate only the visible DeepSeek ' + role + ' named "' + name + '". '
@@ -240,12 +243,27 @@ class AutomaticAnswerRuntime:
 
     def _session(self, *, store, task, snapshot, attempt_id):
         self._course(task)
+        from .session_isolation import claim_deepseek_chat
+        claim_deepseek_chat(snapshot, None, store_path=store.path, reserve=False)
+        snapshot = self._matching_input(store, snapshot)
         with self._connection() as transport:
             previous = self._locate_and_click(transport, store, snapshot, attempt_id, new_chat=True)
             for index in range(3):
                 self.require_running()
                 observed = self._observe(transport)
                 _, url, _ = self._page(observed)
+                if url == 'https://chat.deepseek.com/':
+                    from .question_matching import _binding
+                    with store.transaction():
+                        store.execute('INSERT INTO audit(run_id,event,details,created_at) VALUES(?,?,?,?)',
+                            (snapshot['run_id'], 'LUNA_NEW_CHAT_OBSERVED', encode({
+                                'attempt_id': attempt_id, 'state': 'BLANK_AWAITING_FIRST_REQUEST',
+                                'binding': _binding(snapshot), 'display_index': self.config['display_index'],
+                                'observation': observed, 'simulation': self.simulation}), now()))
+                    queue = store.one('SELECT candidate_path FROM reviewed_question_queue WHERE task_id=?', (task['id'],))
+                    result = self._prepare(store=store, task=task, snapshot=snapshot, attempt_id=attempt_id,
+                                           session_url=None, candidate_path=Path(queue[0]))
+                    return result['session_url']
                 if url != previous and url != 'https://chat.deepseek.com/':
                     DeepSeekPage(url, self.config['display_index']).stage_action(observed, 'probe')
                     if store.one('SELECT session_id FROM deepseek_chats WHERE session_url=?', (url,)):
@@ -258,20 +276,24 @@ class AutomaticAnswerRuntime:
                     return url
                 if index < 2:
                     time.sleep(1)
-        # No synthetic UUID and no first prompt just to manufacture a URL.
+        # No synthetic UUID or placeholder prompt to manufacture a URL.
         raise PageUnconfirmed('NEW_CHAT_EXACT_URL_UNCONFIRMED')
+
+    def _matching_input(self, store, snapshot):
+        from .question_matching import prepare_input
+        from .reference_lookup import LookupConfig, ReferenceLookup
+        lookup = None if snapshot.get('intent') == 'FOLLOWUP' else ReferenceLookup(LookupConfig.load(
+            self.reference_config or self.workspace / 'config/reference-lookup.example.toml'))
+        return prepare_input(store, snapshot['run_id'], lookup)
 
     def _prepare(self, *, store, task, snapshot, attempt_id, session_url, candidate_path):
         self._course(task)
-        from .question_matching import prepare_input
-        from .reference_lookup import LookupConfig, ReferenceLookup
         from .mcp_preparation import DeepSeekSessionPreparer
-        lookup = None if snapshot.get('intent') == 'FOLLOWUP' else ReferenceLookup(LookupConfig.load(
-            self.reference_config or self.workspace / 'config/reference-lookup.example.toml'))
-        snapshot = prepare_input(store, snapshot['run_id'], lookup)
+        snapshot = self._matching_input(store, snapshot)
         controls = dict(self.config['preparation_controls'], display_index=self.config['display_index'])
         with self._connection() as transport:
-            self._locate_and_click(transport, store, snapshot, attempt_id, expected_url=session_url)
+            self._locate_and_click(transport, store, snapshot, attempt_id,
+                                   expected_url=session_url or 'https://chat.deepseek.com/')
             return DeepSeekSessionPreparer(transport, snapshot, session_url, candidate_path,
                                            controls, store_path=store.path).run()
 
