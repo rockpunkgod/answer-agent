@@ -229,6 +229,10 @@ REAL仅为无界面本机OS实验：本轮自己创建的安静Python测试进�
 
 该REAL元数据验证于UTC 07:13:57—07:14:02完成，当前封装文件前后SHA256为`fb01e70c4ec5a46df918fde999079d6230b5d65236f97c38eef7e2d7029ce650`。原始清单、显示器返回、进程身份与失败记录在忽略的`data/private/verification/windows-mcp-metadata/run-20261003T070856Z-4a7ebe00b24e4b81bc9f9427f689f1fb/`，不上传Git。仅连接及清单契约升级为REAL VERIFIED；没有追加DeepSeek请求、群发送、实际交付或正式计量。此前真实草稿疑点与网页自动队列、入口SLA、Top2及完整试运行仍未验收，结论**NOT_READY**。
 
+随后尝试只读回访已有DeepSeek测试会话：UTC 07:20:21—07:20:30的单一连接仅调用DisplayInventory、固定DesktopStatus及Foreground探针。当时桌面已解锁且为本地会话，前台为ChatGPT、Edge窗口数为0，因此没有Snapshot、App切换或页面读取。主Agent离线复核原记录及7个进程已退出，无pending，封装与原生程序哈希未变化。证据在忽略的`data/private/verification/deepseek-readonly-20261003/run-20261003T073000Z/`；目录标签不作为观测时间。该记录只能证明当时桌面状态，已过新鲜度期限，不能用于后续操作准入；已有会话与4000元素完整页面验证保持UNVERIFIED。
+
+改用工具连接之外独立打开Edge时，`exec_command`在创建PowerShell进程阶段被自动审批拒绝，原始原因仅为`blocked by policy`。拟执行命令包含写入启动助手，助手内容包含固定Start-Process；没有证据表明这些步骤执行。主Agent随后确认目标助手不存在、Edge进程仍为0。没有改写或隐藏命令绕过拦截；已请求本人从Windows打开Edge并恢复测试会话。再次两阶段生成的确认问题仍未回复，不能将只读回访当成新请求授权。本次没有业务代码、生产库、配置、群发送或正式绩效变更，结论仍为**NOT_READY**。
+
 ## 本轮审计与最小改动
 
 业务检出目录为 `E:\作业帮\tmp\answer-agent-publish-20261001`，审计起点为 `main / 126747e1fed4a70c78c6fca46f802dfa9f8984c1`，远端为 `rockpunkgod/answer-agent`。后续提交可从该基线追溯。审计当时原工作目录运行8767工作台；最新只读检查未发现该端口监听，HTTP不可连接，不能沿用早期运行状态。本批未部署或迁移正式数据库。
