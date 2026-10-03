@@ -4,16 +4,16 @@
 
 ## 当前最终验收基线（2026-10-03）
 
-以本人最新 Level 3 验收标准为准，起点业务提交为 `b697faa3171018fa83a36cee8b127d5d840522bf`。当前结论为 **NOT_READY**；以下逐项映射实际代码与测试，UNIT/MOCK 不代替 REAL。后文日期更早的记录保留为历史，不代表当前版本通过。未操作生产数据库、未开启群发送、未提交新的 DeepSeek 请求；本轮没有数据库迁移。
+以本人最新 Level 3 验收标准为准，起点业务提交为 `b697faa3171018fa83a36cee8b127d5d840522bf`。当前结论为 **NOT_READY**；以下逐项映射实际代码与测试，UNIT/MOCK 不代替 REAL。后文日期更早的记录保留为历史，不代表当前版本通过。后续获准的 DeepSeek 网页专项验证与生产闭环分别记录；未操作生产数据库、未开启群发送，本轮没有数据库迁移。
 
 | 最终条件 | 已有实现和相关测试 | 当前缺口/验收状态 |
 |---|---|---|
-| 1. ANSWER 冻结 | `answer_teaching.py`、`teaching_routes.py`、`lesson_checks.py`；`test_answer_teaching`、`test_teaching_bundle`、`test_lesson_checks` | b04 原文和依赖已实际核验；阅读/完形四选项受检包已接原脚本 SOURCE/DRAFT 检查，其他题型仍只有预览/人工流程；真实教学未验收 |
+| 1. ANSWER 冻结 | `answer_teaching.py`、`teaching_routes.py`、`lesson_checks.py`；`test_answer_teaching`、`test_teaching_bundle`、`test_lesson_checks` | b04 原文和依赖已实际核验；阅读/完形四选项受检包已接原脚本 SOURCE/DRAFT 检查。真实阅读专项已上传固定原文，生成稿有一项 REVIEW_REQUIRED；其他题型仍只有预览/人工流程，教学正确性未验收 |
 | 2. 消息身份/时间边界 | `native_message_source.py`、`collector_storage.py`、`collector_dispatch.py`；`test_native_message_source`、`test_collector_integration` | 文件由本机受控复制/人工准备，现有增量导入不是持续监听；生产者运行、停止检测和端到端最大延迟尚无真实证明 |
 | 3. Ack 时效 | `delivery_tasks.py`、`automatic_delivery_runtime.py`、`automatic_answer_runtime.py`、`message_sla.py`；相关发送/等待/时延测试 | 发送层及后台执行循环已分离并持久化，可选详细队列已接线。状态接口已按有证据的source_sent_at及完整真实回执计时，包含采集等待，迟到成功仍标超时；匿名边界通过，真实端到端15分钟未验收 |
-| 4. 检索备用 | `reference_lookup.py`、`reference_fetch.py`；`test_reference_lookup`、`test_reference_fetch` | 本批补有界备用调度；生产默认仅 Brave，实际备用 Provider 和来源准入仍未验证 |
+| 4. 检索备用 | `reference_lookup.py`、`reference_fetch.py`；`test_reference_lookup`、`test_reference_fetch` | 已补有界备用调度；默认检索和网络访问关闭，示例选择 Brave，实际 Provider、凭据和来源准入仍未验证；网页专项不把未配置记为无搜索结果 |
 | 5. Top2 | `reference_lookup.top_candidates`；`test_reference_lookup` | 本批确定性最多两项、同内容去重和真实候选 ID 通过 Mock；尚未交到真实 DeepSeek |
-| 6. 两次 DeepSeek | `question_matching.py`、`mcp_preparation.py`、`mcp_generation.py`、`automatic_answer_runtime.py`；两阶段/队列测试 | 已接准备/生成及可选本机队列回调：学生原图+Top2核验→程序检查→ANSWER上传→教学。仅 Mock 通过；真实新会话URL、网页上传/提交与生产队列未验收，旧练习不算新版验收 |
+| 6. 两次 DeepSeek | `question_matching.py`、`mcp_preparation.py`、`mcp_generation.py`、`automatic_answer_runtime.py`；两阶段/队列测试 | 已接准备/生成及可选本机队列回调。授权真实专项已完成同一会话两次上传、提交和结构解析，草稿待复核；本次没有检索候选，未走生产队列。自动新会话链接取得、完整正文采集及真实 Top2 路径仍未验收 |
 | 7. 会话及追问 | `workflow.py`、`session_isolation.py`、`followup_reuse.py`、`mcp_generation.delivery_context`；`test_question_session_isolation`、`test_mcp_followup_context`、`test_followup_reuse` | 普通追问沿用原核验与课程上传证据、同一会话仅上传本轮上下文已有 Mock；真实网页复用未验收 |
 | 8. Answer 安全重试 | `reviewed_question_queue.py`、`delivery_tasks.py`、`question_matching.begin_attempt`、`followup_reuse.begin_upload`；相关队列与两阶段测试 | 未知网页提交或追问上传不能改文件名重提；自动文字逐段重试已持久化，UNKNOWN不重发。普通追问复用已接线，完整网页阶段恢复仍缺 |
 | 9. 自动发送 | `workflow._validate`、`mcp_group_delivery.py`；`test_mcp_group_delivery`、`test_automatic_delivery_workbench` | 目标/版本/未知结果/接管防护已有 Mock，当前测试群真实自动发送未授权执行或验收 |
@@ -126,6 +126,26 @@
 本批没有真实桌面、Luna调用、上传或DeepSeek提交、群发送、生产数据库修改、8767部署或正式日报提交。UNIT/MOCK验证不能代替REAL，真实新题持续采集、页面URL/控件与上传提交、15分钟ACK、成本和A–H稳定试运行仍未验收，结论 **NOT_READY**。已有官方SDK文件与两项符号链接SKIPPED未复验，不算通过。
 
 验证码暂停补充后的命令：`python -X utf8 -B -m unittest tests.test_automatic_answer_runtime tests.test_mcp_preparation tests.test_mcp_generation tests.test_question_matching`，48项全部通过，155.457秒，0失败、0跳过；15项为当前执行入口测试。涵盖新链接无法取得不伪造、不二次点击、两阶段仅执行一次、旧稿不计量、已绑定会话复用、窗口/控件歧义、布局变化、已更正原题不操作、模型及原生未知结果不重放、三次只读页面等待跨重启保留、验证码全局暂停，以及生成等待时收到仍推进。启动帮助、改动Python语法、PowerShell入口解析及diff空白检查通过。上述测试均UNIT/MOCK；REAL仅本机ANSWER提交/干净工作树与Edge扩展文件版本再次核对，插件目录查询未证明本会话连接。未重跑全量，先前快照不冒充本批验证。
+
+### 授权 DeepSeek 网页专项（2026-10-03）
+
+从业务提交 `3dd1aa9d41d8c24d0a50d59866ed75d110d6dedf` 验证。授权范围仅为一道已回复阅读题的两阶段真实网页练习，生成草稿；不包括企业微信发送、正式交付或绩效入账。桌面由一个 Luna medium 操作端串行执行，主 Agent 只检查代码、原始工具记录和本地文件。实际显示器清单仅有编号 0，按已获授权的当前显示器操作，没有沿用旧屏幕 2 的固定编号。
+
+`ANSWER_COMMIT=b04ebc26d7fa096404111a0bb12f6c77cc8525b9`，本机 main 工作树干净。重新生成阅读受检包，原文教学文件 46072 字节，必需依赖缺项为零，实际原脚本 SOURCE 检查为 SOURCE_READY；教材内容和脚本没有改写。原始照片按字节复制，学生原话保留；原消息发送时间无可靠证据，练习不能计入正式日报。
+
+第一阶段已在真实页面上传原图和题面文件、提交一次，并从最终回复的复制按钮取回完整正文。原生记录和 journal 校验、六字段结构检查及固定教学来源复核通过，结果为 VERIFIED_STUDENT_ONLY。本次参考检索未配置，明确保留 UNAVAILABLE_NOT_CONFIGURED；没有执行搜索，不把它写成 NO_RESULTS，也不将专项结果伪装成正式检索回执。
+
+真实界面确认两项自动入口缺口：新聊天在首次提交前仍是主页网址，现有队列要求点击后立即取得独立链接，尚未适配；use_dom=True 的原生树达到默认 500 元素上限时缺少回复正文。专项采用最终回复复制与原生 Clipboard.get 校验，未弱化生产页面解析断言。旧格式 console 输入曾损坏中文，在提交前发现并改用明确 UTF-8 读取与 ASCII JSON 转义；这不证明原生产 MCPProcess 的 UTF-8 管道有同样问题。
+
+第二阶段准备期间，一次剪贴板调用的 journal 已 TOOL_RETURNED，但操作端未确认回传，按等待上限关闭原工具会话并确认单一新进程链。恢复时 Edge 进程已不在，原因未确认；重新打开已绑定会话、重新核验附件。原生输入成功记录的 content=[] 是有意隐藏回显，Clipboard.get 的固定说明前缀不属于正文；去前缀后的第二阶段原文逐字一致。没有重提第一阶段或将输入确认当成网页提交、实际交付。
+
+第二阶段已在同一真实会话上传固定教学原文与核验上下文，逐字核对 640 字符的 prompt 后提交一次，取回完整最终正文。现有结果结构检查通过，模型返回当前学生选项 D；原稿原样保存为 `data/private/deepseek-pilot-20261003/draft.txt`，没有由主 Agent 改写。ANSWER 原脚本 DRAFT 检查返回 1、REVIEW_REQUIRED，唯一自动疑点为 method_visibility：首句没有点明实际课程方法。记录为 DRAFT_SAVED_REVIEW_REQUIRED，不伪称教学通过；本轮没有追加第三次请求或修改教学 Skill。
+
+只读核对专项 SQLite 完整性为 ok，原 run 仍 RUNNING、完成时间为空；自动创建的模拟 ACK 保持 PENDING、sent_at 为空，实际交付核验与绩效计量单元均为零。原调用记录显示 DEEPSEEK_MATCH、DEEPSEEK_TEACH 各一次且已确认；这仅覆盖观察到的网页尝试，费用和完整调度成本仍 UNVERIFIED，不能据此声称免费或成本达标。收尾工具会话正常退出、已知 MCP 子进程全部结束且没有 pending 调用；此时 Edge 也未运行，退出原因未确认，浏览器与工具生命周期隔离仍需验证。
+
+REAL 为上述网页上传、两次提交、完整结果取回、固定来源及原脚本 SOURCE/DRAFT 检查；DRAFT 的一项疑点保留待复核。执行命令为专项 `capture_pilot.py --stage MATCH`、`capture_pilot.py --stage TEACH`（均需已绑定网址及原生 URL/回复记录），以及只读 `python -X utf8 -B -m tools.report_task_costs --db <专项库> --run <本轮run>`；结构捕获命令均返回 0，DRAFT 子检查返回 1。没有重跑 UNIT/MOCK 全套；此前官方 SDK 文件与两项符号链接 SKIPPED 未复验，仍不算通过。准备时的中文损坏和回传未确认均记录并处理，不计为通过。
+
+所有原图、数据库、网页会话链接、工具快照和专项脚本在 Git 忽略的 data/private 内。生产库、启动配置与发送白名单未改；当前仍为 NOT_READY。这是一条受控的网页生成练习，不代替生产收题、ACK、审核交付、追问、绩效与稳定试运行验收。
 
 ## 本轮审计与最小改动
 
