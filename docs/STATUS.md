@@ -21,7 +21,7 @@
 | 11. 中途更正 | `service.py`、`workflow.py`；`test_delivery_batches`及原版本测试 | 保留旧版本拦截；多段中途更正停止余段并保留已发事实通过Mock，真实更正链路未验收 |
 | 12. 绩效一致性 | `semantic_decisions.py`、`performance.py`；`test_shared_semantic_consumers`、`test_performance_rules`、`test_performance_delivery_eligibility` | 原归属/计量/夜间规则保留，模拟边界已覆盖；真实新闭环的投影未验收 |
 | 13. 实际成本 | `call_costs.py`、搜索/两阶段/本机Luna调用入口、`tools.report_task_costs`；费用与执行测试 | 已按原run/audit记录观察到的调用及人工账单证据，沿用原确认篇数计算均值/P50/P95/上限；本机网页循环的Luna计量已接，其他调度/付费调用、内部网络重试及真实账单尚未完整采集。未知费用或未分配任务不允许宣布达标 |
-| 14. 重启恢复 | 现有 SQLite、Outbox、`reviewed_question_queue`；相关队列/发送/会话恢复测试 | 匹配结果同库重读、确认生成捕获后尚未完成原run的回写，以及发送前、第一段后、第二段副作用后UNKNOWN、最后一段回流已有Mock；完整六断点与真实恢复试运行仍缺 |
+| 14. 重启恢复 | 现有 SQLite、Outbox、`reviewed_question_queue`；相关队列/发送/会话恢复测试、`test_process_restart` | 六断点已补独立进程硬退出、同库恢复的匿名Mock；未知网页动作转人工，已保存稿件和分段按原记录恢复。真实六断点试运行仍缺 |
 | 15. 无阻断级问题 | 现有版本/路径/目标/未知发送回归 | 真实 A–H 类别及至少 20 个任务试运行尚未执行；测试数量不证明生产稳定 |
 | 16. 限制公开 | 本文件、README、现有验证日志 | 保留 UNIT/MOCK/REAL/SKIPPED/FAILED 区分；CLI、SDK、上云、集群和符号链接权限不当作个人 Demo 上线前置条件 |
 
@@ -40,6 +40,18 @@ Browser 插件初次初始化因请求 `26.930.21537` 的 service 文件，而�
 按该插件官方只读脚本检查：Edge 已安装且运行，扩展在选定环境已安装、启用；native-host 检查退出 1，连接注册及 manifest 缺失。按 `control-in-app-browser` 指定的连接排障文档，不自行安装或修复 native host，不改用其他控制器绕过显式 Edge 选择。已请用户通过应用插件界面重装 Browser，或明确选择暂用原 Windows-MCP 继续同一会话；等待答复期间不进行后续页面操作。各次失败、缓存恢复原文件哈希和诊断原始输出保留于忽略的私有专项目录。
 
 只读核对专项库 integrity_check=ok，run 保持 RUNNING、完成时间为空；答案、交付核验和绩效单位/关联/事件均为零。原生输入、提交及 URL 等 5 份原始结果与 journal 独立核验通过；恢复检查点要求只读原 MATCH，不重放。成本记录只有一次 MATCH 尝试，完整费用仍 UNVERIFIED。程序源码未变，未重跑 UNIT/MOCK 或全量；此前 SDK 与两项符号链接 SKIPPED 未复验，不算通过。当前结论仍为 **NOT_READY**。
+
+### 后续验证：独立进程中断恢复（2026-10-04）
+
+从 `8bf4fcf` 继续，只新增 `tests/test_process_restart.py` 并更新本进度文件，没有修改生产业务逻辑、配置或数据库。每个匿名场景由独立 Python 子进程执行；在搜索中、MATCH 结果持久化后、第二阶段已提交但未捕获时、生成稿持久化后发送前、第一段已核验后、SEND_UNKNOWN 状态调用 `os._exit(86)`。不运行清理、不主动关闭 SQLite，恢复打开原库；不是删除记录或重建任务。
+
+恢复后重复检查原消息、run 和 ACK ID 不变，不增加绩效。搜索和生成中断检查明确的 EXECUTION_UNCERTAIN、原阶段及“不重放”原因；MATCH 原结果与原证据可以重新核验，尚未完成的教学上传转人工。已保存稿件恢复原 GENERATED run、同一待发 Outbox；第一段成功后从第二段继续，只有一个分段计划及一次 ACK。UNKNOWN 重复调度保持停止，模拟外部回执不增加。
+
+首次运行 1 个测试、六个子场景，1 个子场景失败，88.433 秒：新的进程读取生产 ANSWER 配置，与匿名夹具固定版本不同，ANSWER_SOURCE_PIN_MISMATCH 防护正确拦截。修正仅使匿名恢复使用同一份原测试配置，并补具体停止原因断言；没有关闭版本校验、修改真实配置或教学内容。失败尾日志保留于 `artifacts/verification/20261004-process-restart/first-run-tail.log`。
+
+命令 `python -X utf8 -B -m unittest -v tests.test_process_restart`：1 个测试内六个子场景全部通过。更正匿名配置后的首次通过为 99.604 秒；追加 UNKNOWN 后发送函数零调用断言及子进程隐藏启动后的最终通过为 99.564 秒，0 失败、0 跳过。另实际运行五个已有用例：`test_captured_final_answer_recovers_after_restart_without_desktop_or_resubmit`、`test_captured_answer_requires_unchanged_confirmed_complete_evidence`、`test_capture_restart_and_duplicate_registration_keep_one_result`、`test_one_batch_order_restart_ack_priority_and_only_final_completion`、`test_second_part_unknown_survives_restart_and_readonly_reconciliation`，全部通过，94.918 秒，0 失败、0 跳过；最终输出分别保存在同目录 `process-restart-final-v2.log`、`adjacent-final.log`，先前输出保留。没有重跑全量。
+
+上述均为 **MOCK VERIFIED**：进程退出是真实的，但消息、搜索、浏览器、教学脚本和交付回执均为明确匿名模拟，不是实际 DeepSeek/企业微信恢复验收。REAL 只重新核对 ANSWER 仍为干净的 `b04ebc26d7fa096404111a0bb12f6c77cc8525b9`，以及按插件官方脚本复查 Edge 连接组件仍缺失、退出 1。没有新增网页提交、群发送或正式日报；真实 15 分钟 ACK、实际成本、六断点及 A–H/20 个任务试运行仍未验收，结论保持 **NOT_READY**。等待用户恢复 Browser 连接或明确授权临时控制器后，沿用已提交 MATCH，只读原回复，不重新提交。
 
 以下至“后续实施”之前为已提交 `7b6b128` 的上一批结果，保留其当时限制和测试证据；本批增量以“后续实施”为准。
 
