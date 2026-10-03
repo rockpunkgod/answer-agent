@@ -20,7 +20,8 @@ ROOT = Path(__file__).resolve().parents[1]
 MODEL = 'gpt-6-luna'
 EFFORT = 'medium'
 ACTIONS = frozenset({'ACTIVATE_WECOM', 'OPEN_ORIGINAL_IMAGE', 'SAVE_ICON',
-                     'FILENAME_FIELD', 'SAVE_BUTTON', 'STOP'})
+                     'FILENAME_FIELD', 'SAVE_BUTTON', 'DEEPSEEK_NEW_CHAT',
+                     'DEEPSEEK_COMPOSER', 'STOP'})
 _DISABLED = ('shell_tool', 'apps', 'plugins', 'browser_use', 'browser_use_external',
              'computer_use', 'multi_agent', 'hooks', 'skill_search', 'image_generation', 'view_image')
 

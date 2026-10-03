@@ -7,7 +7,8 @@ param(
     [string]$SourceReviewManifest = '',
     [switch]$NoAutoCollect,
     [string]$ReferenceLookupConfig = '',
-    [string]$AutomaticDeliveryConfig = ''
+    [string]$AutomaticDeliveryConfig = '',
+    [string]$AutomaticAnswerConfig = ''
 )
 $ErrorActionPreference = 'Stop'
 Set-Location -LiteralPath $PSScriptRoot
@@ -33,6 +34,9 @@ if ($null -ne $ExistingState) {
     if ($AutomaticDeliveryConfig) {
         throw 'Automatic delivery config is read at startup. Stop the existing service or choose another port; no sender was enabled.'
     }
+    if ($AutomaticAnswerConfig) {
+        throw 'Automatic answer config is read at startup. Stop the existing service or choose another port; no browser executor was enabled.'
+    }
     Write-Output "Current demo is available: $LocalUrl/"
     if (-not $ExistingState.collector.control.worker_alive) {
         Write-Output 'Collection is not running. Review its status and start it from the workbench when ready.'
@@ -47,8 +51,11 @@ $LaunchArgs = @('-X', 'utf8', '-B', '-m', 'helpdesk.demo_server', '--port', "$Po
     '--db', $Db, '--processing-mode', 'ACK_ONLY', '--enable-performance')
 if ($AutomaticDeliveryConfig) {
     $LaunchArgs += @('--automatic-delivery-config', $AutomaticDeliveryConfig)
-} else {
+} elseif (-not $AutomaticAnswerConfig) {
     $LaunchArgs += '--worker-boundary'
+}
+if ($AutomaticAnswerConfig) {
+    $LaunchArgs += @('--automatic-answer-config', $AutomaticAnswerConfig)
 }
 if (Test-Path -LiteralPath $CollectorConfig -PathType Leaf) {
     $LaunchArgs += @('--collector-config', $CollectorConfig)
