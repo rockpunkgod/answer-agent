@@ -180,11 +180,15 @@ def complete_automatic_preparation(store, task_id, candidate_path, *, source_rev
         staged_paths = [e.get('arguments', {}).get('text') for e in candidate.get('events', [])
                         if e.get('intent') in ('stage frozen file path', 'stage frozen path in reviewed picker')]
         files = candidate.get('files', [])
+        from .mcp_preparation import current_uploads
+        uploads = current_uploads(snapshot, files)
+        reuse = bool(snapshot.get('followup_reuse'))
         matching = candidate.get('preparation_mode') == 'VERIFY_THEN_TEACH'
-        expected_paths = ([x['path'] for x in files] if matching else
+        expected_paths = ([x['path'] for x in uploads] if matching else
                           [x['path'] for x in files if x['kind'] == 'course']
                           + [x['path'] for x in files if x['kind'] != 'course'])
-        _require(candidate.get('effective_material_order') == ('QUESTION_VERIFY_THEN_COURSE' if matching else 'COURSE_THEN_QUESTION')
+        _require(candidate.get('effective_material_order') == ('FOLLOWUP_CONTEXT_ONLY' if reuse else
+                 'QUESTION_VERIFY_THEN_COURSE' if matching else 'COURSE_THEN_QUESTION')
                  and staged_paths == expected_paths
                  and not any(e.get('intent') == 'submit readback request once'
                              for e in candidate.get('events', [])), 'FAST_COURSE_THEN_QUESTION_REQUIRED')
@@ -193,7 +197,8 @@ def complete_automatic_preparation(store, task_id, candidate_path, *, source_rev
             _require(candidate.get('question_match_result') == validate_receipt(store, snapshot, session_url=candidate['session_url']),
                      'FIRST_QUESTION_VERIFICATION_CHANGED')
             submits = [e for e in candidate.get('events', []) if e.get('intent') == 'submit question verification once']
-            _require(len(submits) == 1 and submits[0].get('status') == 'TOOL_RETURNED', 'FIRST_VERIFICATION_SUBMISSION_UNCONFIRMED')
+            _require(not submits if reuse else len(submits) == 1 and submits[0].get('status') == 'TOOL_RETURNED',
+                     'FIRST_VERIFICATION_SUBMISSION_UNCONFIRMED')
         generator = PreparedDeepSeekGenerator(None, output, task['evidence_dir'])
         if output.exists():
             _require(source_path.is_file() and ready_path.is_file()

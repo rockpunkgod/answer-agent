@@ -64,6 +64,8 @@ def question_text_payload(snapshot):
     if snapshot.get('question_match_result'):
         from .question_matching import frozen_receipt
         payload['question_verification'] = frozen_receipt(snapshot)['checked']
+        if snapshot.get('followup_reuse'):
+            payload['question_verification_origin'] = snapshot['followup_reuse']
     return payload
 
 
@@ -115,7 +117,7 @@ def _files(snapshot: dict, *, question_text_path=None):
         if item['path'] != str(path) or any(x['name'].casefold() == item['name'].casefold() for x in result):
             raise ValueError('Derived question path mismatch or duplicate upload filename')
         result.append(item)
-    if snapshot.get('question_match_input'):
+    if snapshot.get('question_match_input') and not snapshot.get('followup_reuse'):
         from .question_matching import prepare_text
         if question_text_path is None:
             raise ValueError('Matching requires frozen question context')
@@ -126,6 +128,11 @@ def _files(snapshot: dict, *, question_text_path=None):
         result = ([x for x in result if x['kind'] == 'question_image'] + [matching]
                   + [x for x in result if x['kind'] not in ('question_image', 'matching_text')])
     return result
+
+
+def current_uploads(snapshot, files):
+    """A verified ordinary follow-up uploads only its new frozen turn context."""
+    return [x for x in files if x['kind'] == 'question_text'] if snapshot.get('followup_reuse') else files
 
 
 class DeepSeekSessionPreparer:
@@ -168,9 +175,13 @@ class DeepSeekSessionPreparer:
                 validate_input(store, snapshot)
             finally:
                 store.close()
-            if snapshot.get('question_match_result'):
+            if snapshot.get('followup_reuse'):
+                from .question_matching import frozen_receipt
+                frozen_receipt(snapshot, session_url=self.page.url)
+            elif snapshot.get('question_match_result'):
                 raise ValueError('MATCHING_ALREADY_COMPLETED_REQUIRES_RESUME_REVIEW')
-            prepare_text(snapshot, self.evidence_path.parent)
+            else:
+                prepare_text(snapshot, self.evidence_path.parent)
         self.material_order = controls.get('material_order', 'ALL_THEN_READBACK')
         if self.material_order not in ('ALL_THEN_READBACK', 'COURSE_THEN_QUESTION'):
             raise ValueError('Unsupported material_order')
@@ -241,6 +252,12 @@ class DeepSeekSessionPreparer:
         if text:
             self.record['question_text_fields'] = question_text_fields(snapshot)
             self.record['question_text_sha256'] = text['sha256']
+        if snapshot.get('followup_reuse'):
+            uploads = current_uploads(snapshot, self.files)
+            self.record.update(followup_reuse=snapshot['followup_reuse'],
+                reused_files=[x for x in self.files if x not in uploads],
+                reused_teaching_hashes=self.record['uploaded_teaching_hashes'], uploaded_teaching_hashes={},
+                question_match_result=snapshot['question_match_result'])
 
     def _save(self):
         self.evidence_path.write_text(json.dumps(self.record, ensure_ascii=False, indent=2), encoding='utf-8')
@@ -606,7 +623,11 @@ class DeepSeekSessionPreparer:
                 from .storage import Store
                 store = Store(Path(self.store_path or self.snapshot['session_store_path']).resolve(strict=True))
                 try:
-                    begin_attempt(store, self.snapshot, self.evidence_path, self.page.url)
+                    if self.snapshot.get('followup_reuse'):
+                        from .followup_reuse import begin_upload
+                        begin_upload(store, self.snapshot, self.evidence_path, self.page.url)
+                    else:
+                        begin_attempt(store, self.snapshot, self.evidence_path, self.page.url)
                 finally:
                     store.close()
             text = next((x['path'] for x in self.files if x['kind'] == 'question_text'), None)
@@ -616,7 +637,9 @@ class DeepSeekSessionPreparer:
             # Empty composer and absence of active generation are required before
             # upload. Page stage_action checks both without typing.
             self.page.stage_action(observed, 'probe')
-            if self.preparation_mode == 'VERIFY_THEN_TEACH':
+            if self.snapshot.get('followup_reuse'):
+                self._upload_files(current_uploads(self.snapshot, self.files))
+            elif self.preparation_mode == 'VERIFY_THEN_TEACH':
                 self._upload_files([x for x in self.files if x['kind'] in ('question_image', 'matching_text')])
                 self._match_question()
                 self._upload_files([x for x in self.files if x['kind'] not in ('question_image', 'matching_text')])
@@ -637,12 +660,13 @@ class DeepSeekSessionPreparer:
                 # can approve the distinct ATTACHMENTS_READY_SOURCE_REVIEWED contract.
                 observed, tree = self._snap()
                 self.page.stage_action(observed, 'probe')
-                if any(item['name'] not in tree for item in self.files):
+                if any(item['name'] not in tree for item in current_uploads(self.snapshot, self.files)):
                     raise PreparationUnconfirmed('Final attachment readiness missing')
                 self.record.update(
                     readiness_snapshot=observed,
                     status='ATTACHMENTS_READY_REQUIRES_SOURCE_REVIEW',
-                    effective_material_order=('QUESTION_VERIFY_THEN_COURSE' if self.preparation_mode == 'VERIFY_THEN_TEACH'
+                    effective_material_order=('FOLLOWUP_CONTEXT_ONLY' if self.snapshot.get('followup_reuse') else
+                                              'QUESTION_VERIFY_THEN_COURSE' if self.preparation_mode == 'VERIFY_THEN_TEACH'
                                               else 'COURSE_THEN_QUESTION'),
                     model_readback_performed=False,
                     generation_authorized=False,

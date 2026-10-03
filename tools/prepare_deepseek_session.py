@@ -67,7 +67,8 @@ def main():
         from helpdesk.question_matching import prepare_input
         from helpdesk.reference_lookup import LookupConfig, ReferenceLookup
         with closing(Store(args.database)) as store:
-            snapshot = prepare_input(store, args.run, ReferenceLookup(LookupConfig.load(args.reference_config)))
+            lookup = None if snapshot.get('intent') == 'FOLLOWUP' else ReferenceLookup(LookupConfig.load(args.reference_config))
+            snapshot = prepare_input(store, args.run, lookup)
     with MCPProcess() as transport:
         result = DeepSeekSessionPreparer(transport, snapshot, args.session_url,
                                          args.evidence, controls).run()

@@ -103,7 +103,16 @@ class PreparedDeepSeekGenerator:
         if prep.get('input_fingerprint') != input_fingerprint(snapshot):
             raise ValueError('Prepared question context changed')
         hashes = {s['path']: s['sha256'] for s in snapshot['teaching_skills']}
-        if not hashes or prep.get('uploaded_teaching_hashes') != hashes:
+        reuse = bool(snapshot.get('followup_reuse'))
+        if prep.get('followup_reuse') != snapshot.get('followup_reuse'):
+            raise ValueError('Prepared session reuse provenance changed')
+        if reuse:
+            from .question_matching import frozen_receipt
+            from .followup_reuse import validate_upload
+            frozen_receipt(snapshot, session_url=prep['session_url'])
+            validate_upload(snapshot, prep['candidate_evidence'], prep['session_url'])
+        if (not hashes or (prep.get('uploaded_teaching_hashes'), prep.get('reused_teaching_hashes', {}))
+                != (({}, hashes) if reuse else (hashes, {}))):
             raise ValueError('Prepared teaching hashes changed')
         for name, digest in hashes.items():
             if sha256(Path(name).read_bytes()).hexdigest() != digest:
@@ -148,27 +157,33 @@ class PreparedDeepSeekGenerator:
         for name, excerpt in excerpts.items():
             if (not isinstance(excerpt, str) or len(excerpt) < 10
                     or excerpt not in Path(name).read_text(encoding='utf-8')
-                    or (not fast and excerpt not in readback) or Path(name).name not in readback):
+                    or (not fast and excerpt not in readback) or (not reuse and Path(name).name not in readback)):
                 raise ValueError('Teaching excerpt not verified')
         if fast:
-            from .mcp_preparation import _files
+            from .mcp_preparation import _files, current_uploads
             candidate = json.loads(Path(prep['candidate_evidence']).read_text(encoding='utf-8'))
             review = json.loads(Path(prep['operator_review_evidence']).read_text(encoding='utf-8'))
             text = prep.get('question_text_file', {}).get('path')
             files = _files(snapshot, question_text_path=text)
+            uploads = current_uploads(snapshot, files)
+            if reuse and (candidate.get('followup_reuse') != snapshot['followup_reuse']
+                    or candidate.get('reused_files') != [x for x in files if x not in uploads]
+                    or candidate.get('reused_teaching_hashes') != hashes
+                    or candidate.get('uploaded_teaching_hashes') != {}):
+                raise ValueError('Reused upload evidence changed')
             if (candidate.get('status') != 'ATTACHMENTS_READY_REQUIRES_SOURCE_REVIEW' or
                     candidate.get('model_readback_performed') is not False or
                     candidate.get('files') != files or candidate.get('run_id') != snapshot['run_id'] or
                     candidate.get('input_fingerprint') != input_fingerprint(snapshot) or
-                    candidate.get('visible_attachment_names') != [x['name'] for x in files] or
-                    any(x['name'] not in readback for x in files) or
+                    candidate.get('visible_attachment_names') != [x['name'] for x in uploads] or
+                    any(x['name'] not in readback for x in uploads) or
                     review.get('source_verified_excerpts') != excerpts or
                     review.get('reviewer', '').strip() != prep.get('reviewer') or
                     review.get('verified_question_stem') != prep.get('verified_question_stem')):
                 raise ValueError('Fast source approval or readiness changed')
             upload_events = [e for e in candidate.get('events', [])
                              if e.get('intent') in ('submit file picker once', 'submit reviewed visual picker once')]
-            if (len(upload_events) != len(files) or any(e.get('status') != 'TOOL_RETURNED' for e in upload_events)
+            if (len(upload_events) != len(uploads) or any(e.get('status') != 'TOOL_RETURNED' for e in upload_events)
                     or candidate.get('readiness_snapshot') != json.loads(evidence.read_text(encoding='utf-8'))):
                 raise ValueError('Fast upload evidence changed')
             images = {x['path']: x['sha256'] for x in files if x['kind'] == 'question_image'}
@@ -250,6 +265,10 @@ class PreparedDeepSeekGenerator:
         with attempt_path.open('x', encoding='utf-8') as stream:
             json.dump(attempt, stream, ensure_ascii=False, indent=2)
 
+        if manifest.get('format_version') == 3:
+            from .followup_reuse import remember_materials
+            remember_materials(snapshot, self.preparation_path, attempt_path)
+
         def save():
             attempt_path.write_text(json.dumps(attempt, ensure_ascii=False, indent=2), encoding='utf-8')
 
@@ -293,7 +312,9 @@ class PreparedDeepSeekGenerator:
             if snapshot.get('teaching_source_check'):
                 prompt += '。其中source_localization是ANSWER原脚本对本题实际生成的源文定位卡，按当前课程使用，不把定位卡或检查过程写给学生。'
             if snapshot.get('question_match_result'):
-                prompt += ('。这是第二阶段教学；question_verification是第一次题面核验和程序比对结果，'
+                prompt += ('。这是同题追问教学，复用同会话已有ANSWER及原题附件；' if snapshot.get('followup_reuse')
+                           else '。这是第二阶段教学；')
+                prompt += ('question_verification是已保存的题面核验和程序比对结果，'
                            '必须实际读取并沿用其学生版本、差异与选项映射；STUDENT_ONLY表示只依据清晰完整的学生原题，'
                            '不能补造参考题。参考材料仅帮助核对题面，外部答案和解析不能替代ANSWER。')
         if intent == 'FOLLOWUP' and delivered is None:
@@ -347,11 +368,15 @@ class PreparedDeepSeekGenerator:
                     raise ValueError('Output option is not in the frozen question')
                 result = dict(adapter=self.identity, simulated=False, run_id=run,
                               session_id=snapshot['session_id'], complete=True, uploads_confirmed=True,
-                              uploaded_teaching_hashes=prep['uploaded_teaching_hashes'],
+                              # Existing finish contract means available course material;
+                              # the preparation retains which files were reused this turn.
+                              uploaded_teaching_hashes={**prep['uploaded_teaching_hashes'], **prep.get('reused_teaching_hashes', {})},
                               web_session_evidence=str(attempt_path.resolve()),
                               preparation_contract=prep['status'],
                               model_readback_performed=prep.get('model_readback_performed', True),
                               correct_option_id=matches[0]['id'], text=data['text'])
+                if snapshot.get('followup_reuse'):
+                    result.update(followup_reuse=snapshot['followup_reuse'], reused_teaching_hashes=prep['reused_teaching_hashes'])
                 attempt.update(status='FINAL_OUTPUT_CAPTURED', result=result, final_snapshot=observed)
                 save()
                 return result

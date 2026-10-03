@@ -14,8 +14,8 @@
 | 4. 检索备用 | `reference_lookup.py`、`reference_fetch.py`；`test_reference_lookup`、`test_reference_fetch` | 本批补有界备用调度；生产默认仅 Brave，实际备用 Provider 和来源准入仍未验证 |
 | 5. Top2 | `reference_lookup.top_candidates`；`test_reference_lookup` | 本批确定性最多两项、同内容去重和真实候选 ID 通过 Mock；尚未交到真实 DeepSeek |
 | 6. 两次 DeepSeek | `question_matching.py`、`mcp_preparation.py`、`mcp_generation.py`；`test_question_matching` | 已接现有准备/生成入口：学生原图+Top2核验→程序检查→ANSWER上传→教学。仅 Mock 通过；真实网页、生产队列执行回调未验收，旧练习不算新版验收 |
-| 7. 会话及追问 | `workflow.py`、`session_isolation.py`、`mcp_generation.delivery_context`；`test_question_session_isolation`、`test_mcp_followup_context` | 学生/题目隔离、实际交付上下文已有 Mock；真实会话复用及避免重复搜题/上传未验收 |
-| 8. Answer 安全重试 | `reviewed_question_queue.py`、`delivery_tasks.py`、`question_matching.begin_attempt`；相关队列与两阶段测试 | 未知网页提交不能改文件名重提；自动文字逐段重试已持久化，UNKNOWN不重发。普通追问核验/附件复用及网页阶段恢复还未完整接线 |
+| 7. 会话及追问 | `workflow.py`、`session_isolation.py`、`followup_reuse.py`、`mcp_generation.delivery_context`；`test_question_session_isolation`、`test_mcp_followup_context`、`test_followup_reuse` | 普通追问沿用原核验与课程上传证据、同一会话仅上传本轮上下文已有 Mock；真实网页复用未验收 |
+| 8. Answer 安全重试 | `reviewed_question_queue.py`、`delivery_tasks.py`、`question_matching.begin_attempt`、`followup_reuse.begin_upload`；相关队列与两阶段测试 | 未知网页提交或追问上传不能改文件名重提；自动文字逐段重试已持久化，UNKNOWN不重发。普通追问复用已接线，完整网页阶段恢复仍缺 |
 | 9. 自动发送 | `workflow._validate`、`mcp_group_delivery.py`；`test_mcp_group_delivery`、`test_automatic_delivery_workbench` | 目标/版本/未知结果/接管防护已有 Mock，当前测试群真实自动发送未授权执行或验收 |
 | 10. 实际交付回流 | `delivery_batches.py`、`manual_delivery.py`、`workflow._record_check`；`test_delivery_batches`及原交付测试 | 一个完整稿对应一个Outbox分段计划；顺序核验、部分不计量、全部成功回流原绩效已接通Mock；真实多段发送未验证 |
 | 11. 中途更正 | `service.py`、`workflow.py`；`test_delivery_batches`及原版本测试 | 保留旧版本拦截；多段中途更正停止余段并保留已发事实通过Mock，真实更正链路未验收 |
@@ -84,6 +84,18 @@
 本批仍无真实桌面、DeepSeek请求、群发送或正式日报提交。ANSWER版本未改，生产入口未部署。Edge官方浏览器扩展支持文档已核对，可以作为网页联调入口候选；未验证本会话连接与Python独立调用，不增启动依赖。原始时间起算已补；连续生产者、普通追问复用、真实网页/发送、实际成本与稳定试运行仍缺，结论保持 **NOT_READY**。
 
 最终专项命令：`python -X utf8 -B -m unittest tests.test_message_sla tests.test_manual_delivery_workbench tests.test_workflow tests.test_delivery_batches`，58项全部通过，13.330秒，0失败、0跳过。其中13项为新的时延测试，覆盖原发送与采集差值、15分钟含边界、跨时区、迟到成功、时间缺失/冲突/倒置、模拟与未知回执、人工部分交付及自动完整分段缺证据；其余复用原工作台HTTP/无界面浏览器和发送回归。均为UNIT/MOCK，不是REAL。此次没有重跑全量；上一批全量快照不能替代本批源码的验证。
+
+### 后续实施：普通追问复用原核验和会话附件（2026-10-03）
+
+从`0674a586aec26615e11c82a9553dbbfa8af9cdf5`继续。本机ANSWER仍为干净的`main / b04ebc26d7fa096404111a0bb12f6c77cc8525b9`，未更新教学内容。`followup_reuse.py`只在原run/audit记录上传来源与复用关系，没有新增表或第二份答案/交付台账。原核验仍绑定原任务，不改写原证据来冒充本轮网页调用。
+
+只有原任务具有PreparedDeepSeekGenerator完整生成记录、原上传/核验/最终页面证据可重新核对、学生/题目版本/会话/教学文件一致时，普通追问才复用。准备记录区分本轮上传与旧会话材料；追问只上传本轮上下文，跳过完整搜索、原题第一阶段和整包ANSWER上传。未实际交付的旧稿不进入实际回复历史。新图、课程或版本变化、旧证据缺失均停止；实质更正仍由原版本路径重新核验。上传前持久化一次尝试，未知结果不能改文件名重试。生成中更正继续由原Workflow阻止旧版发送。
+
+原八项匿名SQLite/模拟网页专项全部通过，228.528秒，覆盖连续追问、实际交付上下文、同库重开、原证据缺失、新图、实质更正、错误会话/来源和未知上传。新增四项全部通过，120.254秒：原生成结果未知/被改写、复用后旧准备文件变化、追问生成中更正保留旧稿且禁止发送、原消息入口无图追问复用原图及原始时间。新增专项共12项，最终随下述全量固定源码验证。测试中的界面回执与原脚本均为明确合成夹具，不是新的真实学生或DeepSeek证据。
+
+本批没有操作真实桌面、上传DeepSeek、向群发送、改动正式数据库或部署8767。历史段落中的“普通追问尚未接通”是当时状态，以本节为准；生产网页执行回调、持续收题、实际成本和授权A–H稳定试运行仍未验收，结论 **NOT_READY**。Edge官方扩展文档支持已登录浏览器操作，本机Default配置中已检测到ChatGPT扩展文件、版本1.26.901.11451；当前聊天连接、题图上传和Python独立调用尚未验证，不把它加入启动依赖。
+
+最终回归命令：`python -X utf8 -B -m tools.verify_project --output artifacts/verification/20261003-followup-reuse-final`。1214项、1211通过、0失败、3跳过，676.667秒，退出码0，源码运行期间未变化。快照`sha256:29ef8ed091b04cc14ff6e668a5cbadc6208e0d9d634df08a5a68acbaa949baab`；原始日志及evidence.json复核有效、未过期，等级 **MOCK_INTEGRATION_VERIFIED**。SKIPPED分别为未提供官方SDK文件、教学依赖符号链接无法创建、浏览器Profile符号链接无法创建，均不计通过。本批REAL仅本机ANSWER Git状态和Edge扩展文件的只读检查；真实网页、群交付和正式统计未执行。
 
 ## 本轮审计与最小改动
 

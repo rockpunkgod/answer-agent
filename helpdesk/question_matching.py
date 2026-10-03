@@ -81,8 +81,12 @@ def prepare_input(store, run_id, lookup, **lookup_args):
     _current(store, snapshot)
     if 'question_match_input' in snapshot:
         validate_input(store, snapshot)
+        if snapshot.get('followup_reuse'):
+            validate_receipt(store, snapshot)
         return snapshot
-    _require(snapshot.get('intent') != 'FOLLOWUP', 'MATCH_FOLLOWUP_REUSE_REQUIRES_REVIEW')
+    if snapshot.get('intent') == 'FOLLOWUP':
+        from .followup_reuse import prepare
+        return prepare(store, snapshot)
     trigger = 'version_difference' if snapshot.get('intent') in ('CORRECTION', 'DISPUTE') else 'initial_question'
     report = lookup.run_for_question(store, snapshot['question_id'], snapshot['question_version'],
                                      snapshot['context_revision'], trigger=trigger, **lookup_args)
@@ -231,6 +235,9 @@ def validate_receipt(store, snapshot, *, session_url=None):
     receipt = snapshot.get('question_match_result')
     _require(isinstance(receipt, dict) and receipt.get('binding') == _binding(snapshot), 'QUESTION_MATCHING_REQUIRED')
     _require(session_url is None or receipt.get('session_url') == session_url, 'MATCH_WEB_SESSION_CHANGED')
+    if snapshot.get('followup_reuse') or receipt.get('kind') == 'REUSED_MATCH':
+        from .followup_reuse import validate_receipt as validate_reuse
+        return validate_reuse(store, snapshot)
     proof_path = Path(receipt['evidence_path'])
     _attempt(store, snapshot, proof_path, receipt['session_url'])
     _require(sha256(proof_path.read_bytes()).hexdigest() == receipt['evidence_sha256'], 'MATCH_WEB_EVIDENCE_CHANGED')

@@ -12,7 +12,7 @@ import re
 
 from .mcp_generation import input_fingerprint, requires_question_text
 from .mcp_page_contract import DeepSeekPage
-from .mcp_preparation import _files, prepare_question_text, question_text_fields
+from .mcp_preparation import _files, current_uploads, prepare_question_text, question_text_fields
 
 TEXT_REVIEW_STATEMENT = ('I independently reviewed the original question source and verified '
                          'the frozen passage, stem, number and A-D options.')
@@ -66,6 +66,7 @@ def review_preparation(snapshot: dict, candidate_path, review_path, output_path,
     candidate = json.loads(candidate_path.read_text(encoding='utf-8'))
     review = json.loads(review_path.read_text(encoding='utf-8'))
     files = _frozen_files(snapshot, candidate_path.parent)
+    uploads = current_uploads(snapshot, files)
     courses = [x for x in files if x['kind'] == 'course']
     images = [x for x in files if x['kind'] == 'question_image']
     fast = candidate.get('preparation_mode') in ('FAST_UPLOAD_THEN_GENERATE', 'VERIFY_THEN_TEACH')
@@ -73,6 +74,13 @@ def review_preparation(snapshot: dict, candidate_path, review_path, output_path,
         from .question_matching import frozen_receipt
         _require(candidate.get('question_match_result') == frozen_receipt(snapshot, session_url=candidate['session_url']),
                  'First question verification changed')
+    if snapshot.get('followup_reuse'):
+        from .followup_reuse import validate_upload
+        validate_upload(snapshot, candidate_path, candidate['session_url'])
+        _require(candidate.get('followup_reuse') == snapshot['followup_reuse']
+                 and candidate.get('reused_files') == [x for x in files if x not in uploads]
+                 and candidate.get('reused_teaching_hashes') == {x['path']: x['sha256'] for x in courses},
+                 'Reused session material provenance changed')
     _require(candidate.get('status') == ('ATTACHMENTS_READY_REQUIRES_SOURCE_REVIEW' if fast else 'READBACK_CANDIDATE_REQUIRES_OPERATOR_REVIEW')
              and candidate.get('operator_verified') is False,
              'Candidate is not an unverified completed readback')
@@ -81,9 +89,9 @@ def review_preparation(snapshot: dict, candidate_path, review_path, output_path,
              'Candidate does not match frozen run and question context')
     _require(candidate.get('files') == files and
              candidate.get('uploaded_teaching_hashes') ==
-             {x['path']: x['sha256'] for x in courses},
+             {x['path']: x['sha256'] for x in uploads if x['kind'] == 'course'},
              'Candidate upload manifest differs from frozen files')
-    _require(candidate.get('visible_attachment_names') == [x['name'] for x in files],
+    _require(candidate.get('visible_attachment_names') == [x['name'] for x in uploads],
              'All frozen attachment names were not observed after upload')
     session_url = candidate['session_url']
     controls = candidate.get('controls', {})
@@ -98,10 +106,10 @@ def review_preparation(snapshot: dict, candidate_path, review_path, output_path,
         observed = candidate['readiness_snapshot']
         tree = page.inspect(observed)
         page.stage_action(observed, 'probe')
-        _require(all(x['name'] in tree for x in files), 'Ready attachment names missing')
+        _require(all(x['name'] in tree for x in uploads), 'Ready attachment names missing')
         upload_events = [e for e in candidate.get('events', [])
                          if e.get('intent') in ('submit file picker once', 'submit reviewed visual picker once')]
-        _require(len(upload_events) == len(files) and
+        _require(len(upload_events) == len(uploads) and
                  all(e.get('status') == 'TOOL_RETURNED' for e in upload_events),
                  'Ready attachments lack successful upload journal')
         answer = ''
@@ -182,7 +190,7 @@ def review_preparation(snapshot: dict, candidate_path, review_path, output_path,
         'session_url': session_url,
         'display_index': page.display_index,
         'input_fingerprint': input_fingerprint(snapshot),
-        'uploaded_teaching_hashes': {x['path']: x['sha256'] for x in courses},
+        'uploaded_teaching_hashes': {x['path']: x['sha256'] for x in uploads if x['kind'] == 'course'},
         'reviewed_image_hashes': image_hashes,
         'verified_question_stem': stem,
         'course_readback_excerpts': excerpts,
@@ -192,6 +200,9 @@ def review_preparation(snapshot: dict, candidate_path, review_path, output_path,
         'operator_review_sha256': _digest(review_path),
         'readback_evidence': str(readback_evidence_path),
     }
+    if snapshot.get('followup_reuse'):
+        preparation.update(followup_reuse=snapshot['followup_reuse'],
+                           reused_teaching_hashes=candidate['reused_teaching_hashes'])
     active_tree = page.inspect(observed)
     active_window = re.search(r'window "([^\n]+)"', active_tree)
     _require(active_window is not None, 'Reviewed Edge window title is missing')
