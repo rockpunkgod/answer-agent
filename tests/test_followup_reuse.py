@@ -4,7 +4,7 @@ from hashlib import sha256
 import json
 from pathlib import Path
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 from PIL import Image
 
@@ -88,6 +88,12 @@ class FollowupReuseTests(unittest.TestCase):
             self.assertIsNone(payload['turn_context']['actual_delivery'])
             self.assertEqual(self.db.one('SELECT state FROM outbox WHERE id=?',
                                         (result['outcome']['outbox_id'],))[0], 'PENDING')
+            from helpdesk.call_costs import task_cost
+            usage = task_cost(self.db, parent['run_id'])
+            self.assertEqual(usage['call_attempts']['SEARCH'], 0)
+            self.assertEqual(usage['call_attempts']['DEEPSEEK_MATCH'], 0)
+            self.assertEqual(usage['call_attempts']['DEEPSEEK_TEACH'], 1)
+            self.assertIsNone(usage['total_cny'])
         self.assertEqual(self.db.one('SELECT COUNT(*) FROM audit WHERE event=?', (MATERIAL_EVENT,))[0], 1)
         self.assertEqual(self.db.one('SELECT COUNT(*) FROM audit WHERE event=?', (REUSE_EVENT,))[0], 2)
         self.assertEqual(self.db.one("SELECT COUNT(*) FROM audit WHERE event='QUESTION_MATCH_ATTEMPT_STARTED'")[0], 1)
@@ -111,7 +117,11 @@ class FollowupReuseTests(unittest.TestCase):
 
     def test_reused_result_survives_same_database_restart_without_search(self):
         task = self.followup()
-        snapshot = self.prepare(task)
+        # Interrupt after reuse is persisted, before its cost coverage write.
+        with patch('helpdesk.call_costs.close_stage', side_effect=RuntimeError('SYNTHETIC accounting interruption')):
+            with self.assertRaisesRegex(RuntimeError, 'SYNTHETIC accounting interruption'):
+                self.prepare(task)
+        snapshot = json.loads(self.db.one('SELECT input_json FROM runs WHERE id=?', (task['run_id'],))[0])
         path = self.db.path
         self.db.close()
         self.db = self.fx.db = Store(path)

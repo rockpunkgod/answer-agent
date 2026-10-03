@@ -125,7 +125,17 @@ def prepare(store, snapshot):
         store.execute('UPDATE runs SET input_json=? WHERE id=?', (encode(snapshot), snapshot['run_id']))
         store.execute('INSERT INTO audit(run_id,event,details,created_at) VALUES(?,?,?,?)',
                       (snapshot['run_id'], REUSE_EVENT, encode({'link': link, 'receipt': snapshot['question_match_result']}), now()))
+    record_reused_usage(store, snapshot)
     return snapshot
+
+
+def record_reused_usage(store, snapshot):
+    """Repair an interrupted accounting write after checking original proof."""
+    from .call_costs import close_stage
+    validate_receipt(store, snapshot)
+    proof = 'verified-reuse:' + snapshot['followup_reuse']['materials_sha256']
+    for kind in ('SEARCH', 'DEEPSEEK_MATCH'):
+        close_stage(store, snapshot['run_id'], kind, proof)
 
 
 def validate_receipt(store, snapshot):

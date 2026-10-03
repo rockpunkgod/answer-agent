@@ -209,12 +209,15 @@ class BraveSearch:
     def __init__(self, fetcher, key_env):
         self.fetcher, self.key_env = fetcher, key_env
 
-    def search(self, query, budget):
+    def preflight(self, query):
         if not isinstance(query, str) or len(query) > 600 or len(query.split()) > 75:
             raise LookupFailure('PROVIDER_UNAVAILABLE', 'SEARCH_QUERY_EXCEEDS_PROVIDER_LIMIT')
-        key = os.environ.get(self.key_env, '')
-        if not key:
+        if not os.environ.get(self.key_env, ''):
             raise LookupFailure('PROVIDER_UNAVAILABLE', 'SEARCH_KEY_NOT_CONFIGURED')
+
+    def search(self, query, budget):
+        self.preflight(query)
+        key = os.environ.get(self.key_env, '')
         url = 'https://api.search.brave.com/res/v1/web/search?' + urlencode({'q': query, 'count': 6})
         result = self.fetcher.search_request(url, budget, headers={'X-Subscription-Token': key, 'Accept': 'application/json'})
         try:
@@ -450,6 +453,7 @@ def _atomic_json(path, value):
 
 class ReferenceLookup:
     def __init__(self, config, *, fetcher=None, provider=None, providers=None):
+        self.usage_injected = fetcher is not None or provider is not None or providers is not None
         self.config = config
         self.fetcher = fetcher or ReferenceFetcher(timeout=config.timeout_seconds,
             interval=config.request_interval_seconds, retries=config.retries)
@@ -472,7 +476,7 @@ class ReferenceLookup:
         config['cache_root'], config['fixture_root'] = str(self.config.cache_root), str(self.config.fixture_root)
         return [VERSION, config, [p.identity for p in self.providers], bool(os.environ.get(self.config.key_env))]
 
-    def _search(self, queries, budget, report):
+    def _search(self, queries, budget, report, usage=None):
         """Bounded ordered adapters; one failure cannot suppress a backup.
 
         The production default remains the existing Brave adapter. Injection of
@@ -493,15 +497,26 @@ class ReferenceLookup:
                 remaining -= 1
                 record = {'query': query, 'provider': provider.identity, 'searched_at': now(), 'cache_hit': False}
                 report['queries'].append(record)
+                call_id = None
                 try:
                     search_key = digest([VERSION, provider.identity, self.config.key_env, query])
                     cached_search = self._cache('search', search_key)
                     if cached_search is None:
+                        if isinstance(provider, BraveSearch):
+                            provider.preflight(query)
+                        if usage:
+                            meter, scope = usage
+                            call_id = meter.start('SEARCH', provider.identity, search_key,
+                                                  scope + ':' + search_key)
+                            record['usage_call_id'] = call_id
                         found = provider.search(query, budget)
                         if (not isinstance(found, list) or len(found) > 20
                                 or any(not isinstance(item, dict) or not isinstance(item.get('url'), str) for item in found)):
                             raise LookupFailure('PROVIDER_UNAVAILABLE', 'SEARCH_RESPONSE_INVALID')
                         searched_at = now()
+                        if call_id:
+                            meter.finish(call_id, 'CONFIRMED', 'search-response:' + search_key)
+                            call_id = None
                         self._cache('search', search_key, value={'results': found, 'searched_at': searched_at})
                     else:
                         found, searched_at = cached_search['results'], cached_search['searched_at']
@@ -511,10 +526,14 @@ class ReferenceLookup:
                     if found:
                         break
                 except LookupFailure as exc:
+                    if call_id:
+                        meter.finish(call_id, 'UNKNOWN', 'provider-call:' + exc.code)
                     record.update(status=exc.status, code=exc.code)
                     report['errors'].append({'status': exc.status, 'code': exc.code, 'provider': provider.identity})
                     break
                 except Exception:
+                    if call_id:
+                        meter.finish(call_id, 'UNKNOWN', 'search-adapter-outcome-unconfirmed')
                     record.update(status='INTERNAL_ERROR', code='SEARCH_ADAPTER_ERROR')
                     report['errors'].append({'status': 'INTERNAL_ERROR', 'code': 'SEARCH_ADAPTER_ERROR', 'provider': provider.identity})
                     break
@@ -615,7 +634,7 @@ class ReferenceLookup:
         return None
 
     def run(self, snapshot, *, trigger=None, candidate_urls=(), fixtures=(), fragments=None,
-            remaining_seconds=None, cancelled=None):
+            remaining_seconds=None, cancelled=None, _usage=None):
         run_started = time.monotonic()
         question = Question.from_dict(snapshot['student_question'])
         report = {'schema_version': 1, 'module_version': VERSION, 'case_id': snapshot['case_id'],
@@ -677,7 +696,7 @@ class ReferenceLookup:
                     proposed = ['"' + p + '"' for p in phrases[:2]] + ['"' + shortened + '"']
                     proposed += ['"' + p + '"' for p in phrases[2:3]] + [first, shortened]
                     queries = list(dict.fromkeys(proposed))
-                    candidates.extend(self._search(queries, budget, report))
+                    candidates.extend(self._search(queries, budget, report, _usage))
             documents = []
             seen = set()
             for item in candidates:
@@ -779,8 +798,15 @@ class ReferenceLookup:
                             ttl=max(0, report['expires_at_epoch'] - time.time()))
             return report
 
-    def run_for_question(self, store, question_id, question_version, context_revision, *, retry=False, **kwargs):
+    def run_for_question(self, store, question_id, question_version, context_revision, *, retry=False, run_id=None, **kwargs):
         request_started = time.monotonic()
+        meter = None
+        if run_id is not None:
+            from .call_costs import RunMeter
+            run = store.one('SELECT * FROM runs WHERE id=?', (run_id,))
+            if not run or run['state'] != 'RUNNING' or (run['question_id'], run['question_version'], run['context_revision']) != (question_id, question_version, context_revision):
+                raise ValueError('REFERENCE_USAGE_RUN_MISMATCH')
+            meter = RunMeter(store.path, run_id, injected=self.usage_injected or bool(kwargs.get('fixtures')))
         snapshot = student_snapshot(store, question_id, question_version, context_revision)
         if not self.config.enabled or kwargs.get('trigger') is None:
             return self.run(snapshot, **kwargs)
@@ -797,20 +823,23 @@ class ReferenceLookup:
             if old and not retry:
                 meta = json.loads(old['details'])
                 cached = self._cache('verification', meta.get('lookup_key', '')) if meta.get('lookup_key') else None
-                return self._report_state(store, cached or meta, evidence_available=bool(cached), reused=True)
+                result = self._report_state(store, cached or meta, evidence_available=bool(cached), reused=True)
+                if meter:
+                    meter.close('SEARCH', 'lookup-reused:' + request_key)
+                return result
             started = store.one("SELECT id FROM audit WHERE event='REFERENCE_LOOKUP_STARTED' AND json_extract(details,'$.request_key')=?", (request_key,))
             if started and not old and not retry:
                 return {'question_id': question_id, 'question_version': question_version,
                         'retrieval_status': 'INTERRUPTED', 'match_status': 'NOT_VERIFIED', 'next_action': 'MANUAL_REVIEW',
                         'explanation': '上次检索中断；核对后可显式重试，不自动重复搜索。'}
             with store.transaction():
-                store.execute('INSERT INTO audit(case_id,question_id,event,details,created_at) VALUES(?,?,?,?,?)',
+                started_record = store.execute('INSERT INTO audit(case_id,question_id,event,details,created_at) VALUES(?,?,?,?,?)',
                     (snapshot['case_id'], question_id, 'REFERENCE_LOOKUP_STARTED', encode({'request_key': request_key,
                      'question_version': question_version, 'context_revision': context_revision}), now()))
             allowance = kwargs.get('remaining_seconds')
             allowance = min(self.config.total_seconds, allowance if allowance is not None else self.config.total_seconds)
             kwargs['remaining_seconds'] = allowance - (time.monotonic() - request_started)
-            report = self.run(snapshot, **kwargs)
+            report = self.run(snapshot, _usage=(meter, str(started_record.lastrowid)) if meter else None, **kwargs)
             self.register_candidates(store, report)
             with store.transaction():
                 current = store.one('SELECT current_version,context_revision FROM questions WHERE id=?', (question_id,))
@@ -822,6 +851,8 @@ class ReferenceLookup:
                 metadata['request_key'] = request_key
                 store.execute('INSERT INTO audit(case_id,question_id,event,details,created_at) VALUES(?,?,?,?,?)',
                     (snapshot['case_id'], question_id, 'REFERENCE_LOOKUP_REPORT', encode(metadata), now()))
+            if meter:
+                meter.close('SEARCH', 'lookup-report:' + request_key)
             return report
 
     def register_candidates(self, store, report):

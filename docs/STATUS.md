@@ -20,7 +20,7 @@
 | 10. 实际交付回流 | `delivery_batches.py`、`manual_delivery.py`、`workflow._record_check`；`test_delivery_batches`及原交付测试 | 一个完整稿对应一个Outbox分段计划；顺序核验、部分不计量、全部成功回流原绩效已接通Mock；真实多段发送未验证 |
 | 11. 中途更正 | `service.py`、`workflow.py`；`test_delivery_batches`及原版本测试 | 保留旧版本拦截；多段中途更正停止余段并保留已发事实通过Mock，真实更正链路未验收 |
 | 12. 绩效一致性 | `semantic_decisions.py`、`performance.py`；`test_shared_semantic_consumers`、`test_performance_rules`、`test_performance_delivery_eligibility` | 原归属/计量/夜间规则保留，模拟边界已覆盖；真实新闭环的投影未验收 |
-| 13. 实际成本 | 搜索报告已有查询记录，网页有尝试证据 | 缺逐 AnswerTask 的实际付费/调用归集与均值、P50/P95、配置上限检查；不能把未知费用记 0 |
+| 13. 实际成本 | `call_costs.py`、搜索/两阶段调用入口、`tools.report_task_costs`；`test_call_costs`、两阶段及追问测试 | 已按原run/audit记录观察到的调用及人工账单证据，沿用原确认篇数计算均值/P50/P95/上限；当前调度/其他付费调用、内部网络重试及真实账单尚未采集。未知费用或未分配任务不允许宣布达标 |
 | 14. 重启恢复 | 现有 SQLite、Outbox、`reviewed_question_queue`；相关队列/发送/会话恢复测试 | 匹配结果同库重读，以及发送前、第一段后、第二段副作用后UNKNOWN、最后一段回流已有Mock；完整六断点与真实恢复试运行仍缺 |
 | 15. 无阻断级问题 | 现有版本/路径/目标/未知发送回归 | 真实 A–H 类别及至少 20 个任务试运行尚未执行；测试数量不证明生产稳定 |
 | 16. 限制公开 | 本文件、README、现有验证日志 | 保留 UNIT/MOCK/REAL/SKIPPED/FAILED 区分；CLI、SDK、上云、集群和符号链接权限不当作个人 Demo 上线前置条件 |
@@ -96,6 +96,20 @@
 本批没有操作真实桌面、上传DeepSeek、向群发送、改动正式数据库或部署8767。历史段落中的“普通追问尚未接通”是当时状态，以本节为准；生产网页执行回调、持续收题、实际成本和授权A–H稳定试运行仍未验收，结论 **NOT_READY**。Edge官方扩展文档支持已登录浏览器操作，本机Default配置中已检测到ChatGPT扩展文件、版本1.26.901.11451；当前聊天连接、题图上传和Python独立调用尚未验证，不把它加入启动依赖。
 
 最终回归命令：`python -X utf8 -B -m tools.verify_project --output artifacts/verification/20261003-followup-reuse-final`。1214项、1211通过、0失败、3跳过，676.667秒，退出码0，源码运行期间未变化。快照`sha256:29ef8ed091b04cc14ff6e668a5cbadc6208e0d9d634df08a5a68acbaa949baab`；原始日志及evidence.json复核有效、未过期，等级 **MOCK_INTEGRATION_VERIFIED**。SKIPPED分别为未提供官方SDK文件、教学依赖符号链接无法创建、浏览器Profile符号链接无法创建，均不计通过。本批REAL仅本机ANSWER Git状态和Edge扩展文件的只读检查；真实网页、群交付和正式统计未执行。
+
+### 后续实施：观察调用与费用证据（2026-10-03）
+
+从`0002be76b3ecd2d7e4326d52c323556be92b5d0a`继续。本批新增`helpdesk/call_costs.py`、`tools/report_task_costs.py`与匿名费用测试，修改现有`reference_lookup.py`、`question_matching.py`、`mcp_preparation.py`、`mcp_generation.py`、`followup_reuse.py`及对应测试。调用只记在原audit表，不新增数据库、迁移或独立进程，不改变交付和绩效完成判定。每条记录使用原run及其学生/题目/版本/会话绑定；启动前记录尝试，返回后记录观察结果，中断仍保留未知，不能重放。费用文件限定批准目录，账单项按内容哈希和已核验条目标识去重；人工登记明确是人工账单核验，不伪造平台计费回执。
+
+搜索缓存及普通追问复用会记录本次未再调用的证据。复用事实先保存、费用范围记录中断时，重启重新核验原材料再补记录，不再搜题或提交。实际费用不从消息数、调用数、模型置信度、网上单价或“网页版免费”推算；未采集范围和费用证据缺失、变化均保持UNVERIFIED。只有原绩效篇数已确认、完整实际交付仍有效、所有关联任务成本可核验且没有遗漏未分配任务时，才计算平均/P50/P95/最大值和上限结果。同题追问归入原篇，数量大于一篇或成本归属歧义不擅自平摊。
+
+只读命令`python -X utf8 -B -m tools.report_task_costs --db <现有业务库>`使用同一读取快照，不创建/迁移数据库或启动工具。加`--run <已有run_id>`查看任务，`--max-average-cny`明确覆盖默认0.50元门槛。本批没有自动账单接入或人工费用页面；费用登记暂为本地受信函数。SCHEDULER/OTHER目前未自动计量，重试计数只覆盖观察到的适配器尝试，页面抓取内部网络重试仍未计量。因此本批尚未满足完整“实际成本”验收条件。
+
+本机ANSWER版本保持冻结，本批未更新或修改教学内容。Edge官方扩展支持范围已按OpenAI Docs重新核对，Default目录有ChatGPT扩展文件、版本1.26.901.11451；已安装文件不代表本会话已连接，不证明Python独立调用和题图上传。仍不加启动依赖。本批没有操作真实桌面、上传/提交DeepSeek、向群发送、改正式数据库、部署8767或提交日报；结论保持 **NOT_READY**。
+
+首次费用专项16项中15通过、1测试错误：新测试误用不存在的`performance_deliveries`表。改为使用原交付方法返回的Outbox ID，保留UNKNOWN断言，随后16项全部通过。相邻回归命令`python -X utf8 -B -m unittest tests.test_call_costs tests.test_reference_lookup tests.test_question_matching tests.test_followup_reuse tests.test_mcp_generation tests.test_mcp_preparation tests.test_performance_delivery_eligibility tests.test_delivery_batches`，119项全部通过，389.906秒，0失败、0跳过。
+
+回归后补充未分配任务不能被费用汇总遗漏、未知付费次数不显示零，以及数据库文件丢失时不能新建空库；最终`python -X utf8 -B -m unittest tests.test_call_costs`，18项全部通过，0.751秒。另执行`python -X utf8 -B -m unittest tests.test_question_matching.TwoStageIntegrationTests.test_teaching_unknown_keeps_one_cost_attempt_and_never_resubmits`，1项通过，12.383秒：第一阶段已捕获、第二阶段提交未知时仍仅保留一次尝试，无答案或额外调用。三组命令计数存在重叠，不相加宣传覆盖量。均为UNIT/MOCK；真实费用平均/P50/P95/最大值均UNVERIFIED，没有真实账单或本批真实付费调用。REAL仅ANSWER干净工作树/提交及Edge扩展文件只读检查。本批专项无SKIPPED或剩余失败；此前官方SDK文件与两项符号链接SKIPPED未复验，仍不算通过。未重跑全量，上一批全量快照不替代本批验证。
 
 ## 本轮审计与最小改动
 

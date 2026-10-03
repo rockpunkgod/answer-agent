@@ -272,7 +272,23 @@ class DeepSeekSessionPreparer:
             event['intent'] = intent
         self.record['events'].append(event)
         self._save()
-        result = self.transport.call(tool, arguments)
+        if intent == 'submit question verification once' and self.snapshot.get('session_store_path'):
+            from .call_costs import RunMeter
+            from .mcp_transport import MCPProcess
+            meter = RunMeter(self.store_path or self.snapshot['session_store_path'], self.snapshot['run_id'],
+                             injected=not isinstance(self.transport, MCPProcess))
+            key = 'match:' + self.snapshot['run_id']
+            self.match_usage = (meter, meter.start('DEEPSEEK_MATCH', 'deepseek_web', key, key))
+            self.record['matching_call_id'] = self.match_usage[1]
+            self._save()
+        try:
+            result = self.transport.call(tool, arguments)
+        except BaseException:
+            if getattr(self, 'match_usage', None):
+                meter, call = self.match_usage
+                meter.finish(call, 'UNKNOWN', 'native-call-outcome-unconfirmed')
+                self.match_usage = None
+            raise
         event['status'] = 'TOOL_RETURNED'
         event['result'] = result
         self._save()
@@ -596,6 +612,12 @@ class DeepSeekSessionPreparer:
             proof_path = self.evidence_path.with_name('matching-' + self.snapshot['run_id'] + '.json')
             with proof_path.open('x', encoding='utf-8') as stream:
                 json.dump(proof, stream, ensure_ascii=False, indent=2)
+            if getattr(self, 'match_usage', None):
+                meter, call = self.match_usage
+                evidence = 'sha256:' + sha256(proof_path.read_bytes()).hexdigest()
+                meter.finish(call, 'CONFIRMED', evidence)
+                self.match_usage = None
+                meter.close('DEEPSEEK_MATCH', evidence)
             store = Store(Path(self.store_path or self.snapshot['session_store_path']).resolve(strict=True))
             try:
                 self.snapshot = record_result(store, self.snapshot, proof_path)
@@ -682,5 +704,9 @@ class DeepSeekSessionPreparer:
             self.record['status'] = 'OUTCOME_REQUIRES_REVIEW'
             self.record['error'] = f'{type(exc).__name__}: {exc}'
             self._save()
+            if getattr(self, 'match_usage', None):
+                meter, call = self.match_usage
+                meter.finish(call, 'UNKNOWN', 'matching-outcome-unconfirmed')
+                self.match_usage = None
             raise
 

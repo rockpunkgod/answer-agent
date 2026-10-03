@@ -82,14 +82,15 @@ def prepare_input(store, run_id, lookup, **lookup_args):
     if 'question_match_input' in snapshot:
         validate_input(store, snapshot)
         if snapshot.get('followup_reuse'):
-            validate_receipt(store, snapshot)
+            from .followup_reuse import record_reused_usage
+            record_reused_usage(store, snapshot)
         return snapshot
     if snapshot.get('intent') == 'FOLLOWUP':
         from .followup_reuse import prepare
         return prepare(store, snapshot)
     trigger = 'version_difference' if snapshot.get('intent') in ('CORRECTION', 'DISPUTE') else 'initial_question'
     report = lookup.run_for_question(store, snapshot['question_id'], snapshot['question_version'],
-                                     snapshot['context_revision'], trigger=trigger, **lookup_args)
+                                     snapshot['context_revision'], trigger=trigger, run_id=run_id, **lookup_args)
     _require(report.get('retrieval_status') in ('CANDIDATES_FOUND', 'NO_RESULTS', 'OFFLINE_FIXTURE')
              and not report.get('stale') and not report.get('evidence_expired_or_unavailable'),
              'MATCH_SEARCH_UNAVAILABLE:' + str(report.get('retrieval_status')))

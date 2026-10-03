@@ -83,6 +83,7 @@ class MatchingTests(unittest.TestCase):
         self.assertNotIn('reference_answers', encode(matching.matching_payload(frozen)))
         self.assertNotIn('teaching_skills', matching.matching_payload(frozen))
         self.assertEqual(self.db.one('SELECT COUNT(*) FROM performance_units')[0], 0)
+
         self.assertEqual(self.db.one('SELECT COUNT(*) FROM answers')[0], 0)
 
     def test_unknown_or_duplicate_candidate_and_unavailable_search_fail_closed(self):
@@ -314,6 +315,15 @@ class TwoStageIntegrationTests(unittest.TestCase):
         self.assertEqual(self.db.one('SELECT state FROM outbox WHERE id=?', (outcome['outbox_id'],))[0], 'PENDING')
         self.assertEqual(self.db.one('SELECT COUNT(*) FROM performance_units')[0], 0)
 
+        from helpdesk.call_costs import task_cost
+        usage = task_cost(self.db, saved['run_id'])
+        self.assertEqual(usage['call_attempts']['DEEPSEEK_MATCH'], 1)
+        self.assertEqual(usage['call_attempts']['DEEPSEEK_TEACH'], 1)
+        self.assertEqual(usage['confirmed_calls'], 2)
+        self.assertTrue(usage['injected_evidence'])
+        self.assertIsNone(usage['call_attempts']['SCHEDULER'])
+        self.assertIsNone(usage['total_cny'])
+
     def test_first_submission_unknown_never_uploads_teaching_or_resubmits(self):
         desktop = TwoStageDesktop(self.snapshot, unknown=True)
         make = lambda: DeepSeekSessionPreparer(desktop, self.snapshot, URL, self.path, self.controls,
@@ -332,6 +342,38 @@ class TwoStageIntegrationTests(unittest.TestCase):
         self.assertEqual(self.db.one('SELECT COUNT(*) FROM answers')[0], 0)
         self.assertEqual(json.loads(self.path.read_text(encoding='utf-8'))['status'], 'OUTCOME_REQUIRES_REVIEW')
 
+        from helpdesk.call_costs import task_cost
+        usage = task_cost(self.db, self.task['run_id'])
+        self.assertEqual(usage['call_attempts']['DEEPSEEK_MATCH'], 1)
+        self.assertEqual(usage['calls'][0]['status'], 'UNKNOWN')
+        self.assertEqual(usage['retry_calls'], 0)
+        self.assertIsNone(usage['call_attempts']['DEEPSEEK_TEACH'])
+
+    def test_teaching_unknown_keeps_one_cost_attempt_and_never_resubmits(self):
+        desktop = TwoStageDesktop(self.snapshot)
+        DeepSeekSessionPreparer(desktop, self.snapshot, URL, self.path, self.controls,
+                               poll_interval=0, timeout=2).run()
+        complete_automatic_preparation(self.db, self.task['id'], self.path)
+        saved = json.loads(self.db.one('SELECT input_json FROM runs WHERE id=?', (self.task['run_id'],))[0])
+        desktop.unknown = True
+        generator = PreparedDeepSeekGenerator(desktop, self.task['preparation_path'], self.task['evidence_dir'],
+                                              poll_interval=0, timeout=2)
+        with self.assertRaises(TimeoutError):
+            generator.generate(saved)
+        before = len(desktop.calls)
+        with self.assertRaises(FileExistsError):
+            generator.generate(saved)
+        self.assertEqual(len(desktop.calls), before)
+        self.assertEqual(len(desktop.submission_uploads), 2)
+        from helpdesk.call_costs import task_cost
+        usage = task_cost(self.db, saved['run_id'])
+        self.assertEqual(usage['call_attempts']['DEEPSEEK_MATCH'], 1)
+        self.assertEqual(usage['call_attempts']['DEEPSEEK_TEACH'], 1)
+        self.assertEqual([c['status'] for c in usage['calls']], ['CONFIRMED', 'UNKNOWN'])
+        self.assertEqual(usage['retry_calls'], 0)
+        self.assertIsNone(usage['total_cny'])
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM answers')[0], 0)
+
     def test_unresolved_candidate_conflict_stops_before_teaching(self):
         unresolved = {**STUDENT_ONLY, 'match_status': 'UNRESOLVED', 'unresolved_fields': ['candidate_conflict']}
         desktop = TwoStageDesktop(self.snapshot, result=unresolved)
@@ -340,6 +382,12 @@ class TwoStageIntegrationTests(unittest.TestCase):
         self.assertFalse(any(name.endswith('.md') for name in desktop.uploaded))
         self.assertEqual(self.db.one('SELECT COUNT(*) FROM answers')[0], 0)
         self.assertFalse(self.db.one("SELECT id FROM audit WHERE event='QUESTION_MATCH_VERIFIED'"))
+
+        from helpdesk.call_costs import task_cost
+        usage = task_cost(self.db, self.task['run_id'])
+        self.assertEqual(usage['call_attempts']['DEEPSEEK_MATCH'], 1)
+        self.assertEqual(usage['calls'][0]['status'], 'CONFIRMED')
+        self.assertIsNone(usage['call_attempts']['DEEPSEEK_TEACH'])
 
 
 if __name__ == '__main__':
