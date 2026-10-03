@@ -16,7 +16,8 @@ from types import SimpleNamespace
 from . import luna_navigation
 from .call_costs import RunMeter
 from .locking import resource_lock
-from .mcp_page_contract import DeepSeekPage, DeepSeekNewChatPage, PageUnconfirmed, snapshot_text, require_complete_tree
+from .mcp_page_contract import (DeepSeekPage, DeepSeekNewChatPage, PageUnconfirmed,
+                                snapshot_text, require_complete_tree, require_blank_conversation)
 from .mcp_transport import MCPProcess
 from .storage import Store, encode, now
 
@@ -251,7 +252,8 @@ class AutomaticAnswerRuntime:
             for index in range(3):
                 self.require_running()
                 observed = self._observe(transport)
-                _, url, _ = self._page(observed)
+                _, url, tree = self._page(observed)
+                require_blank_conversation(tree)
                 if url == 'https://chat.deepseek.com/':
                     from .question_matching import _binding
                     with store.transaction():

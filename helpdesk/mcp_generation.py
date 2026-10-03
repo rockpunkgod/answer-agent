@@ -226,6 +226,71 @@ class PreparedDeepSeekGenerator:
         finally:
             store.close()
 
+    def _result(self, snapshot, prep, data, attempt_path):
+        if (not isinstance(data, dict) or set(data) != {'option_label', 'text'}
+                or not isinstance(data['text'], str) or not data['text'].strip()):
+            raise ValueError('Invalid final answer contract')
+        matches = [o for o in snapshot['student_question']['options'] if o['label'] == data['option_label']]
+        if len(matches) != 1:
+            raise ValueError('Output option is not in the frozen question')
+        result = dict(adapter=self.identity, simulated=False, run_id=snapshot['run_id'],
+                      session_id=snapshot['session_id'], complete=True, uploads_confirmed=True,
+                      uploaded_teaching_hashes={**prep['uploaded_teaching_hashes'], **prep.get('reused_teaching_hashes', {})},
+                      web_session_evidence=str(attempt_path.resolve()),
+                      preparation_contract=prep['status'],
+                      model_readback_performed=prep.get('model_readback_performed', True),
+                      correct_option_id=matches[0]['id'], text=data['text'])
+        if snapshot.get('followup_reuse'):
+            result.update(followup_reuse=snapshot['followup_reuse'], reused_teaching_hashes=prep['reused_teaching_hashes'])
+        return result
+
+    def captured_result(self, store, snapshot):
+        """Read an already confirmed capture without starting a desktop or model.
+
+        A saved result alone is insufficient: the original call must confirm
+        these exact bytes. Uncertain submissions retain the manual recovery path.
+        """
+        from .call_costs import START, RESULT, _records
+        manifest = verify_frozen_teaching(snapshot)
+        prep, page = self._preparation(snapshot)
+        self._verify_current_input(snapshot)
+        if manifest.get('format_version') == 3:
+            from .lesson_checks import validate_source_check
+            from .question_matching import frozen_receipt
+            validate_source_check(snapshot, manifest=manifest)
+            frozen_receipt(snapshot, session_url=page.url)
+            if prep.get('preparation_mode') != 'VERIFY_THEN_TEACH':
+                raise ValueError('ANSWER_REQUIRES_VERIFY_THEN_TEACH')
+        run_id = snapshot['run_id']
+        attempt_path = self.evidence_dir / (run_id + '.json')
+        content = attempt_path.read_bytes()
+        attempt = json.loads(content)
+        if (attempt.get('status') != 'FINAL_OUTPUT_CAPTURED' or attempt.get('run_id') != run_id
+                or attempt.get('session_url') != page.url
+                or attempt.get('input_fingerprint') != input_fingerprint(snapshot)
+                or attempt.get('display_index') != page.display_index
+                or attempt.get('preparation_contract') != prep['status']
+                or attempt.get('model_readback_performed') is not prep.get('model_readback_performed', True)
+                or attempt.get('automatic_retry_allowed') is not False):
+            raise ValueError('Captured generation binding changed')
+        call_id = attempt.get('teaching_call_id')
+        calls = [c for c in _records(store, run_id, START) if c['kind'] == 'DEEPSEEK_TEACH']
+        binding = {k: snapshot[k] for k in ('run_id', 'case_id', 'binding_id', 'question_id',
+                                          'question_version', 'context_revision', 'session_id')}
+        if (len(calls) != 1 or not call_id or calls[0]['call_id'] != call_id
+                or calls[0]['binding'] != binding or calls[0]['provider'] != 'deepseek_web'
+                or calls[0]['request_key'] != 'teach:' + run_id or calls[0]['attempt'] != 1):
+            raise ValueError('Captured teaching call is not verified')
+        confirmations = [r for r in _records(store, run_id, RESULT) if r['call_id'] == call_id]
+        if confirmations != [{'call_id': call_id, 'status': 'CONFIRMED',
+                              'evidence': 'sha256:' + sha256(content).hexdigest()}]:
+            raise ValueError('Captured teaching result is not confirmed or changed')
+        data = json.loads(page.completed_text(attempt.get('final_snapshot'), 'answer_run_' + run_id))
+        result = self._result(snapshot, prep, data, attempt_path)
+        if attempt.get('result') != result:
+            raise ValueError('Captured result differs from the final page')
+        return result
+
     def generate(self, snapshot):
         manifest = verify_frozen_teaching(snapshot)
         if manifest.get('format_version') == 3:
@@ -370,23 +435,7 @@ class PreparedDeepSeekGenerator:
                     time.sleep(self.poll_interval)
                     continue
                 data = json.loads(answer)
-                if (not isinstance(data, dict) or set(data) != {'option_label', 'text'}
-                        or not isinstance(data['text'], str) or not data['text'].strip()):
-                    raise ValueError('Invalid final answer contract')
-                matches = [o for o in snapshot['student_question']['options'] if o['label'] == data['option_label']]
-                if len(matches) != 1:
-                    raise ValueError('Output option is not in the frozen question')
-                result = dict(adapter=self.identity, simulated=False, run_id=run,
-                              session_id=snapshot['session_id'], complete=True, uploads_confirmed=True,
-                              # Existing finish contract means available course material;
-                              # the preparation retains which files were reused this turn.
-                              uploaded_teaching_hashes={**prep['uploaded_teaching_hashes'], **prep.get('reused_teaching_hashes', {})},
-                              web_session_evidence=str(attempt_path.resolve()),
-                              preparation_contract=prep['status'],
-                              model_readback_performed=prep.get('model_readback_performed', True),
-                              correct_option_id=matches[0]['id'], text=data['text'])
-                if snapshot.get('followup_reuse'):
-                    result.update(followup_reuse=snapshot['followup_reuse'], reused_teaching_hashes=prep['reused_teaching_hashes'])
+                result = self._result(snapshot, prep, data, attempt_path)
                 attempt.update(status='FINAL_OUTPUT_CAPTURED', result=result, final_snapshot=observed)
                 save()
                 if usage:

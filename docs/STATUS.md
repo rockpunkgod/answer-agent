@@ -15,13 +15,13 @@
 | 5. Top2 | `reference_lookup.top_candidates`；`test_reference_lookup` | 本批确定性最多两项、同内容去重和真实候选 ID 通过 Mock；尚未交到真实 DeepSeek |
 | 6. 两次 DeepSeek | `question_matching.py`、`mcp_preparation.py`、`mcp_generation.py`、`automatic_answer_runtime.py`；两阶段/队列测试 | 授权真实专项已完成同一会话两次上传、提交和结构解析，草稿待复核；没有检索候选，未走生产队列。已补首次请求后认领真实链接、提交消息证据及截断保护的Unit/Mock；修补后的自动队列、完整正文采集及真实Top2路径仍未验收 |
 | 7. 会话及追问 | `workflow.py`、`session_isolation.py`、`followup_reuse.py`、`mcp_generation.delivery_context`；`test_question_session_isolation`、`test_mcp_followup_context`、`test_followup_reuse` | 普通追问沿用原核验与课程上传证据、同一会话仅上传本轮上下文已有 Mock；真实网页复用未验收 |
-| 8. Answer 安全重试 | `reviewed_question_queue.py`、`delivery_tasks.py`、`question_matching.begin_attempt`、`followup_reuse.begin_upload`；相关队列与两阶段测试 | 未知网页提交或追问上传不能改文件名重提；自动文字逐段重试已持久化，UNKNOWN不重发。普通追问复用已接线，完整网页阶段恢复仍缺 |
+| 8. Answer 安全重试 | `reviewed_question_queue.py`、`delivery_tasks.py`、`question_matching.begin_attempt`、`followup_reuse.begin_upload`；相关队列与两阶段测试 | 未知网页提交或追问上传不能改文件名重提；自动文字逐段重试已持久化，UNKNOWN不重发。原调用已确认的完整生成捕获可核验后回写；普通追问复用已接线，其他网页阶段恢复和真实验证仍缺 |
 | 9. 自动发送 | `workflow._validate`、`mcp_group_delivery.py`；`test_mcp_group_delivery`、`test_automatic_delivery_workbench` | 目标/版本/未知结果/接管防护已有 Mock，当前测试群真实自动发送未授权执行或验收 |
 | 10. 实际交付回流 | `delivery_batches.py`、`manual_delivery.py`、`workflow._record_check`；`test_delivery_batches`及原交付测试 | 一个完整稿对应一个Outbox分段计划；顺序核验、部分不计量、全部成功回流原绩效已接通Mock；真实多段发送未验证 |
 | 11. 中途更正 | `service.py`、`workflow.py`；`test_delivery_batches`及原版本测试 | 保留旧版本拦截；多段中途更正停止余段并保留已发事实通过Mock，真实更正链路未验收 |
 | 12. 绩效一致性 | `semantic_decisions.py`、`performance.py`；`test_shared_semantic_consumers`、`test_performance_rules`、`test_performance_delivery_eligibility` | 原归属/计量/夜间规则保留，模拟边界已覆盖；真实新闭环的投影未验收 |
 | 13. 实际成本 | `call_costs.py`、搜索/两阶段/本机Luna调用入口、`tools.report_task_costs`；费用与执行测试 | 已按原run/audit记录观察到的调用及人工账单证据，沿用原确认篇数计算均值/P50/P95/上限；本机网页循环的Luna计量已接，其他调度/付费调用、内部网络重试及真实账单尚未完整采集。未知费用或未分配任务不允许宣布达标 |
-| 14. 重启恢复 | 现有 SQLite、Outbox、`reviewed_question_queue`；相关队列/发送/会话恢复测试 | 匹配结果同库重读，以及发送前、第一段后、第二段副作用后UNKNOWN、最后一段回流已有Mock；完整六断点与真实恢复试运行仍缺 |
+| 14. 重启恢复 | 现有 SQLite、Outbox、`reviewed_question_queue`；相关队列/发送/会话恢复测试 | 匹配结果同库重读、确认生成捕获后尚未完成原run的回写，以及发送前、第一段后、第二段副作用后UNKNOWN、最后一段回流已有Mock；完整六断点与真实恢复试运行仍缺 |
 | 15. 无阻断级问题 | 现有版本/路径/目标/未知发送回归 | 真实 A–H 类别及至少 20 个任务试运行尚未执行；测试数量不证明生产稳定 |
 | 16. 限制公开 | 本文件、README、现有验证日志 | 保留 UNIT/MOCK/REAL/SKIPPED/FAILED 区分；CLI、SDK、上云、集群和符号链接权限不当作个人 Demo 上线前置条件 |
 
@@ -170,6 +170,20 @@ python -X utf8 -B -m unittest -v tests.test_automatic_answer_runtime tests.test_
 结果为132项全部通过、0失败、0跳过，718.519秒，退出码0。运行时间为2026-10-03 04:57:41—05:09:40 UTC，开始与结束源码均为 `sha256:a3f70753fa61d329b92ba6f29db8726abe3df70a1408b63f54e2da780bcd717c`，期间未变化。日志保存在忽略的 `artifacts/verification/20261003-new-chat-page-final-v3/unittest.log`。这是上述11个模块的UNIT/MOCK相关回归，不是全项目回归或真实环境通过；既有符号链接和SDK文件SKIPPED本批未复验，仍不算通过。
 
 REAL：本批没有追加DeepSeek请求、进行桌面操作、修改生产库、部署8767或启用外发。前述授权网页专项保留真实证据与DRAFT_REVIEW_REQUIRED限制；这次自动入口修补仍为UNIT/MOCK，不替代真实队列、首次应答SLA、实际Top2及A–H/20任务试运行。当前仍为NOT_READY。
+
+### 后续实施：已确认生成的重启回流（2026-10-03）
+
+基线为`1237a092910bb3ca51e59b428ff15d746fe0359a`。ANSWER仍冻结在`b04ebc26d7fa096404111a0bb12f6c77cc8525b9`，没有更新或修改教学原文。本批只修补现有网页入口与生成回流，不迁移数据库、不改生产配置、不新增服务。
+
+首先复现“新建后出现变化后的会话URL，但页面仍有另一题的已完成回答”会被错误认领的缺口；修复前新用例失败，修复后13项相关UNIT/MOCK通过（97.468秒）。主页和直接获得会话URL的两条新建路径共用旧回答/生成标记检查；已有绑定会话和正常追问不受这个新建检查影响。
+
+其次复现生成文件已为FINAL_OUTPUT_CAPTURED、原调用已确认，但尚未Workflow.finish时中断，重启仍变EXECUTION_UNCERTAIN的缺口。新用例首次失败（34.640秒），修复后同库重启用例通过（41.010秒）。`mcp_generation.py`复用原最终输出契约，核对原调用、绑定、捕获内容哈希及完整最终页面；`tools/run_prepared_deepseek.py`提供不操作桌面的恢复模式，队列在判定步骤不可重放前消费可核验结果。回写仍使用原Workflow.finish及其版本、课程、选项和原脚本检查，不增加第二份答案或完成台账。
+
+捕获没有CONFIRMED原调用、文件变更、页面截断、存储结果与页面不一致或暂停时停止；未知提交保留原人工核验入口，不靠恢复伪造确认。异常边界与原恢复入口11项通过（54.351秒）。同库恢复后只创建一份待交付草稿，MATCH和TEACH仍各一次，没有新增调用、实际交付或绩效。后续固定源码相关回归结果在下段记录。
+
+最终相关回归命令：`python -X utf8 -B -m unittest -v tests.test_automatic_answer_runtime tests.test_prepared_run_resume tests.test_prepared_generation_reconcile tests.test_reviewed_question_queue tests.test_mcp_generation tests.test_call_costs tests.test_mcp_page_contract tests.test_followup_reuse tests.test_ack_before_generation tests.test_question_matching`。136项全部通过、0失败、0跳过，819.459秒，退出码0；2026-10-03 05:28:37—05:42:17 UTC运行期间源码未变化，前后快照均为`sha256:404204a70a6e2d46dee9cda59ed6baaf4a47c7592f87ef1295941ce4ef19338d`。原始日志保存在忽略的`artifacts/verification/20261003-captured-generation-final/unittest.log`。范围是上述十个模块的UNIT/MOCK，不是全项目或真实闭环验收。既有两项符号链接和官方SDK文件SKIPPED未在本批复验，仍保持未验证，不计通过。
+
+REAL仅由Luna medium执行一次只读DisplayInventory和固定前台探针：当前显示器0为2560×1600、缩放1.5，前台是ChatGPT，因此没有截取或读取群消息、激活其他应用、输入或提交请求。官方MCP桥正常退出；原始证据留在忽略的data/private/windows-mcp。不能据此前台状态宣布群里没有消息，也不能证明持续消息入口或15分钟ACK时效。本批未追加DeepSeek测试、外发、登记真实交付、修改正式数据库或提交日报；此前网页专项的教学疑点仍保留，当前结论NOT_READY。
 
 ## 本轮审计与最小改动
 

@@ -42,6 +42,12 @@ def require_complete_tree(record: dict):
         raise PageUnconfirmed('PAGE_TREE_TRUNCATED')
 
 
+def require_blank_conversation(tree: str):
+    """A changed, unowned URL does not prove a newly created conversation."""
+    if '按钮 "朗读"' in tree or '正在思考' in tree or re.search(r'text "(?:BEGIN|END)_', tree):
+        raise PageUnconfirmed('NEW_CHAT_NOT_BLANK')
+
+
 @dataclass(frozen=True)
 class DeepSeekPage:
     url: str
@@ -221,6 +227,5 @@ class DeepSeekNewChatPage(DeepSeekPage):
     def inspect(self, record: dict) -> str:
         tree = super().inspect(record)
         require_complete_tree(record)
-        if '按钮 "朗读"' in tree or '正在思考' in tree or re.search(r'text "(?:BEGIN|END)_', tree):
-            raise PageUnconfirmed('NEW_CHAT_NOT_BLANK')
+        require_blank_conversation(tree)
         return tree

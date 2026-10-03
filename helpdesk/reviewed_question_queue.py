@@ -347,6 +347,15 @@ def _authoritative_result(store, task_id, *, recover_attempts=True):
         for attempt in queue['attempts']:
             if attempt['stage'] == 'PREPARATION' and attempt['state'] == 'STARTED':
                 _attempt_finish(store, attempt['id'], 'RECOVERED_FROM_PREPARATION')
+        capture_path = Path(task['evidence_dir']) / (run['id'] + '.json')
+        if capture_path.exists():
+            # Original prepared-run checks and Workflow.finish remain the one
+            # completion path. This mode can never create a desktop transport.
+            from tools.run_prepared_deepseek import run_existing
+            recovered = run_existing(store, run['id'], task['preparation_path'], task['manifest_path'],
+                                     evidence_dir=task['evidence_dir'], recovery_only=True)
+            if recovered.get('state'):
+                return _authoritative_result(store, task_id, recover_attempts=recover_attempts)
         return checked_task, snapshot, 'GENERATION'
     if owned:
         for attempt in queue['attempts']:

@@ -61,12 +61,12 @@ class ResumeTests(unittest.TestCase):
         self.store.close()
         self.tmp.cleanup()
 
-    def resume(self, factory=None):
+    def resume(self, factory=None, *, recovery_only=False):
         with patch.object(PreparedDeepSeekGenerator, '_preparation', return_value=({}, None)), \
              patch('helpdesk.workflow.verify_bundle', return_value=self.bundle):
             return run_existing(self.store, self.run, self.preparation, self.manifest,
                                 evidence_dir=self.attempts,
-                                transport_factory=factory or (lambda: NoDesktop()))
+                                transport_factory=factory or (lambda: NoDesktop()), recovery_only=recovery_only)
 
     def test_resumes_same_run_and_finishes_without_creating_another(self):
         option = self.snapshot['student_question']['options'][0]
@@ -122,6 +122,17 @@ class ResumeTests(unittest.TestCase):
         result = self.resume(forbidden)
         self.assertEqual(result['existing_attempt']['status'], 'SUBMISSION_UNCONFIRMED')
         self.assertFalse(result['resubmitted'])
+
+    def test_recovery_only_without_capture_never_starts_transport_or_adapter(self):
+        factory = Mock(side_effect=AssertionError('Read-only recovery must not start desktop'))
+        with patch.object(PreparedDeepSeekGenerator, 'generate') as submit:
+            result = self.resume(factory, recovery_only=True)
+        factory.assert_not_called()
+        submit.assert_not_called()
+        self.assertIsNone(result['existing_attempt'])
+        self.assertFalse(result['resubmitted'])
+        self.assertEqual(self.store.one('SELECT state FROM runs WHERE id=?', (self.run,))[0], 'RUNNING')
+        self.assertEqual(self.store.one('SELECT COUNT(*) FROM answers')[0], 0)
 
     def test_wrong_preparation_rejected_before_desktop(self):
         self.preparation.write_text(json.dumps({'run_id': 'another-run',

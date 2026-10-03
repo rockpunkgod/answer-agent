@@ -1,6 +1,7 @@
 """Anonymous synthetic page/queue tests; no model, account or real desktop."""
 from contextlib import nullcontext
 from datetime import datetime, timezone
+from hashlib import sha256
 import json
 from pathlib import Path
 from threading import Event
@@ -16,7 +17,7 @@ from helpdesk.automatic_answer_runtime import AutomaticAnswerRuntime, _AnswerCon
 from helpdesk.call_costs import task_cost
 from helpdesk.locking import resource_lock
 from helpdesk.mcp_transport import MCPProcess
-from helpdesk.reviewed_question_queue import enqueue, get
+from helpdesk.reviewed_question_queue import advance, enqueue, get
 from helpdesk.session_isolation import claim_deepseek_chat
 from helpdesk.storage import Store
 from helpdesk.workflow import Workflow
@@ -126,6 +127,101 @@ class AutomaticAnswerTests(unittest.TestCase):
         self.assertEqual(self.runtime.tick()['state'], 'ATTACHMENTS_READY')
         self.assertNotIn([11, 12], self.clicks())
         self.assertEqual(self.navigator.call_args.args[2][0], 'DEEPSEEK_COMPOSER')
+
+    def capture_before_finish(self):
+        self.assertEqual(self.runtime.tick()['state'], 'READY_FOR_PREPARATION')
+        self.assertEqual(self.runtime.tick()['state'], 'ATTACHMENTS_READY')
+        with patch.object(Workflow, 'finish', side_effect=SystemExit('SYNTHETIC crash before run finish')):
+            with self.assertRaises(SystemExit):
+                self.runtime.tick()
+        attempt = Path(self.task['evidence_dir']) / (self.task['run_id'] + '.json')
+        self.assertEqual(json.loads(attempt.read_text(encoding='utf-8'))['status'], 'FINAL_OUTPUT_CAPTURED')
+        self.assertEqual(self.db.one('SELECT state FROM runs')[0], 'RUNNING')
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM answers')[0], 0)
+        self.assertEqual(get(self.db, self.task['id'])['attempts'][-1]['state'], 'STARTED')
+        return attempt
+
+    def test_captured_final_answer_recovers_after_restart_without_desktop_or_resubmit(self):
+        self.capture_before_finish()
+        calls, navigation = len(self.desktop.calls), self.navigator.call_count
+        self.db.close()
+        self.db = Store(self.base / 'business.db')
+        self.addCleanup(self.db.close)
+        restarted = self.make_runtime()
+        with patch.object(restarted, '_connection', side_effect=AssertionError('Recovery must not open desktop')):
+            self.assertEqual(restarted.tick()['state'], 'GENERATED')
+            self.assertEqual(restarted.tick()['state'], 'IDLE')
+        self.assertEqual((len(self.desktop.calls), self.navigator.call_count), (calls, navigation))
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM runs')[0], 1)
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM answers')[0], 1)
+        self.assertEqual(self.db.one("SELECT COUNT(*) FROM outbox WHERE purpose='ANSWER'")[0], 1)
+        self.assertEqual(self.db.one("SELECT state FROM outbox WHERE purpose='ANSWER'")[0], 'PENDING')
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM delivery_checks')[0], 0)
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM performance_units')[0], 0)
+        self.assertEqual(get(self.db, self.task['id'])['attempts'][-1]['state'], 'RECOVERED_FROM_RUN')
+        usage = task_cost(self.db, self.task['run_id'])
+        self.assertEqual((usage['call_attempts']['DEEPSEEK_MATCH'], usage['call_attempts']['DEEPSEEK_TEACH']), (1, 1))
+        self.assertEqual(usage['retry_calls'], 0)
+
+    def test_captured_answer_requires_unchanged_confirmed_complete_evidence(self):
+        from tools.run_prepared_deepseek import run_existing
+        attempt_path = self.capture_before_finish()
+        original = attempt_path.read_bytes()
+        capture = json.loads(original)
+        row = next(row for row in self.db.all("SELECT id,details FROM audit WHERE event='ANSWER_CALL_RESULT'")
+                   if json.loads(row['details'])['call_id'] == capture['teaching_call_id'])
+        factory = Mock(side_effect=AssertionError('Invalid capture must not open desktop'))
+        calls, navigation = len(self.desktop.calls), self.navigator.call_count
+        for case in ('changed_file', 'unconfirmed_call', 'truncated_page', 'inconsistent_result', 'paused'):
+            with self.subTest(case=case):
+                attempt_path.write_bytes(original)
+                self.db.execute('UPDATE audit SET details=? WHERE id=?', (row['details'], row['id']))
+                changed = json.loads(original)
+                if case in ('changed_file', 'inconsistent_result'):
+                    changed['result']['text'] = 'SYNTHETIC text absent from final page'
+                if case == 'truncated_page':
+                    changed['final_snapshot']['content'][0]['text'] += '\n[truncated: reached 500 elements]\n'
+                if case in ('changed_file', 'inconsistent_result', 'truncated_page'):
+                    attempt_path.write_text(json.dumps(changed), encoding='utf-8')
+                confirmation = json.loads(row['details'])
+                if case == 'unconfirmed_call':
+                    confirmation['status'] = 'UNKNOWN'
+                elif case in ('truncated_page', 'inconsistent_result'):
+                    # Even a confirmed capture must pass the original page and
+                    # result contract. This is fabricated evidence in a temp DB.
+                    confirmation['evidence'] = 'sha256:' + sha256(attempt_path.read_bytes()).hexdigest()
+                self.db.execute('UPDATE audit SET details=? WHERE id=?', (json.dumps(confirmation), row['id']))
+                Workflow(self.db).set_stop(case == 'paused')
+                with self.assertRaises(ValueError):
+                    run_existing(self.db, self.task['run_id'], self.task['preparation_path'], self.manifest,
+                                 evidence_dir=self.task['evidence_dir'], transport_factory=factory,
+                                 recovery_only=True)
+                factory.assert_not_called()
+                self.assertEqual((len(self.desktop.calls), self.navigator.call_count), (calls, navigation))
+                self.assertEqual(self.db.one('SELECT COUNT(*) FROM answers')[0], 0)
+                self.assertEqual(self.db.one('SELECT COUNT(*) FROM delivery_checks')[0], 0)
+                self.assertEqual(self.db.one('SELECT COUNT(*) FROM performance_units')[0], 0)
+        attempt_path.write_bytes(original)
+        self.db.execute('UPDATE audit SET details=? WHERE id=?', (row['details'], row['id']))
+        Workflow(self.db).set_stop(False)
+        self.assertEqual(advance(self.db, self.task['id'])['phase'], 'GENERATED')
+        self.assertEqual((len(self.desktop.calls), self.navigator.call_count), (calls, navigation))
+
+    def test_new_chat_url_with_previous_answer_is_not_claimed_or_prepared(self):
+        original = self.desktop.call
+        def previous_answer(tool, args):
+            observed = original(tool, args)
+            if tool == 'Snapshot' and self.desktop.url == URL and not self.desktop.picker:
+                observed['content'][0]['text'] += ('\n    ├── text "SYNTHETIC another question answer"\n'
+                    '    └── 按钮 "朗读"\n')
+            return observed
+        with patch.object(self.desktop, 'call', side_effect=previous_answer):
+            self.assertEqual(self.runtime.tick()['state'], 'EXECUTION_UNCERTAIN')
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM deepseek_chats')[0], 0)
+        self.assertEqual(self.desktop.uploaded, [])
+        calls = len(self.desktop.calls)
+        self.assertEqual(self.make_runtime().tick()['state'], 'IDLE')
+        self.assertEqual(len(self.desktop.calls), calls)
 
     def test_layout_change_after_luna_stops_before_input_and_restart_does_not_replay(self):
         def move(*args, **kwargs):

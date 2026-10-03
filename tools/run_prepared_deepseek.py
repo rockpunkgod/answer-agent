@@ -20,8 +20,8 @@ from helpdesk.workflow import Workflow
 
 
 def run_existing(store, run_id, preparation_path, manifest, *,
-                 evidence_dir=None, transport_factory=None):
-    """Submit a frozen run once. All rejection checks precede desktop startup."""
+                 evidence_dir=None, transport_factory=None, recovery_only=False):
+    """Resume one frozen run; recovery_only never opens a desktop or submits."""
     if not isinstance(run_id, str) or not run_id:
         raise ValueError('A frozen run ID is required')
     lock_path = (str(Path(store.path).resolve()) + '.prepared-' +
@@ -29,11 +29,11 @@ def run_existing(store, run_id, preparation_path, manifest, *,
     with resource_lock(lock_path, timeout=5):
         return _run_existing_locked(store, run_id, preparation_path, manifest,
                                     evidence_dir=evidence_dir,
-                                    transport_factory=transport_factory)
+                                    transport_factory=transport_factory, recovery_only=recovery_only)
 
 
 def _run_existing_locked(store, run_id, preparation_path, manifest, *,
-                         evidence_dir=None, transport_factory=None):
+                         evidence_dir=None, transport_factory=None, recovery_only=False):
     row = store.one('SELECT * FROM runs WHERE id=?', (run_id,))
     if row is None:
         raise ValueError('Unknown frozen run')
@@ -65,13 +65,18 @@ def _run_existing_locked(store, run_id, preparation_path, manifest, *,
         raise ValueError('Preparation belongs to a different frozen run')
     evidence_dir = Path(evidence_dir) if evidence_dir else ROOT / 'data/private/mcp-generation'
     attempt_path = evidence_dir / (run_id + '.json')
+    captured = False
     if attempt_path.exists():
         attempt = json.loads(attempt_path.read_text(encoding='utf-8'))
         if attempt.get('run_id') != run_id:
             raise ValueError('Existing attempt belongs to another run')
-        return {'existing_attempt': {'run_id': run_id, 'status': attempt.get('status'),
-                                    'evidence': str(attempt_path.resolve())},
-                'resubmitted': False}
+        captured = attempt.get('status') == 'FINAL_OUTPUT_CAPTURED'
+        if not captured:
+            return {'existing_attempt': {'run_id': run_id, 'status': attempt.get('status'),
+                                        'evidence': str(attempt_path.resolve())},
+                    'resubmitted': False}
+    elif recovery_only:
+        return {'existing_attempt': None, 'resubmitted': False}
     generator = PreparedDeepSeekGenerator(None, preparation_path, evidence_dir)
     generator._preparation(snapshot)
     workflow = Workflow(store, generation_adapter=generator, teaching_manifest=manifest)
@@ -84,6 +89,10 @@ def _run_existing_locked(store, run_id, preparation_path, manifest, *,
     if workflow._stopped():
         raise ValueError('Workflow is stopped')
     workflow._require_confirmed_ack(row['turn_id'])
+    if captured:
+        result = generator.captured_result(store, snapshot)
+        return {**workflow.finish(run_id, result), 'recovered_capture': str(attempt_path.resolve()),
+                'resubmitted': False}
     if transport_factory is None:
         transport_factory = MCPProcess
     try:
