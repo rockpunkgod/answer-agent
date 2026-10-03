@@ -17,6 +17,7 @@ class WindowsMcpAuditTests(unittest.TestCase):
     def exercise(self, outcome, request=None):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
+            self.last_native_calls = []
 
             class Client:
                 def __init__(self, transport):
@@ -28,7 +29,15 @@ class WindowsMcpAuditTests(unittest.TestCase):
                 async def __aexit__(self, *args):
                     pass
 
+                async def list_tools(self):
+                    return [SimpleNamespace(name='App', inputSchema={'type': 'object', 'properties': {
+                        'mode': {'type': 'string', 'enum': ['launch', 'launch_executable', 'switch', 'resize'], 'default': 'launch'},
+                        'name': {'type': 'string'}, 'window_loc': {'type': 'array'}, 'window_size': {'type': 'array'},
+                        'executable': {'type': 'string'}, 'args': {}, 'cwd': {'type': 'string'}}}),
+                        SimpleNamespace(name='Snapshot', inputSchema={'type': 'object', 'properties': {}})]
+
                 async def call_tool(self, *args, **kwargs):
+                    self_native_calls.append(args[0])
                     attempts = list((root / 'data/private/windows-mcp').glob('attempt-*.json'))
                     assert len(attempts) == 1
                     before = json.loads(attempts[0].read_text(encoding='utf-8'))
@@ -43,6 +52,7 @@ class WindowsMcpAuditTests(unittest.TestCase):
                         return SimpleNamespace(is_error=outcome['is_error'], content=[SimpleNamespace(type='text',text=outcome['text'])])
                     return SimpleNamespace(content=[], is_error=outcome)
 
+            self_native_calls = self.last_native_calls
             fake = ModuleType('fastmcp')
             fake.Client = Client
             transport = ModuleType('fastmcp.client.transports')
@@ -82,6 +92,39 @@ class WindowsMcpAuditTests(unittest.TestCase):
     def test_multiline_chat_input_rejected_before_any_mcp_call(self):
         request = json.dumps({'tool': 'Type', 'arguments': {'loc': [1, 2], 'text': 'part1\npart2'}})
         self.assertIsNone(self.exercise(False, request))
+
+    def test_app_launch_and_implicit_launch_never_reach_native_client(self):
+        cases = [{'mode': 'launch', 'name': 'SYNTHETIC EDGE'},
+                 {'mode': 'launch_executable', 'executable': 'SYNTHETIC.exe', 'args': ['SYNTHETIC']},
+                 {'name': 'SYNTHETIC EDGE'}, {}, None,
+                 {'mode': 'switch', 'name': 'SYNTHETIC EDGE', 'executable': 'SYNTHETIC.exe'},
+                 {'mode': 'resize', 'args': ['SYNTHETIC']},
+                 {'mode': 'switch', 'cwd': 'SYNTHETIC'},
+                 {'mode': 'future_launch'}]
+        for arguments in cases:
+            with self.subTest(arguments=arguments):
+                self.assertIsNone(self.exercise(False, json.dumps({'tool': 'App', 'arguments': arguments})))
+                self.assertEqual(self.last_native_calls, [])
+
+    def test_existing_app_switch_and_resize_remain_supported(self):
+        for arguments in ({'mode': 'switch', 'name': 'SYNTHETIC EDGE'},
+                          {'mode': 'resize', 'name': 'SYNTHETIC EDGE', 'window_loc': [20, 30], 'window_size': [800, 600]}):
+            with self.subTest(arguments=arguments):
+                self.assertEqual(self.exercise(False, json.dumps({'tool': 'App', 'arguments': arguments}))['status'], 'TOOL_RETURNED')
+                self.assertEqual(self.last_native_calls, ['App'])
+
+    def test_list_exposes_only_existing_app_window_operations(self):
+        self.assertIsNone(self.exercise(False, json.dumps({'tool': 'list', 'arguments': {}})))
+        entries = json.loads(self.last_stdout.splitlines()[-1])['tools']
+        app = next(item['schema'] for item in entries if item['name'] == 'App')
+        self.assertEqual(set(app['properties']), {'mode', 'name', 'window_loc', 'window_size'})
+        self.assertEqual(app['properties']['mode']['enum'], ['switch', 'resize'])
+        self.assertNotIn('default', app['properties']['mode'])
+        self.assertIn('mode', app['required'])
+        self.assertIs(app['additionalProperties'], False)
+        self.assertEqual(next(item['schema'] for item in entries if item['name'] == 'Snapshot'),
+                         {'type': 'object', 'properties': {}})
+        self.assertEqual(self.last_native_calls, [])
 
     def test_tool_error_does_not_become_success(self):
         self.assertEqual(self.exercise(True)['status'], 'TOOL_ERROR_UNCONFIRMED')

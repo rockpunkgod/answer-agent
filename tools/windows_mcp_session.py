@@ -6,6 +6,7 @@ Screenshots and server logs stay in the private local evidence directory.
 """
 import asyncio
 import base64
+from copy import deepcopy
 from hashlib import sha256
 from datetime import datetime, timezone
 import json
@@ -27,6 +28,7 @@ from helpdesk.windows_worker_probe import DESKTOP_STATUS_COMMAND, parse_desktop_
 from helpdesk.mcp_transport import runtime_home, tree_capture_limit
 
 ALLOWED = {"Screenshot", "Snapshot", "Click", "Type", "Scroll", "Move", "Shortcut", "Wait", "WaitFor", "DisplayInventory", "App", "Clipboard", "PowerShell"}
+APP_WINDOW_KEYS = frozenset({'mode', 'name', 'window_loc', 'window_size'})
 SCREEN2_ACTIVATE = 'ActivateEdgeOnScreen2'  # Local entry; native operation is Click.
 DISPLAY_EDGE_ACTIVATION = 'ActivateEdgeOnDisplay'
 SCREEN2_ACTIVATIONS = {SCREEN2_ACTIVATE: 'msedge', 'ActivateWeComOnScreen2': 'WXWork',
@@ -37,6 +39,20 @@ DISPLAY_APP_ACTIVATION = 'ActivateWeComOnDisplayByApp'
 
 GUARDED_INPUTS = {"Click", "Type", "Shortcut", "Scroll", "Move"}
 POINTER_INPUTS = {"Click", "Scroll", "Move", "Type"}  # Type first clicks its location.
+
+
+def app_window_schema(native):
+    """Advertise the local window-only contract without changing the server."""
+    schema = deepcopy(native)
+    schema['properties'] = {k: v for k, v in schema.get('properties', {}).items() if k in APP_WINDOW_KEYS}
+    mode = schema['properties'].get('mode')
+    if not isinstance(mode, dict):
+        raise ValueError('APP_WINDOW_SCHEMA_UNCONFIRMED')
+    mode.update(enum=['switch', 'resize'])
+    mode.pop('default', None)
+    schema['required'] = ['mode', *[k for k in schema.get('required', []) if k in APP_WINDOW_KEYS and k != 'mode']]
+    schema['additionalProperties'] = False
+    return schema
 
 
 def fixed_readonly_probe(arguments):
@@ -194,6 +210,13 @@ async def main():
             try:
                 request = json.loads(line)
                 name = request["tool"]
+                if name == 'App':
+                    arguments = request.get('arguments')
+                    if (not isinstance(arguments, dict) or arguments.get('mode') not in ('switch', 'resize')
+                            or set(arguments) - APP_WINDOW_KEYS):
+                        # Launching here can tie a user application to the tool
+                        # service's Job Object or process-tree cleanup.
+                        raise ValueError('APP_LAUNCH_OUTSIDE_MCP_REQUIRED')
                 if name == 'Shortcut':
                     shortcut_args = request.get('arguments')
                     if (not isinstance(shortcut_args, dict) or set(shortcut_args) != {'shortcut'}
@@ -234,7 +257,9 @@ async def main():
                                             display_device=display_device)
                 if name == "list":
                     tools = await client.list_tools()
-                    print(json.dumps({"tools": [{"name": t.name, "schema": t.inputSchema} for t in tools]}), flush=True)
+                    print(json.dumps({"tools": [{"name": t.name,
+                        "schema": app_window_schema(t.inputSchema) if t.name == 'App' else t.inputSchema}
+                        for t in tools]}), flush=True)
                     continue
                 if name not in ALLOWED and name not in SCREEN2_ACTIVATIONS and not by_app:
                     raise ValueError("Tool outside explicit desktop allowlist")

@@ -203,6 +203,20 @@ REAL仅由Luna medium执行一次只读DisplayInventory和固定前台探针：�
 
 本批仅后台代码与UNIT/MOCK验证，没有新增真实网页请求、桌面操作、群发送、实际交付登记、生产配置修改、8767部署或正式日报提交。前述真实阅读稿的method_visibility疑点仍未解决；真实入口时效、Top2、自动队列和A–H/至少20任务试运行仍未验收，结论保持**NOT_READY**。既有SDK及两项符号链接SKIPPED仍未复验，不算通过。
 
+### 后续实施：应用启动与工具连接分开（2026-10-03）
+
+从`201ff08ec6bf3d405df15c7f4e05ee4e71a336d3`继续；起始工作树干净。本批只修改`tools/windows_mcp_session.py`、`tests/test_windows_mcp_audit.py`、README及本文件，不改变Reference、Version、Delivery、Performance核心、数据库或生产配置，ANSWER仍冻结在`b04ebc26d7fa096404111a0bb12f6c77cc8525b9`。
+
+对既有原生记录只读核对，2026-10-03的两项App结果含`msedge.exe`启动PID，确认网页恢复时曾在工具连接中使用`launch_executable`。本机Windows-MCP为0.8.5、MCP SDK为2.2.0；已安装SDK用Job Object管理服务进程，关闭Job会终止其受管成员。但是历史记录缺实际Job归属及完整退出因果链，因此Edge退出原因保持UNVERIFIED，不能说本次已复现或解决了那次浏览器退出。
+
+最小修补是在本业务stdio边界拒绝`launch`、`launch_executable`、隐式默认启动及可执行路径/参数/工作目录；显式`switch`/`resize`和原窗口字段继续可用。工具`list`的App Schema同步只显示这两个模式、要求显式mode，不影响其他工具。既有受控企业微信/Edge激活入口仍先核验当前窗口和显示器，不把激活当成群身份核验。SDK进程清理保持原样，不修改上游依赖、不引入启动服务或任意命令入口。日常先在Windows中独立打开并登录Edge/企业微信，再连接工具。
+
+新增3项匿名测试。修补前实际运行3项，10个失败子断言说明启动请求仍会送到Fake原生端、Schema仍暴露启动字段；切换/调整用例当时已通过。修补后`tests.test_windows_mcp_audit`11项通过（0.716秒）。最终相关命令`python -X utf8 -B -m unittest -v -f tests.test_windows_mcp_audit tests.test_windows_mcp_foreground_guard tests.test_screen2_activation tests.test_mcp_transport tests.test_mcp_bound_input_process tests.test_mcp_window_probe tests.test_mcp_display_scope tests.test_mcp_preparation`：93项全部通过、0失败、0跳过，5.070秒，退出码0；源码前后均为`sha256:1091f084e9f76af04489ee67f8d652b587cab472191083a475b2b37e6ba1033c`，期间未变化。日志在忽略的`artifacts/verification/20261003-mcp-launch-boundary/unittest.log`，SHA256为`607adfb71556656410851ff2a40c6a05d1881389fc70fb4775d2543fbddbff57`。这是相关UNIT/MOCK，不替代上一批其他模块或全项目验证。
+
+REAL仅为无界面本机OS实验：本轮自己创建的安静Python测试进程，没有账号、Profile、聊天文件或网络请求。第一次使用venv启动器，子进程未进入SDK Job，初始断言失败，原结果保留为FAILED；与SDK源码描述的“启动器先生成实际进程可能逃逸”一致，不把它改为通过。第二次单独记录为v2，使用基础Python并核对正在执行的PID与Popen相同，确认测试子进程属于该Job、独立测试进程不属于；关闭Job后前者退出、后者仍活着，再正常结束独立进程，结果VERIFIED。证据和探针在上述忽略目录，已只读确认已知测试PID及首轮启动器子进程均不再运行。这只证明OS进程生命周期边界，不证明真实MCP服务/Edge在当时的归属，也不证明修补后的真实网页流程通过。
+
+本批没有真实桌面操作、MCP浏览器启动、DeepSeek新请求、群发送、实际交付、正式库/配置修改或日报提交。真实生成疑点、入口/SLA、Top2、追问和A–H/20任务试运行仍需原授权边界内的实际证据，结论**NOT_READY**。SDK文件和两项符号链接历史SKIPPED未复验，仍不算通过。
+
 ## 本轮审计与最小改动
 
 业务检出目录为 `E:\作业帮\tmp\answer-agent-publish-20261001`，审计起点为 `main / 126747e1fed4a70c78c6fca46f802dfa9f8984c1`，远端为 `rockpunkgod/answer-agent`。后续提交可从该基线追溯。审计当时原工作目录运行8767工作台；最新只读检查未发现该端口监听，HTTP不可连接，不能沿用早期运行状态。本批未部署或迁移正式数据库。
