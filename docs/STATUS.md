@@ -53,6 +53,18 @@ Browser 插件初次初始化因请求 `26.930.21537` 的 service 文件，而�
 
 上述均为 **MOCK VERIFIED**：进程退出是真实的，但消息、搜索、浏览器、教学脚本和交付回执均为明确匿名模拟，不是实际 DeepSeek/企业微信恢复验收。REAL 只重新核对 ANSWER 仍为干净的 `b04ebc26d7fa096404111a0bb12f6c77cc8525b9`，以及按插件官方脚本复查 Edge 连接组件仍缺失、退出 1。没有新增网页提交、群发送或正式日报；真实 15 分钟 ACK、实际成本、六断点及 A–H/20 个任务试运行仍未验收，结论保持 **NOT_READY**。等待用户恢复 Browser 连接或明确授权临时控制器后，沿用已提交 MATCH，只读原回复，不重新提交。
 
+### 固定操作 Skill 与原会话恢复（2026-10-04）
+
+从 `aa6f597` 继续，本人明确跳过未接通的 Edge 插件，复用原 Windows-MCP。仅一个 Luna medium 操作端，主 Agent 做 CLI 文件、版本、原始记录和数据库检查。没有修改生产逻辑、配置、数据库结构或 ANSWER；教学仍冻结在干净的 `b04ebc26d7fa096404111a0bb12f6c77cc8525b9`。
+
+新增 `skills/answer-agent-deepseek-web/SKILL.md` 与按需读取的 `references/windows-mcp.md`，同步安装到当前本机 skills 目录。短入口只规定当前 run 的固定步骤；优先已有 CLI、程序文字控件、固定快捷键及当前有效位置，不默认取图，不逐步复述或把几十 KB 原树灌入模型。异常定位才读取细节和截图；当前输入、版本及授权防护保留，任一步错误或未知禁止继续 Enter。ANSWER 教学内容没有变更，也没有声称实际 token 或费用已达标。
+
+REAL：正常恢复原 SID，未重新提交 MATCH；从原生最终回复复制和 Clipboard.get 取得完整原文，原 journal/record 校验及六字段校验通过，记录为 `WEB_MATCH_SCHEMA_VERIFIED_ONLY`。学生原图与原文教学包哈希重新检查通过；检索仍未配置，零候选不作为搜索完成。没有可靠原始提问时间，仍为空。
+
+FAILED/UNVERIFIED：TEACH 附件准备未完成。本机 Type 0.8.5 必须提供 loc 或 label，先前无定位参数的调用返回错误；其后的选择器 Enter 已保留为实际操作记录，不能把工具返回冒充附件上传。改用仅允许两批准路径和固定 prompt 的私有复制助手后，Alt+N 在前台变为 ChatGPT 时被守卫拦截；后续输入被锁住，没有粘贴或确认。主 Agent 的只读 CLI 窗口元数据没有找到同进程的标准“打开”选择器，不能把 Downloads Explorer 当成上传成功。640 字 TEACH prompt 尚未 staged 或提交；已有 TEACH 意图不当成实际调用成功，未保存本轮新草稿。
+
+两个操作连接均正常退出，无 pending；主 Agent 另检查退出状态。保留原 Edge 页面、原提交、错误及证据，未继续循环点击或截图。专项原任务没有完成，交付与正式绩效为零。格式校验使用 `python -X utf8 -B D:/Codex/skills/.system/skill-creator/scripts/quick_validate.py D:/Codex/skills/answer-agent-deepseek-web`，通过；安装与仓库源文件逐字节一致，引用的八个已有程序入口存在。私有助手仅做 AST 检查及上述有限真实操作，不称为 Mock 全链路通过。本轮没有重跑业务回归；此前 SDK/符号链接 SKIPPED 保留。当前核心结论仍为 **NOT_READY**。
+
 以下至“后续实施”之前为已提交 `7b6b128` 的上一批结果，保留其当时限制和测试证据；本批增量以“后续实施”为准。
 
 上一批实际处理：ANSWER 默认分支 main 最新 `b04ebc26d7fa096404111a0bb12f6c77cc8525b9`，先检查旧工作树干净，再 fetch 并快进到该精确提交，工作树仍干净；没有改写教学内容。新版 README 明确客观题共用 `gaokao-grammar-fill/scripts/check_lesson.py`，路由改为该仓库相对路径。主客观题只取自己的教学模块和共享脚本快照，不混入语法教学方法。新增测试保留原文、脏文件、缺项拦截、人工入口、缓存防串提交等断言；旧位置即使出现同名文件也不作为缺项替代。

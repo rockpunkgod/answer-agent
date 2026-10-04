@@ -44,6 +44,8 @@ Luna定位工具`suggest(..., display_index=...)`可选择当前获准的一块�
 
 Edge对应入口为`ActivateEdgeOnDisplay`，只接受当前物理坐标`loc`和`display_device`。程序先确认该点确属Edge标题栏，再点击一次并核验窗口身份与几何；未依赖界面树或模糊应用名切换。截图可能缩小，需按本次图像尺寸与显示器区域换算坐标。切窗成功后还须独立确认DeepSeek网址和会话，此入口本身不授权上传或提交。
 
+已验证操作步骤收敛在 [answer-agent-deepseek-web Skill](skills/answer-agent-deepseek-web/SKILL.md)，可使用 `$answer-agent-deepseek-web`。本机安装副本位于 `D:/Codex/skills/answer-agent-deepseek-web/`；仓库保留同内容源文件。优先现有 CLI、文字控件和固定快捷键，不默认截图；已确认步骤连续执行，无法定位或布局变化才补图。它固定操作顺序，不修改 ANSWER 教学、不增加发送授权；实际能力以 [STATUS](docs/STATUS.md) 为准。
+
 也可用官方 [ChatGPT 浏览器扩展](https://learn.chatgpt.com/docs/chrome-extension) 在 Codex 中操作已登录的 Edge 网页：在桌面应用“设置 → Computer Use”启用 Edge，确认显示 Manage，再在会话里选择 `@Edge`。本机已检测到扩展文件；本会话连接、题图上传和 Python demo 独立调用尚未验证，暂作网页联调入口候选，不增加启动依赖。企业微信客户端仍使用现有 Windows-MCP。
 
 ## 收到与答案独立发送
