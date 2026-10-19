@@ -145,6 +145,28 @@ class LunaNavigationTests(unittest.TestCase):
     def test_stop_has_no_action_coordinates(self):
         self.assertIsNone(self.suggest(self.runner('{"action":"STOP","image_x":0,"image_y":0}'))['loc'])
 
+    def test_usage_comes_from_cli_completion_without_an_extra_call(self):
+        runner=self.runner('{"action":"STOP","image_x":0,"image_y":0}')
+        events=[json.loads(line) for line in runner.return_value.stdout.splitlines()]
+        events[-1]['usage']={'input_tokens':120,'cached_input_tokens':80,'output_tokens':9}
+        runner.return_value.stdout='\n'.join(json.dumps(e) for e in events)
+        result=self.suggest(runner)
+        self.assertEqual(result['call_usage'],{'source':'codex_cli_turn_completed',
+            'model':navigation.MODEL,'reasoning_effort':'medium',
+            'input_tokens':120,'cached_input_tokens':80,'output_tokens':9})
+        self.assertNotIn('amount_cny',result['call_usage'])
+        runner.assert_called_once()
+
+    def test_missing_or_invalid_usage_is_never_invented_as_zero(self):
+        for usage in (None,{}, {'input_tokens':True,'cached_input_tokens':0,'output_tokens':1},
+                      {'input_tokens':10,'cached_input_tokens':11,'output_tokens':1}):
+            runner=self.runner('{"action":"STOP","image_x":0,"image_y":0}')
+            events=[json.loads(line) for line in runner.return_value.stdout.splitlines()]
+            events[-1]['usage']=usage
+            runner.return_value.stdout='\n'.join(json.dumps(e) for e in events)
+            self.assertNotIn('call_usage',self.suggest(runner))
+            runner.assert_called_once()
+
     def test_wecom_probe_controls_remain_scoped_coordinate_suggestions(self):
         for action in ('WECOM_COMPOSER','WECOM_SEND','WECOM_RECEIPT','WECOM_COPY_MENU'):
             with self.subTest(action=action):

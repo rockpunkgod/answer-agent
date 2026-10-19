@@ -1,5 +1,13 @@
 # 当前能力与缺口
 
+## 已交付任务的独立进程重读与定位用量保留（2026-10-19）
+
+REAL（本机已保存Pilot库，无Mock）：分别用全新Python进程调用现有dispatch_test_answer及run_ego_answer各两次，共4次。均返回原SENT_UI_CONFIRMED/GENERATED及resubmitted=false；前后messages/runs/answers/outbox/delivery_checks/performance_units/audit数量及Outbox状态完全一致，原生MCP attempt和ego round文件列表完全一致。未启动新桌面/浏览器调用、未生成新请求或外发。此项仅证明已完成任务在独立进程下读取结果，不代表实际生成中或发送中的所有重启恢复通过。私有验证记录留在原Pilot目录。
+
+实际费用只读报告：本题一个已确认DEEPSEEK_TEACH调用、零该run重试；SCHEDULER/OTHER与金额仍UNVERIFIED，不把known_subtotal=0解释为总费用0。发现luna_navigation会丢弃CLI的turn.completed.usage，现把可取得的合法input/cached/output token作为call_usage附在原定位返回值，调用方沿用原证据保存，无额外模型调用、账本、价格估算或任意模型字段。缺失、布尔、负数或缓存量超过输入时不伪造用量；历史丢失用量不能追填。该元数据不自动成为已分配到AnswerTask的费用，任务归属与账单仍需真实证据。
+
+UNIT/MOCK：`python -X utf8 -B -m unittest -q tests.test_luna_navigation tests.test_call_costs`，33项通过、0失败、0跳过，1.377秒；测试使用匿名CLI事件，不调用真实Luna。覆盖从CLI实际字段保留用量、单次调用、缺失/异常不补零，原导航结构与工具隔离继续通过。整体NOT_READY，持续入口、正式绩效、完整费用及真实稳定性仍未验收。
+
 ## 新题真实联系人交付、脚本优先与长期空间恢复授权（2026-10-19）
 
 用户批准重建ego空间后，实际建立空间6；原空间3请求确认PREPARING且在取得TaskSpace前即报不存在，没有上传或提交。备份隔离库后保留原失败run和原输入，在同一题目、同一任务、同一业务轮次冻结新的run；重建授权、新旧空间和旧失败证据进入原audit，没有重建题目或伪造一次成功。固定ANSWER原文与本轮1840×2329原JPEG实际上传，一次自然语言请求使用复制来的疑问。完整答案捕获，结论为第2题C。原“第2题落在C”表述被旧解析器遗漏，现只扩展明确带题号、单一字母及分隔符的结论识别，仍拒绝错题号、多个选择或“C和D之间”；修补后读取同一缓存完成原Workflow，不重提DeepSeek。SOURCE/DRAFT原检查通过，生成一个答案和一个原ANSWER Outbox。

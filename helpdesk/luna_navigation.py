@@ -152,8 +152,19 @@ def suggest(record_path, instruction, allowed_actions, *, display_index=1, runne
             # Never leak an exception's credential-bearing stderr or student text.
             raise RuntimeError('LUNA_NAVIGATION_UNAVAILABLE_NO_RETRY') from None
     left, top, right, bottom = region
-    return {'action': value['action'], 'loc': None if value['action'] == 'STOP' else [
+    observation = {'action': value['action'], 'loc': None if value['action'] == 'STOP' else [
         left + value['image_x'] * (right - left) // width,
         top + value['image_y'] * (bottom - top) // height],
         'source_record': str(Path(record_path).resolve()),
         'display_index': display_index, 'display_region': list(region)}
+    # Use CLI accounting, never the model's response or an estimated price.
+    # Existing callers save this result alongside their native evidence.
+    usage = completed[0].get('usage')
+    fields = ('input_tokens', 'cached_input_tokens', 'output_tokens')
+    if (isinstance(usage, dict)
+            and all(type(usage.get(key)) is int and usage[key] >= 0 for key in fields)
+            and usage['cached_input_tokens'] <= usage['input_tokens']):
+        observation['call_usage'] = {'source': 'codex_cli_turn_completed',
+            'model': MODEL, 'reasoning_effort': EFFORT,
+            **{key: usage[key] for key in fields}}
+    return observation
