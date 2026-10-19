@@ -137,3 +137,12 @@ class EgoGenerationTests(unittest.TestCase):
         Path(result['web_session_evidence']).write_text('{}',encoding='utf-8')
         with self.assertRaisesRegex(ValueError,'EVIDENCE_CHANGED'):
             validate_source_answer(self.store,row,approval=False)
+
+    def test_frozen_browser_cannot_change_before_generation(self):
+        for space, page, directory in [(2,'p1',self.root/'evidence'),
+                                       (1,'p2',self.root/'evidence'),
+                                       (1,'p1',self.root/'other-evidence')]:
+            generator=EgoDeepSeekGenerator(space,directory,page=page)
+            with self.assertRaisesRegex(ValueError,'EGO_FROZEN_BROWSER_CHANGED'):
+                generator.generate(self.snapshot)
+        self.assertEqual(self.calls,[])

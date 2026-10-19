@@ -33,6 +33,8 @@ def main():
     freeze.add_argument('--manifest', required=True)
     freeze.add_argument('--preparation', required=True)
     freeze.add_argument('--evidence-dir', required=True)
+    freeze.add_argument('--ego-space', type=int, help='Freeze for an existing ego TaskSpace instead of the old browser backend')
+    freeze.add_argument('--ego-page', default='p1')
     commands.add_parser('list')
     args = parser.parse_args()
     with closing(Store(Path(args.database).resolve())) as store:
@@ -49,7 +51,8 @@ def main():
                                    source_evidence=args.source_evidence)
         elif args.command == 'freeze':
             result = intake.freeze(args.task, teaching_manifest=args.manifest,
-                                   preparation_path=args.preparation, evidence_dir=args.evidence_dir)
+                                   preparation_path=args.preparation, evidence_dir=args.evidence_dir,
+                                   ego_space=args.ego_space, ego_page=args.ego_page)
         else:
             result = {'label': 'OPERATOR_TEST', 'drafts': intake.list_drafts(), 'tasks': intake.list_tasks()}
         print(json.dumps(result, ensure_ascii=False, indent=2))

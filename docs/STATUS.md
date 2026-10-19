@@ -631,3 +631,11 @@ UNIT/MOCK：`python -X utf8 -B -m unittest -q tests.test_ego_generation tests.te
 回归初次发现旧批量交付测试失败：固定的2026-10-03回执时间早于当前 ACK，测试按排序后的最后回执误选“收到”。已按交付计划的 transport_id 唯一定位原片段，保留原交付顺序断言；未修改生产交付排序。修正后上述96项通过。
 
 REAL：本轮未调用 DeepSeek、未操作生产数据库、未真实外发。真实 ANSWER 及第一阶段证据在新适配器上的端到端验证尚缺；测试中这些依赖明确 Mock。金额、时效没有新增真实证明。工作台任务冻结、第一阶段网页执行、普通追问复用及后台默认入口尚未切换到 ego；不能改写旧冻结 run 的 adapter 来绕过。整体 NOT_READY。
+
+## 显式冻结 ego 任务与浏览器绑定（2026-10-19）
+
+OperatorTasks.freeze 增加 ego_space/ego_page；SourceQuestionTasks 继承原冻结方法，保留原学生身份、审核、版本和台账。现有本地 operator_task freeze CLI 可选择 ego，不额外新增入口或配置文件；默认旧通道未变。冻结将 ego 空间、页面、结果目录记录到原 run；重启复用同一 run，后端或浏览器绑定变更直接拒绝。旧 run 不重写身份。生成及恢复前核对当前配置与冻结绑定，避免执行端把正确题目送往别的页面。冻结不打开浏览器、不新建会话、不发消息、不计绩效。
+
+`python -X utf8 -B -m unittest -q tests.test_operator_tasks tests.test_ego_generation tests.test_ego_browser tests.test_ego_worker tests.test_source_question_tasks tests.test_automatic_preparation tests.test_reviewed_question_queue`：80项 Python 测试通过（包含6项 JS 模拟用例），无跳过、失败。新增覆盖 ego 冻结重启、拒绝旧后端改名、换空间/页面/目录前停止。教学内容和网页依赖仍按各 fixture 标注为模拟，不代表真实 ANSWER/DeepSeek 验收。
+
+边界：工作台自动排队和第一阶段网页核验尚未切换；旧自动准备仍只接受原 MCP 身份，避免错误通道执行 ego 任务。本轮未真实外发、未修改生产库。最新用户“直接上传说明题号”与旧验收“两阶段结构化核验”存在流程冲突，已请求用户选定网页口径；在答案到达前不擅自实施冲突的第一阶段协议。整体 NOT_READY。

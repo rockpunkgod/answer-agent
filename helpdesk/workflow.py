@@ -301,6 +301,11 @@ class Workflow:
             snapshot["binding_id"] = binding_id
             snapshot["session_store_path"] = str(Path(self.db.path).resolve())
             snapshot["teaching_skills"] = skills
+            if adapter.identity == 'EGO_LITE_DEEPSEEK':
+                from .ego_generation import EgoDeepSeekGenerator
+                if not isinstance(adapter, EgoDeepSeekGenerator):
+                    raise ValueError('Trusted ego generation adapter required')
+                snapshot['ego_browser'] = adapter.browser_binding()
             snapshot["generation_adapter"] = adapter.identity
             snapshot["simulated"] = adapter.simulated
             snapshot["simulation"] = adapter.simulated

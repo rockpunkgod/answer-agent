@@ -17,3 +17,5 @@
 同一 TaskSpace/Page 由程序跨进程串行；上一请求未核验时新请求报 EGO_PAGE_HAS_UNRESOLVED_REQUEST。只恢复原请求，不删除占用文件、不换 TaskSpace 绕过。准备中断需人工核验，不自动解除。
 
 已有 ego 冻结 run、原第一阶段核验及会话绑定齐全时，可用 `python -m tools.run_ego_answer --help` 回流原 Workflow/Outbox。不得把旧 MCP run 改名为 ego；该入口不负责冻结新任务、第一阶段和追问复用，现有后台默认入口仍未切换。原始捕获与 ANSWER 检查不通过时停下，不把草稿计作实际交付。
+
+本地已审核任务可经 `tools.operator_task freeze --ego-space <编号> --ego-page p1` 冻结为 ego run；空间、页面和结果目录之后不可换，旧 MCP run 不可改名。冻结不打开网页；工作台自动排队和第一阶段尚未切换，不把“冻结成功”当作网页完成。

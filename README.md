@@ -54,7 +54,7 @@ ego-lite 网页入口：`python -m tools.run_ego_deepseek --help`。使用已登
 
 已冻结的 ego 教学生成回流入口：`python -m tools.run_ego_answer --help`。它从原数据库按 `--run` 读取题目、版本和已绑定会话，核验已有第一阶段结果及固定 ANSWER，再上传原图和教学原文、发送原话，将自然语言结果交回原 Workflow/Outbox。未明确识别唯一答案、原题已更正、原始捕获变化时停止；完整草稿保持待交付，不能算完成或绩效。调用及未知结果进入原调用台账，金额没有账单仍未知。
 
-该入口仅接受已由 `EgoDeepSeekGenerator` 冻结、已完成题面核验并绑定会话的 RUNNING run，不会改写旧 Windows-MCP run 的身份，也不会自动新建任务或会话。现有工作台冻结入口、第一阶段核验和追问复用尚未适配 ego，因此本轮不是后台队列切换完成；普通用户暂继续使用上一段网页入口获取草稿。CLI 不调用群发送。
+该入口仅接受已由 `EgoDeepSeekGenerator` 冻结、已完成题面核验并绑定会话的 RUNNING run，不会改写旧 Windows-MCP run 的身份，也不会自动新建任务或会话。本地任务冻结 CLI 已可显式选择 ego；工作台自动排队、第一阶段核验和追问复用尚未适配 ego，因此仍不是后台队列切换完成；普通用户暂继续使用上一段网页入口获取草稿。CLI 不调用群发送。
 
 
 ## 收到与答案独立发送
@@ -265,3 +265,5 @@ python -m playwright install chromium
 本轮源码审计、官方渠道覆盖结论和验证结果见 [当前进度](docs/STATUS.md)。官方 CLI/SDK 尚未接入，不是启动工作台的依赖。
 
 独立模拟入口是 `.\run_demo.ps1`，端口8765，模拟数据与正式记录分开。
+
+本地已审核任务可用现有 `python -m tools.operator_task --database <本地库> freeze --help` 查看冻结参数，新增 `--ego-space <已有空间编号>` 与 `--ego-page p1`，不执行网页或发送。冻结后空间、页面、结果目录及后端写入原 run，重启沿用；不能把已冻结的旧 MCP run 改为 ego，也不能换空间绕过未知请求。`run_ego_answer` 只接受与冻结值相同的参数，第一阶段证据仍是先决条件。

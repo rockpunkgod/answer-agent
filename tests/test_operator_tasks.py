@@ -187,5 +187,38 @@ class OperatorTaskTests(unittest.TestCase):
             self.intake.freeze(task['id'], **(config | {'evidence_dir': self.base / 'other'}))
 
 
+    def test_ego_freeze_is_durable_and_cannot_switch_backend_or_browser(self):
+        manifest = build_bundle(question_type='阅读理解', skill_root=self.skill_root, output_root=self.base/'bundles')
+        task = self.review(self.intake.create_draft(self.payload))
+        config = dict(teaching_manifest=manifest, preparation_path=self.base/'future-preparation.json',
+                      evidence_dir=self.base/'future-evidence', ego_space=7, ego_page='p2')
+        with patch('helpdesk.ego_generation.EgoDeepSeekGenerator.generate',side_effect=AssertionError('must not generate')):
+            frozen = self.intake.freeze(task['id'], **config)
+        snapshot = json.loads(self.db.one('SELECT input_json FROM runs WHERE id=?',(frozen['run_id'],))[0])
+        self.assertEqual(snapshot['generation_adapter'],'EGO_LITE_DEEPSEEK')
+        self.assertEqual(snapshot['ego_browser'],{'space_id':7,'page':'p2',
+            'evidence_dir':str((self.base/'future-evidence').resolve())})
+        self.assertFalse(snapshot['operator_test']['formal_statistics_eligible'])
+        self.db.close();self.db=Store(self.base/'local.db');self.intake=OperatorTasks(self.db)
+        self.assertEqual(self.intake.freeze(task['id'],**config)['run_id'],frozen['run_id'])
+        for changed in [{'ego_space':8},{'ego_page':'p1'},{'ego_space':None,'ego_page':'p1'}]:
+            with self.assertRaisesRegex(ValueError,'Frozen .* changed'):
+                self.intake.freeze(task['id'],**(config|changed))
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM runs')[0],1)
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM answers')[0],0)
+        self.assertFalse((self.base/'future-evidence').exists())
+
+    def test_old_frozen_run_cannot_be_relabelled_as_ego(self):
+        manifest=build_bundle(question_type='阅读理解',skill_root=self.skill_root,output_root=self.base/'bundles')
+        task=self.review(self.intake.create_draft(self.payload))
+        config=dict(teaching_manifest=manifest,preparation_path=self.base/'prep.json',evidence_dir=self.base/'evidence')
+        original=self.intake.freeze(task['id'],**config)
+        with self.assertRaisesRegex(ValueError,'Frozen generation backend changed'):
+            self.intake.freeze(task['id'],**config,ego_space=1)
+        frozen=json.loads(self.db.one('SELECT input_json FROM runs WHERE id=?',(original['run_id'],))[0])
+        self.assertEqual(frozen['generation_adapter'],'WINDOWS_MCP_PREPARED_DEEPSEEK')
+        self.assertNotIn('ego_browser',frozen)
+
+
 if __name__ == '__main__':
     unittest.main()

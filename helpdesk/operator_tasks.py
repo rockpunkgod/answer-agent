@@ -292,8 +292,16 @@ class OperatorTasks:
             'reviewer': task['reviewer'], 'source_evidence': task['source_evidence'],
             'formal_statistics_eligible': False, 'original_sender_known': False, 'original_sent_at': None}
 
-    def freeze(self, task_id, *, teaching_manifest, preparation_path, evidence_dir):
+    def freeze(self, task_id, *, teaching_manifest, preparation_path, evidence_dir,
+               ego_space=None, ego_page='p1'):
         """Persist a prepared-adapter run only; no generator/transport is invoked."""
+        if ego_space is not None:
+            from .ego_generation import EgoDeepSeekGenerator
+            generator = EgoDeepSeekGenerator(ego_space, evidence_dir, page=ego_page)
+        else:
+            if ego_page != 'p1':
+                raise ValueError('ego_page requires ego_space')
+            generator = PreparedDeepSeekGenerator(None, preparation_path, evidence_dir)
         manifest_path = Path(teaching_manifest).resolve(strict=True)
         preparation_path = str(Path(preparation_path).resolve())
         evidence_dir = str(Path(evidence_dir).resolve())
@@ -314,8 +322,12 @@ class OperatorTasks:
                 if (task['manifest_path'], task['manifest_sha256'], task['preparation_path'], task['evidence_dir']) != (
                         str(manifest_path), digest, preparation_path, evidence_dir):
                     raise ValueError('Frozen run configuration changed')
+                frozen = json.loads(self.db.one('SELECT input_json FROM runs WHERE id=?', (task['run_id'],))[0])
+                if frozen.get('generation_adapter') != generator.identity:
+                    raise ValueError('Frozen generation backend changed')
+                if ego_space is not None and frozen.get('ego_browser') != generator.browser_binding():
+                    raise ValueError('Frozen ego browser changed')
                 return task
-            generator = PreparedDeepSeekGenerator(None, preparation_path, evidence_dir)
             workflow = Workflow(_NestedStore(self.db), desktop=_NoDesktop(),
                                 generation_adapter=generator, teaching_manifest=manifest_path)
             run_id = workflow.start(task['turn_id'])

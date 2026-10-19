@@ -37,12 +37,19 @@ class EgoDeepSeekGenerator:
     simulated = False
 
     def __init__(self, space_id, evidence_dir, *, page='p1', capture_only=False):
+        if type(space_id) is not int or space_id < 1 or not re.fullmatch(r'p[1-9][0-9]*', page):
+            raise ValueError('An existing ego space and page are required')
         self.space_id, self.page = space_id, page
         self.directory = Path(evidence_dir).resolve()
         self.capture_only = capture_only
 
+    def browser_binding(self):
+        return {'space_id':self.space_id,'page':self.page,'evidence_dir':str(self.directory)}
+
     def _current(self, snapshot):
         from .service import Helpdesk
+        if snapshot.get('ego_browser') != self.browser_binding():
+            raise ValueError('EGO_FROZEN_BROWSER_CHANGED')
         with closing(Store(Path(snapshot['session_store_path']).resolve(strict=True))) as store:
             run = store.one('SELECT state,input_json FROM runs WHERE id=?', (snapshot['run_id'],))
             stop = store.one("SELECT value FROM settings WHERE key='stop_requested'")
