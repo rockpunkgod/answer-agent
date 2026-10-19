@@ -4,6 +4,33 @@
 
 **当前工作台可运行，支持人工实际交付与绩效回流；收到和答案任务已分离，可选本地网页执行及自动发送已接线（匿名/Mock验证）。一道阅读题的授权两阶段真实网页练习已生成待复核草稿；生产队列、持续收题和群发送仍未通过真实验收。当前结论为 NOT_READY，单题网页练习不代表完整自动答疑上线。**
 
+## 企业微信业务 MCP（原生后端试用）
+
+`tools/wecom_mcp_server.py` 提供控件检查、当前会话、读取、打开图片、准备回复、发送与附件核验共9个受限工具。默认使用 Win32 原生后端，不启动 Windows-MCP；只允许已审核的“苇中鹤”测试会话，默认禁止输入和发送。工具不接受任意坐标、收件人、命令或文件路径。操作引用原 Outbox，发送不确定不重试，不另建完成或绩效台账。
+
+使用已安装 MCP 2.2.0 的解释器运行（下例复用其依赖环境，不运行 Windows-MCP 服务）：
+
+```powershell
+E:\作业帮\.venv-windows-mcp\Scripts\python.exe tools/wecom_mcp_server.py --database <已有数据库绝对路径> --session <本机审核会话文件>
+```
+
+会话文件含目标绑定、窗口及显示器信息、头像/标题核验值、有效期和可选的已审核消息操作记录；由本机核验生成，不能让模型自行填写或延长有效期。`--enable-input` 才允许填写，发送还需 `--enable-send`、原审批策略及发送回读检查。本轮没有启用新服务的真实发送。
+
+当前边界：会话列表仅返回当前已核验联系人；打开会话仅支持激活并核验已打开目标，不支持任意搜索。读取仅覆盖已审核的可见消息操作记录，不是持续监听或历史导出；没有读取记录时明确不可用。附件工具仅核验已保存原件，尚未自动操作另存为。UIA 实测未暴露内部按钮，使用本机原生操作记录与窗口核验；窗口或布局变化即停止，不会自动换 Windows-MCP 再试。
+
+### 同一功能也可直接使用 CLI
+
+CLI 复用上述业务实现和全部守卫，无需启动 MCP 会话，默认原生后端：
+
+```powershell
+python tools/wecom_cli.py --database <已有数据库> --session <审核会话文件> state
+python tools/wecom_cli.py --database <已有数据库> --session <审核会话文件> chats
+python tools/wecom_cli.py --database <已有数据库> --session <审核会话文件> --enable-input messages <已绑定chat_id>
+python tools/wecom_cli.py --database <已有数据库> --session <审核会话文件> --enable-input prepare <原Outbox_ID>
+```
+
+其他子命令为 `controls`、`open`、`image`、`attachment`、`send`；发送仍需显式启用输入与发送及原审批。输出一份命令结果，退出码0表示命令结果可用，2表示不可用；不自动重试。消息原文输出应只保存在私有目录。CLI不是新的持续采集服务，也不会自动补发历史消息。
+
 ## 启动
 
 需要 Windows 和 Python 3.11+。在仓库目录打开 PowerShell：

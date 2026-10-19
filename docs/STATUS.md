@@ -1,5 +1,25 @@
 # 当前能力与缺口
 
+## CLI复用业务封装及真实尝试（2026-10-20）
+
+按用户要求新增 tools/wecom_cli.py，直接复用 WeComTools，提供state/controls/chats/open/messages/image/attachment/prepare/send；无MCP启动依赖，无任意坐标、命令或收件人参数。默认禁输入/发送，失败退出2且不重试。原生激活修复瞬时无法读取前台进程时未进入既有有界激活分支的问题；菜单复制添加固定短暂渲染等待，不重复点击。
+
+UNIT/MOCK：上述57项加CLI4项，共61项通过，0失败/跳过；命令增加 tests.test_wecom_cli。REAL：新独立MCP确实通过当前苇中鹤状态、当前联系人列表、已打开会话核验；无消息操作记录时明确不可用，发送禁用。开始记录原消息与复制菜单的原生操作，尚未完成真实CLI读取；Luna定位后前台变化被原生守卫拦截，之后CLI状态也因画面/目标核验失败返回不可用。实际截图出现ego空间概览，不推定是用户操作或脚本已成功。无Windows-MCP调用、无输入草稿、无外发、无绩效增加。真实读取/填写/发送仍未验证通过，保留失败证据；不声明完整替代成功。CLI controls已真实执行成功，退出0，当前UIA为3节点，12类业务控件仍全部NOT_EXPOSED；节点数量随界面变化，不据此猜测内部按钮。
+
+
+## 原生企业微信业务 MCP，后台回归完成（2026-10-20）
+
+新增 wecom_tools、wecom_native 和独立 stdio MCP 入口，记录12类流程控件、暴露9个业务工具；默认原生 Win32 后端，不启动 Windows-MCP。复用原桌面互斥锁、暂停、Outbox、版本核验和发送结果；没有新生产消息通道或数据库迁移。Windows-MCP 仅保留显式可选后端，不自动失败重试。默认只读，仅限已审核苇中鹤；真实填写及发送尚未验收。
+
+REAL能力探测：REA源码255d906e15a141b0f4acee60dc73976f03adc94c，包6.7.0，实际 observe-native-ui 返回 unsupported_provider/Native macOS utilities require macOS，不作为可用Windows驱动。企业微信5.0.12.6018实际UIA仅2节点，Win32子控件0、MSAA子节点0，没有编造AutomationId。独立MCP协议曾实际列出9工具并验证默认禁输入/发送。原生激活、经一次Luna定位进入联系人及标题/头像核验曾通过，未调用Windows-MCP；随后用户切换会话，目标核验阻止继续，没有填写或发送。原生MCP完整读取/填写/发送不算真实通过。用户确认仍使用电脑后，仅做后台，不再探测桌面。
+
+UNIT/MOCK：原生输入限制、锁屏/窗口移动/目标变化、暂停、默认不启动Windows-MCP、控件来源、消息不可用、准备草稿不发送/计绩效和既有发送回归，57项通过，0失败/跳过。命令：`python -X utf8 -B -m unittest -q tests.test_wecom_native tests.test_wecom_tools tests.test_luna_navigation tests.test_mcp_test_delivery tests.test_routing tests.test_delivery_tasks`。新增测试曾缺STOP坐标字段、默认后端测试曾错误预期状态；已修正测试夹具，未放宽生产守卫。
+
+能力边界：list仅当前核验联系人；open不自动导航其他聊天；get_messages需已审核可见消息操作记录，不是监听；附件仅已保存原件核验。实际按钮定位记录、跨布局更新、真实填写和发送待用户空闲后验证。没有将模拟通过标为真实成功；整体仍NOT_READY，累计完整任务仍1/20。
+
+原第5题另已按用户“确认未提交”的证据恢复一次原请求，实际取得DeepSeek答复并回流原run；ANSWER草稿检查拒绝（source_position_cue），未创建答案Outbox、未发送或增加绩效。保留原始拒绝证据，未修改ANSWER规则或重发收到。
+
+
 ## 同篇多小题复用原事项，原网页提交仍待核验（2026-10-19）
 
 复用已有Intent.SUBQUESTION和Helpdesk材料归属，OperatorTasks/CLI允许显式已审核parent-task的同篇小题；没有新增表、服务或自动分类。只允许隔离OPERATOR_TEST父任务，材料、题型、附件必须一致，七选五共享A—G不得变化。新小题与原题使用同学生/事项/材料但独立Question、Version与业务Session；相同题号重复审核停止，事务不留下重复消息/Ack/任务。普通追问仍引用对应小题。题面JSON仅为原本本地输入格式，不上传DeepSeek。

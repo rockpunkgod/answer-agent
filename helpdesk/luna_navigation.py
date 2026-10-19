@@ -33,9 +33,15 @@ def _source(record_path, display_index):
         raise ValueError('LUNA_DISPLAY_INDEX_REQUIRED')
     archive = (ROOT / 'data/private/windows-mcp').resolve(strict=True)
     record_path = Path(record_path).resolve(strict=True)
+    native=False
     if not record_path.is_relative_to(archive):
-        raise ValueError('LUNA_SCREENSHOT_OUTSIDE_APPROVED_DIRECTORY')
+        native_archive=ROOT/'data/private/wecom-native'
+        if not native_archive.is_dir() or not record_path.is_relative_to(native_archive.resolve(strict=True)):
+            raise ValueError('LUNA_SCREENSHOT_OUTSIDE_APPROVED_DIRECTORY')
+        archive=native_archive.resolve(strict=True);native=True
     record, _ = _json(record_path)
+    if native and record.get('backend')!='WECOM_NATIVE':
+        raise ValueError('LUNA_NATIVE_SCREENSHOT_REQUIRED')
     if record.get('tool') != 'Screenshot' or record.get('is_error') is not False:
         raise ValueError('LUNA_NATIVE_SCREENSHOT_REQUIRED')
     items = record.get('content', [])
@@ -59,6 +65,8 @@ def _source(record_path, display_index):
         raise ValueError('LUNA_NATIVE_JOURNAL_REQUIRED')
     attempt_path = archive / ('attempt-' + record['attempt_id'] + '.json')
     attempt, _ = _json(attempt_path)
+    if native and attempt.get('backend')!='WECOM_NATIVE':
+        raise ValueError('LUNA_NATIVE_JOURNAL_REQUIRED')
     captured = datetime.fromisoformat(attempt['started_at'])
     if captured.utcoffset() is None:
         raise ValueError('LUNA_SCREENSHOT_NOT_CURRENT')

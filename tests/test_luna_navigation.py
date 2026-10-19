@@ -85,6 +85,22 @@ class LunaNavigationTests(unittest.TestCase):
             '{"action":"ACTIVATE_WECOM","image_x":1,"image_y":1}'), display_index=0)
         self.assertEqual(result['loc'], [2, 2])
 
+    def test_native_wecom_source_requires_its_own_backend_and_journal(self):
+        archive=self.root/'data/private/wecom-native';archive.mkdir()
+        image=archive/'fixture.png';image.write_bytes(self.image.read_bytes())
+        self.record=archive/'fixture.json';self.attempt=archive/('attempt-'+'a'*32+'.json')
+        self.source.update(backend='WECOM_NATIVE')
+        self.source['content'][1]['path']=str(image)
+        self.journal.update(backend='WECOM_NATIVE',result_path=str(self.record))
+        self.record.write_text(json.dumps(self.source),encoding='utf-8')
+        self.attempt.write_text(json.dumps(self.journal),encoding='utf-8')
+        runner=self.runner('{"action":"STOP","image_x":0,"image_y":0}')
+        self.assertEqual(self.suggest(runner)['action'],'STOP')
+        self.journal.pop('backend')
+        self.attempt.write_text(json.dumps(self.journal),encoding='utf-8')
+        with self.assertRaisesRegex(ValueError,'LUNA_NATIVE_JOURNAL_REQUIRED'):
+            self.suggest(runner)
+
     def test_upscaled_bitmap_last_pixel_stays_inside_display(self):
         self.display_record(0, (-640, -360, 0, 0), (1920, 1080))
         result = self.suggest(self.runner(
