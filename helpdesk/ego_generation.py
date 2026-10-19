@@ -51,6 +51,37 @@ def selected_option(snapshot, text, inherited_option_id=None):
     return matches[0]
 
 
+def actual_delivery_files(snapshot):
+    """Use only registered images inside the existing local delivery directory."""
+    rows = snapshot.get('sent_history', [])
+    if not any(row.get('attachments') for row in rows):
+        return []
+    try:
+        configured_root = Path(snapshot['session_store_path']).resolve(strict=True).parent / 'delivery-attachments'
+        root = configured_root.resolve(strict=True)
+        # A replaced directory must not expand the already approved local scope.
+        if root != configured_root or not root.is_dir():
+            raise ValueError('EGO_DELIVERY_ATTACHMENT_CONTEXT_REQUIRES_REVIEW')
+        files = []
+        for row in rows:
+            for item in row.get('attachments', []):
+                path = Path(item['path']).resolve(strict=True)
+                if (row.get('delivery_method') != 'MANUAL_ATTESTATION'
+                        or not path.is_relative_to(root) or not path.is_file()
+                        or path.name != item.get('name')
+                        or path.suffix.lower() not in ('.png','.jpg','.jpeg','.webp','.gif')
+                        or type(item.get('bytes')) is not int
+                        or not 0 < item['bytes'] <= 20_000_000
+                        or path.stat().st_size != item['bytes']
+                        or sha256(path.read_bytes()).hexdigest() != item.get('sha256')):
+                    raise ValueError('EGO_DELIVERY_ATTACHMENT_CONTEXT_REQUIRES_REVIEW')
+                if path not in files:
+                    files.append(path)
+        return files
+    except (OSError, KeyError, TypeError):
+        raise ValueError('EGO_DELIVERY_ATTACHMENT_CONTEXT_REQUIRES_REVIEW') from None
+
+
 class EgoDeepSeekGenerator:
     identity = 'EGO_LITE_DEEPSEEK'
     simulated = False
@@ -120,8 +151,9 @@ class EgoDeepSeekGenerator:
                 *[o['label'] + '. ' + o['verified_text'] for o in q['options']], prompt])
         delivered = delivery_context(snapshot)
         if delivered:
-            if any(item.get('attachments') for item in delivered['sent_history']):
-                raise ValueError('EGO_DELIVERY_ATTACHMENT_CONTEXT_REQUIRES_REVIEW')
+            for path in actual_delivery_files(snapshot):
+                if path not in files:
+                    files.append(path)
             prompt += '\n此前实际回复：\n' + '\n'.join(row['body'] for row in delivered['sent_history'])
         request_id = snapshot['run_id'] + '-teach'
         browser = EgoDeepSeek(self.space_id, self.directory, page=self.page, allowed_files=files)
@@ -189,6 +221,7 @@ class EgoDeepSeekGenerator:
 def _capture_record(store, snapshot, body, option_id=None):
     """Read immutable capture evidence; this never approves a current source."""
     verify_frozen_teaching(snapshot)
+    actual_delivery_files(snapshot)
     rows = store.all("SELECT details FROM audit WHERE run_id=? AND event='EGO_TEACH_CAPTURED'", (snapshot['run_id'],))
     if len(rows) != 1:
         raise ValueError('EGO_CAPTURE_EVIDENCE_MISSING')
@@ -242,9 +275,8 @@ def material_origin(store, snapshot):
         raise ValueError('EGO_REUSE_UPLOAD_EVIDENCE_CHANGED')
     delivered=delivery_context(snapshot)
     if delivered:
+        actual_delivery_files(snapshot)
         for item in delivered['sent_history']:
-            if item.get('attachments'):
-                raise ValueError('EGO_DELIVERY_ATTACHMENT_CONTEXT_REQUIRES_REVIEW')
             if item['question_version'] == snapshot['question_version']:
                 # A teacher correction must not inherit a contradictory old selection.
                 selected_option(snapshot,item['body'],link['correct_option_id'])

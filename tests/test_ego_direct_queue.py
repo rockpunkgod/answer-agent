@@ -289,3 +289,66 @@ class DirectQueueTests(unittest.TestCase):
         admission=self.followup()
         self.assertEqual(admission['admission_phase'],'NEEDS_ATTENTION',admission)
         self.assertEqual(len(self.calls),1)
+
+    def register_approved_image(self):
+        from PIL import Image
+        from helpdesk.manual_delivery import ManualDeliveries
+        row=self.db.one("SELECT * FROM outbox WHERE purpose='ANSWER' ORDER BY rowid LIMIT 1")
+        root=Path(self.db.path).parent/'delivery-attachments';root.mkdir(exist_ok=True)
+        image=root/'teacher.png';Image.new('RGB',(20,20),'white').save(image)
+        ManualDeliveries(self.db,attachment_root=root).register(row['id'],question_version=row['question_version'],
+            context_revision=row['context_revision'],reviewer='anonymous verifier',
+            verification_evidence='Synthetic registered image, not a real platform receipt',
+            delivered_at='2026-10-01T10:00:00+08:00',content='',attachments=[image.name])
+        return image
+
+    def test_followup_uploads_registered_image_without_reuploading_course_or_draft(self):
+        self.admit();self.assertEqual(self.runtime.tick()['state'],'GENERATED')
+        image=self.register_approved_image()
+        self.followup();result=self.runtime.tick()
+        self.assertEqual(result['state'],'GENERATED',result)
+        self.assertEqual(self.calls[-1][3],[image])
+        self.assertIn('已人工交付附件：teacher.png',self.calls[-1][2])
+        self.assertNotIn('因为要照顾母亲。',self.calls[-1][2])
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM deepseek_chats')[0],1)
+
+    def test_missing_or_changed_actual_image_blocks_followup_before_browser(self):
+        self.admit();self.assertEqual(self.runtime.tick()['state'],'GENERATED')
+        image=self.register_approved_image()
+        raw=image.read_bytes();image.write_bytes(raw[:-1]+bytes([raw[-1]^1]))
+        admission=self.followup()
+        self.assertEqual(admission['admission_phase'],'NEEDS_ATTENTION',admission)
+        self.assertEqual(len(self.calls),1)
+
+    def test_actual_image_changed_after_freeze_blocks_followup_before_browser(self):
+        self.admit();self.assertEqual(self.runtime.tick()['state'],'GENERATED')
+        image=self.register_approved_image();self.followup();image.unlink()
+        result=self.runtime.tick()
+        self.assertEqual(result['state'],'EXECUTION_UNCERTAIN',result)
+        self.assertEqual(len(self.calls),1)
+
+    def test_actual_image_changed_after_capture_blocks_delivery(self):
+        from helpdesk.test_answer_queue import validate_source_answer
+        self.admit();self.assertEqual(self.runtime.tick()['state'],'GENERATED')
+        image=self.register_approved_image();self.followup()
+        self.assertEqual(self.runtime.tick()['state'],'GENERATED')
+        row=self.db.one("SELECT * FROM outbox WHERE purpose='ANSWER' ORDER BY rowid DESC LIMIT 1")
+        image.write_bytes(b'changed')
+        with self.assertRaisesRegex(ValueError,'EGO_DELIVERY_ATTACHMENT_CONTEXT_REQUIRES_REVIEW'):
+            validate_source_answer(self.db,row,approval=False)
+
+    def test_actual_image_changed_during_generation_preserves_capture_without_new_answer(self):
+        self.admit();self.assertEqual(self.runtime.tick()['state'],'GENERATED')
+        image=self.register_approved_image();self.followup()
+        original=self.submit
+        def changing(*args,**kwargs):
+            captured=original(*args,**kwargs)
+            image.write_bytes(b'changed while awaiting model')
+            return captured
+        with patch.object(self,'submit',side_effect=changing):
+            result=self.runtime.tick()
+        self.assertEqual(result['state'],'EXECUTION_UNCERTAIN',result)
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM answers')[0],1)
+        task=self.fx.tasks.get_task(self.task['id'])
+        self.assertTrue((Path(task['evidence_dir'])/(task['run_id']+'-teach.answer.json')).exists())
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM outbox WHERE run_id=?',(task['run_id'],))[0],0)
