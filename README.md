@@ -24,7 +24,7 @@ E:\作业帮\.venv-windows-mcp\Scripts\python.exe tools/wecom_mcp_server.py --da
 
 ### 同一功能也可直接使用 CLI
 
-CLI 复用上述业务实现和全部守卫，无需启动 MCP 会话，默认原生后端：
+CLI 复用上述业务实现和全部守卫，无需启动 MCP 会话，默认原生后端；检测到用户按住Shift/Ctrl/Alt/Windows键时停止输入和窗口激活，不擅自释放用户键。脚本快捷键异常会尽力释放所有由脚本按下的键，失败明确停止：
 
 ```powershell
 python tools/wecom_cli.py --database <已有数据库> --session <审核会话文件> state

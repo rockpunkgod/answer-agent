@@ -2,6 +2,9 @@
 
 ## 真实来源测试Ack入口接原生后端（2026-10-20）
 
+补充原生输入边界：激活/每次输入前检测用户按住Shift/Ctrl/Alt/Windows键即停止，不释放用户按键；脚本自己的快捷键释放失败时仍尝试释放其他已注入键，并报告KEY_RELEASE_UNCONFIRMED，避免失败残留Ctrl影响后续动作。UNIT/MOCK：原生、CLI、OCR、测试Ack、来源/发送回归合计93项通过、0失败/跳过，覆盖5类修饰键、释放失败继续清理及keydown失败只清理已注入键。REAL READONLY仅验证Win32修饰键查询可执行，观测当时无按住键；未真实注入按键故障或执行发送，不把Mock算真实接管验收。没有模型/Windows-MCP调用。完整答疑交付仍NOT_READY。
+
+
 检查发现新WeComTools/CLI并未替换日常AutomaticDeliveryRuntime的MCPGroupDesktop，不能宣称demo已全量使用新封装。现有原生目标限定苇中鹤，不将该会话配置冒充正式群身份。最小接线在已有collector_test_ack_cli增加--backend native，prepare-pin/dispatch/inspect复用PinnedDesktop＋NativeWeComTransport及原CollectorTestAckWorkflow；老默认windows-mcp保留兼容，未新增服务、消息源或台账。
 
 原生模式需固定前台/显示器配方，构建前验证必要显示器配置，输入前再次检查暂停、原Outbox仍待发/发送中/待核验，并调用原flow._validate核验实际collector来源、证据、目标及pin。既有FIXTURE禁止真实传输、UNKNOWN只显式核验、不重复收到和不计正式绩效保护保留。没有全局后台自动启用。

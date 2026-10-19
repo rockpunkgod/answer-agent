@@ -24,6 +24,8 @@ class NativeWeComTransport:
         self.user=ctypes.WinDLL('user32',use_last_error=True)
         self.kernel=ctypes.WinDLL('kernel32',use_last_error=True)
         self.user.GetForegroundWindow.restype=w.HWND
+        self.user.GetAsyncKeyState.argtypes=[ctypes.c_int]
+        self.user.GetAsyncKeyState.restype=w.SHORT
         self.user.SetForegroundWindow.argtypes=[w.HWND]
         self.user.BringWindowToTop.argtypes=[w.HWND]
         self.user.AttachThreadInput.argtypes=[w.DWORD,w.DWORD,w.BOOL]
@@ -61,6 +63,7 @@ class NativeWeComTransport:
 
     def activate(self):
         self.guard()
+        self._check_modifiers()
         self._interactive_desktop()
         handle=self.pin['window_geometry_handle'][2]
         if not self.user.IsWindow(handle) or self.user.IsIconic(handle):
@@ -104,6 +107,7 @@ class NativeWeComTransport:
 
     def _check_input(self,point=None):
         self.guard()
+        self._check_modifiers()
         self._interactive_desktop()
         current=self.foreground()
         if current['process']!='WXWork' or current!=self.last_native:
@@ -112,6 +116,12 @@ class NativeWeComTransport:
             x,y=point
             if not(current['left']<=x<current['left']+current['width'] and current['top']<=y<current['top']+current['height']):
                 raise ValueError('POINT_OUTSIDE_VERIFIED_WINDOW')
+
+    def _check_modifiers(self):
+        # Do not combine our literal paste/click with a user's held shortcut.
+        # Never release keys that this transport did not press itself.
+        if any(self.user.GetAsyncKeyState(key)&0x8000 for key in (0x10,0x11,0x12,0x5b,0x5c)):
+            raise ValueError('USER_MODIFIER_HELD_INPUT_PAUSED')
 
     def _clipboard(self,mode,text=None):
         self.user.OpenClipboard.argtypes=[w.HWND]
@@ -163,7 +173,11 @@ class NativeWeComTransport:
         try:
             for key in keys:self._key(key);pressed.append(key)
         finally:
-            for key in reversed(pressed):self._key(key,True)
+            release_failed=False
+            for key in reversed(pressed):
+                try:self._key(key,True)
+                except Exception:release_failed=True
+            if release_failed:raise ValueError('KEY_RELEASE_UNCONFIRMED') from None
 
     def call(self,tool,arguments):
         attempt=uuid4().hex;started=datetime.now(timezone.utc).isoformat()

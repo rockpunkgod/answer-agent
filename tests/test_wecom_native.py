@@ -22,7 +22,37 @@ class NativeGuardTests(unittest.TestCase):
         def name(handle,kind,buffer,size,needed):buffer.value='Default';return True
         self.native.user=SimpleNamespace(OpenInputDesktop=Mock(return_value=1),
             GetUserObjectInformationW=Mock(side_effect=name),CloseDesktop=Mock(),
+            GetAsyncKeyState=Mock(return_value=0),
             SetCursorPos=Mock(return_value=True),mouse_event=Mock())
+
+    def test_user_held_modifier_pauses_without_releasing_or_clicking(self):
+        for held in (0x10,0x11,0x12,0x5b,0x5c):
+            with self.subTest(held=held):
+                self.native.user.GetAsyncKeyState.side_effect=lambda key:0x8000 if key==held else 0
+                with self.assertRaisesRegex(ValueError,'USER_MODIFIER_HELD'):
+                    self.native.call('Click',{'loc':[150,150]})
+        self.native.user.SetCursorPos.assert_not_called()
+        self.native.user.mouse_event.assert_not_called()
+
+    def test_failed_key_release_still_releases_other_keys_pressed_by_us(self):
+        calls=[]
+        def key(code,up=False):
+            calls.append((code,up))
+            if code==0x43 and up:raise ValueError('injected failure')
+        self.native._key=key
+        with self.assertRaisesRegex(ValueError,'KEY_RELEASE_UNCONFIRMED'):
+            self.native._shortcut('ctrl+c')
+        self.assertEqual(calls,[(0x11,False),(0x43,False),(0x43,True),(0x11,True)])
+
+    def test_failed_key_down_releases_only_previously_inserted_keys(self):
+        calls=[]
+        def key(code,up=False):
+            calls.append((code,up))
+            if code==0x56 and not up:raise ValueError('KEY_INPUT_UNCONFIRMED')
+        self.native._key=key
+        with self.assertRaisesRegex(ValueError,'KEY_INPUT_UNCONFIRMED'):
+            self.native._shortcut('ctrl+v')
+        self.assertEqual(calls,[(0x11,False),(0x56,False),(0x11,True)])
 
     def test_stopped_input_never_touches_native_desktop(self):
         self.native.guard.side_effect=ValueError('STOPPED')
