@@ -6,14 +6,16 @@ from pathlib import Path
 import sqlite3
 from urllib.parse import quote
 
-from helpdesk.call_costs import report, task_cost
+from helpdesk.call_costs import report, task_cost, question_cost
 from helpdesk.storage import Store, ensure_local_database
 
 
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--db', type=Path, required=True)
-    parser.add_argument('--run', help='An existing run; omit for per-passage statistics')
+    scope=parser.add_mutually_exclusive_group()
+    scope.add_argument('--run', help='An existing run; omit both scopes for per-passage statistics')
+    scope.add_argument('--question',help='An existing question: all versions, revisions and followups')
     parser.add_argument('--max-average-cny', default='0.50')
     args = parser.parse_args(argv)
     path = Path(ensure_local_database(args.db)).resolve(strict=True)
@@ -25,7 +27,8 @@ def main(argv=None):
     store.connection.row_factory = sqlite3.Row
     with closing(store):
         store.execute('BEGIN')  # Read one consistent snapshot while import/generation continues.
-        value = task_cost(store, args.run) if args.run else report(store, max_average_cny=args.max_average_cny)
+        value = (task_cost(store,args.run) if args.run else question_cost(store,args.question)
+                 if args.question else report(store,max_average_cny=args.max_average_cny))
         print(json.dumps(value, ensure_ascii=False))
 
 

@@ -256,6 +256,46 @@ def task_cost(store, run_id):
         'injected_evidence': any(c['injected'] for c in calls) or any(c['injected'] for c in coverage.values())}
 
 
+def question_cost(store,question_id):
+    """Read all versions, followups and revisions of one existing question.
+
+    This is not a performance unit or an allocation for per-passage statistics.
+    Do not replace report's existing all-run passage allocation with this view.
+    """
+    _require(store.one('SELECT id FROM questions WHERE id=?',(question_id,)) is not None,
+             'COST_QUESTION_NOT_FOUND')
+    rows=store.all('SELECT id,input_json FROM runs WHERE question_id=? ORDER BY rowid',(question_id,))
+    tasks=[task_cost(store,row['id']) for row in rows]
+    by_id={task['run_id']:task for task in tasks}
+    revisions=[];reasons=[]
+    for row in rows:
+        link=json.loads(row['input_json']).get('ego_revision')
+        if link is None:continue
+        parent=link.get('parent_run_id') if isinstance(link,dict) else None
+        child=by_id[row['id']]
+        matching=[] if parent not in by_id or parent==row['id'] else [
+            event for event in _records(store,parent,'EGO_REVISION_PREPARED') if event.get('run_id')==row['id']]
+        keys=('question_id','question_version','context_revision','case_id','binding_id','session_id')
+        if len(matching)!=1 or any(child[k]!=by_id[parent][k] for k in keys):
+            reasons.append('REVISION_LINK_UNVERIFIED:'+row['id'])
+            continue
+        revisions.append({'parent_run_id':parent,'run_id':row['id'],
+            'observed_teaching_calls':sum(call['kind']=='DEEPSEEK_TEACH' for call in child['calls'])})
+    for task in tasks:
+        reasons.extend(task['run_id']+':'+reason for reason in task['unverified'])
+    if not tasks:reasons.append('NO_OBSERVED_RUNS')
+    known=sum((Decimal(task['known_subtotal_cny']) for task in tasks),Decimal('0'))
+    return {'question_id':question_id,'scope':'ALL_RUNS_FOR_QUESTION_NOT_PERFORMANCE_QUANTITY',
+        'run_ids':[task['run_id'] for task in tasks],'runs':tasks,
+        'observed_call_counts':{kind:sum(call['kind']==kind for task in tasks for call in task['calls']) for kind in KINDS},
+        'measurement_complete':{kind:bool(tasks) and all(task['call_attempts'][kind] is not None for task in tasks) for kind in KINDS},
+        'within_run_retry_calls':sum(task['retry_calls'] for task in tasks),
+        'teaching_revisions':revisions,'teaching_revision_calls':sum(r['observed_teaching_calls'] for r in revisions),
+        'known_subtotal_cny':str(known),'total_cny':None if reasons else str(known),
+        'cost_status':'UNVERIFIED' if reasons else 'VERIFIED','unverified':reasons,
+        'injected_evidence':any(task['injected_evidence'] for task in tasks)}
+
+
 def report(store, *, max_average_cny='0.50'):
     """Use only existing confirmed, fully delivered, single-passage units."""
     from .performance import PerformanceLedger

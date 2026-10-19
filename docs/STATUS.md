@@ -1,5 +1,14 @@
 # 当前能力与缺口
 
+## 单题全运行成本视图，保留修订调用（2026-10-20）
+
+检查确认原report已按已确认篇的关联Question汇总全部run，未发现只保留最新稿的成本漏算，故不修改其计量或分摊内核。新增只读question_cost及report_task_costs --question，与--run互斥，用于尚未交付时直接查看同题所有版本/修订/追问运行。保留每run费用证据与未核验原因；观察调用数与阶段覆盖是否完整分列，缺失账单不填0，修订关系不可靠时标记未核验且仍保留该run成本，不隐藏失败调用。没有新增数据库结构或绩效数量。
+
+UNIT/MOCK：`python -X utf8 -B -m unittest -q tests.test_question_costs tests.test_call_costs`，22项通过、0失败/跳过。合成账单测试覆盖父稿＋修订费用累加、未定价修订不当免费、伪失联修订费用不丢弃、重复只读CLI及不存在问题阻止；注入账单明确标识，不当真实价格。
+
+REAL READONLY：在原苇中鹤测试库对Question 1f54432c1f8f42d785f091fd19798e1d运行新CLI，原run及单次修订run均出现，DEEPSEEK_TEACH已记录2次，其中修订1次。SEARCH/MATCH为direct-original已明确关闭；SCHEDULER/OTHER未完整记录，不能将观察0当实际0。无费用凭据，总费用null/UNVERIFIED；完整结果保存原私有任务目录question-cost-after-revision.json。未启动网页、LLM或桌面，无外发或正式绩效。整体仍NOT_READY，1/20。
+
+
 ## 原生CLI/MCP历史回复真实回读（2026-10-20）
 
 新增receipt/wecom_verify_reply，复用原MCPTestAnswerDesktop的目标/头像/窗口核验、原生复制菜单及全文Clipboard回读。只接受原Outbox已SENT_UI_CONFIRMED的PROGRESS/TEST_ANSWER，不允许借历史同文气泡将PENDING、SENDING或SEND_UNKNOWN提升为成功。结果明确new_delivery=false、outbox_changed=false、无服务器回执/已读声明，完整证据存私有目录，输出仅摘要/路径/哈希以减少token。
