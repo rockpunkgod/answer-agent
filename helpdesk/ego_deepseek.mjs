@@ -6,6 +6,16 @@ const editor = 'textarea[name="search"]';
 const answers = '.ds-assistant-message-main-content';
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 
+export function attachmentsReady(names) {
+  const composer=document.querySelector('.aaff8b8f');
+  if(!composer || composer.querySelector('.ds-loading, [aria-busy="true"], [role="progressbar"]')) return false;
+  const text=composer.innerText || '';
+  if(/上传中|解析中|上传失败|解析失败|文件过大|uploading|processing|upload failed|parse failed/i.test(text)) return false;
+  const images=[...composer.querySelectorAll('img')];
+  return names.every(name=>text.includes(name) || images.some(image=>
+    image.alt === name && image.complete && image.naturalWidth > 0));
+}
+
 export function readReply({selector,token,baseline}) {
   const nodes=[...document.querySelectorAll(selector)].filter(node=>{
     const row=node.closest('[data-virtual-list-item-key]');
@@ -59,11 +69,7 @@ export async function run(request) {
     if (request.files.length) {
       if (await page.url() !== request.session_url) throw new Error('SESSION_CHANGED');
       await page.setInputFiles('input[type="file"]',request.files.map(f=>f.path));
-      await page.waitForFunction(names => {
-        const composer=document.querySelector('.aaff8b8f');
-        const text=composer?.innerText || '';
-        return names.every(name=>text.includes(name)) && !/上传中|解析中|上传失败|解析失败|文件过大|uploading|processing|upload failed|parse failed/i.test(text);
-      }, request.files.map(f=>f.name), {timeout:60_000});
+      await page.waitForFunction(attachmentsReady, request.files.map(f=>f.name), {timeout:60_000});
     }
     if (await page.url() !== request.session_url) throw new Error('SESSION_CHANGED');
     await page.fill(editor,request.prompt);

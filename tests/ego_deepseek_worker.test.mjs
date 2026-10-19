@@ -4,7 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
-import {run} from '../helpdesk/ego_deepseek.mjs';
+import {run,attachmentsReady} from '../helpdesk/ego_deepseek.mjs';
 
 async function fixture(options={}) {
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'ego-fixture-'));
@@ -21,7 +21,10 @@ async function fixture(options={}) {
   const old={innerText:'old reply',closest(){return {getAttribute(){return '2'},querySelector(){return {}}}}};
   globalThis.document={
     querySelectorAll(selector){return selector.startsWith('textarea')?[{value:state.value}]:[...(options.oldAnswer?[old]:[]),...(state.answer?[node]:[])]},
-    querySelector(selector){return selector==='.aaff8b8f'?{innerText:options.uploadFailure?'approved.md 上传失败':'approved.md'}:{value:state.value}}
+    querySelector(selector){return selector==='.aaff8b8f'?{
+      innerText:options.uploadFailure?'approved.md 上传失败':'approved.md',
+      querySelector(){return null},querySelectorAll(){return []}
+    }:{value:state.value}}
   };
   globalThis.location={get href(){return state.url}};
   const page={
@@ -36,6 +39,22 @@ async function fixture(options={}) {
   globalThis.taskSpace=async()=>({page(){return page}});
   return {request,state,file,cleanup:()=>fs.rm(directory,{recursive:true,force:true})};
 }
+
+test('image upload requires named loaded thumbnail and no active progress',()=>{
+  const image={alt:'original.jpg',complete:true,naturalWidth:1279};
+  const composer={innerText:'teaching.md',querySelector(){return null},querySelectorAll(){return [image]}};
+  globalThis.document={querySelector(){return composer}};
+  assert.equal(attachmentsReady(['teaching.md','original.jpg']),true);
+  assert.equal(attachmentsReady(['teaching.md','other.jpg']),false);
+  image.complete=false;
+  assert.equal(attachmentsReady(['original.jpg']),false);
+  image.complete=true;image.naturalWidth=0;
+  assert.equal(attachmentsReady(['original.jpg']),false);
+  image.naturalWidth=1279;composer.querySelector=()=>({});
+  assert.equal(attachmentsReady(['teaching.md','original.jpg']),false);
+  composer.querySelector=()=>null;composer.innerText='teaching.md 上传失败';
+  assert.equal(attachmentsReady(['teaching.md','original.jpg']),false);
+});
 
 test('upload failure prevents prompt submission',async()=>{
   const f=await fixture({uploadFailure:true});try{
