@@ -72,6 +72,19 @@ class WeComToolTests(unittest.TestCase):
         self.assertTrue(all(c['status']=='NOT_EXPOSED' and c['selector'] is None for c in result['controls']))
         self.assertEqual(self.transport.calls,[])
 
+    def test_open_activates_native_once_but_still_verifies_target(self):
+        from helpdesk.delivery import PreflightFailure
+        from unittest.mock import Mock
+        self.transport.activate=Mock()
+        state={'status':'VERIFIED_CURRENT_CHAT','chat_id':self.target}
+        with patch.object(self.service,'get_chat_state',side_effect=[PreflightFailure('FOREGROUND_PROBE_FAILED'),state]):
+            self.assertEqual(self.service.call('open_chat',chat_id=self.target)['status'],'ALREADY_OPEN')
+        self.transport.activate.assert_called_once()
+        self.transport.activate.reset_mock()
+        with patch.object(self.service,'get_chat_state',side_effect=PreflightFailure('TEST_CONTACT_VISUAL_PIN_CHANGED')):
+            self.assertEqual(self.service.call('open_chat',chat_id=self.target)['reason'],'TEST_CONTACT_VISUAL_PIN_CHANGED')
+        self.transport.activate.assert_not_called()
+
     def test_current_chat_is_not_full_chat_list_and_foreground_mismatch_stops(self):
         self.assertFalse(self.service.call('list_chats')['complete_chat_list'])
         self.assertEqual(self.service.call('open_chat',chat_id=self.target)['status'],'ALREADY_OPEN')
@@ -85,6 +98,18 @@ class WeComToolTests(unittest.TestCase):
         self.assertEqual(result['status'],'UNAVAILABLE')
         self.assertNotIn('messages',result)
         self.assertEqual(self.transport.calls,[])
+
+    def test_selection_variant_needs_exact_text_and_still_rejects_other_layouts(self):
+        recipe={'region_box':[0,0,10,10],'region_hash':'0'*64,
+            'selected_region_hash':self.pin['avatar_hash']}
+        record={'content':[{'type':'image','path':str(self.image)}]}
+        with self.assertRaisesRegex(ValueError,'EXACT_TEXT_HASH_REQUIRED'):
+            self.service._checked_region(record,recipe)
+        recipe['text_sha256']=sha256(b'original text').hexdigest()
+        self.service._checked_region(record,recipe)
+        recipe['selected_region_hash']='1'*64
+        with self.assertRaisesRegex(ValueError,'MESSAGE_LAYOUT_CHANGED'):
+            self.service._checked_region(record,recipe)
 
     def test_prepare_only_uses_original_outbox_and_never_sends_or_completes(self):
         result=self.service.call('prepare_reply',outbox_id='reply')

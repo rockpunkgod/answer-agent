@@ -152,8 +152,8 @@ class WeComTools:
         # No guessing/searching another conversation from a name-only match.
         try:
             state=self.get_chat_state()
-        except ValueError as exc:
-            if str(exc)!='WECOM_NOT_FOREGROUND' or self.backend!='NATIVE':raise
+        except (ValueError,PreflightFailure) as exc:
+            if str(exc) not in ('WECOM_NOT_FOREGROUND','FOREGROUND_PROBE_FAILED') or self.backend!='NATIVE':raise
             self._require_input()
             with resource_lock(self.lock),self.transport_factory() as transport:
                 transport.activate()
@@ -178,7 +178,14 @@ class WeComTools:
         from PIL import Image
         path=next(c['path'] for c in record['content'] if c.get('type')=='image')
         with Image.open(path) as image:
-            if pixel_hash(image,recipe['region_box'])!=recipe['region_hash']:
+            hashes=[recipe['region_hash']]
+            # WeCom leaves copied text selected. Only an explicitly reviewed
+            # alternate frame for the same exact text may be accepted.
+            if recipe.get('selected_region_hash'):
+                if not re.fullmatch(r'[0-9a-f]{64}',recipe.get('text_sha256','')):
+                    raise ValueError('EXACT_TEXT_HASH_REQUIRED_FOR_SELECTION_VARIANT')
+                hashes.append(recipe['selected_region_hash'])
+            if pixel_hash(image,recipe['region_box']) not in hashes:
                 raise ValueError('MESSAGE_LAYOUT_CHANGED_RECAPTURE_REQUIRED')
 
     def get_messages(self, chat_id):
