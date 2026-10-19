@@ -15,7 +15,7 @@ OBJECTIVE = 'gaokao-english'
 GRAMMAR = 'gaokao-grammar-fill'
 WRITING = 'gaokao-writing'
 QA = 'kaiming-english-qa'
-# ANSWER b04ebc26 README explicitly shares this checker with objective types.
+# The pinned ANSWER README explicitly shares this checker with objective types.
 # Do not search other skills or manufacture a replacement when it is missing.
 OBJECTIVE_CHECKER = GRAMMAR + '/scripts/check_lesson.py'
 ROUTES = {

@@ -665,3 +665,17 @@ OperatorTasks.freeze 增加 ego_space/ego_page；SourceQuestionTasks 继承原�
 UNIT/MOCK：`python -X utf8 -B -m unittest -q tests.test_ego_direct_queue tests.test_ego_generation tests.test_ego_browser tests.test_ego_worker tests.test_operator_tasks tests.test_source_question_tasks tests.test_reviewed_question_queue tests.test_automatic_preparation tests.test_workflow tests.test_call_costs tests.test_manual_delivery_registration tests.test_saved_teacher_delivery`，169项 Python 测试通过（含10项 JS 模拟用例），无失败、跳过。新增覆盖连续追问同会话无重复上传、只补实际老师正文、未交付草稿不冒充历史、原捕获冻结前/后变动阻断、无需重复答案字母、改选冲突以及实际图片交付不能静默省略。修复冻结前 tuple/list 序列化差异，使用规范 JSON 对比，保留真实字段与 ID 全部校验。
 
 REAL：本轮未调用真实 DeepSeek、未外发、未修改生产数据库；实际成本与时效没有新增证明。真实直接模式队列、完整实际交付与绩效、重启稳定性仍需验收，整体 NOT_READY。此前“普通追问材料复用尚未实施”由本节取代，真实验证仍未完成。
+
+## 新验收教学版本与浏览器真实预检（2026-10-19）
+
+按最终验收要求重新核对 ANSWER：`git ls-remote --symref origin HEAD` 证明默认分支 main、远端 HEAD 为 `1c388a0596b13935ae7c6a1af00834915a8efa33`。旧本机 root 的 b04 工作树干净；仅 fetch 更新远端引用，不切换其工作树。为新验收建立独立 detached worktree，HEAD 为 1c388a0、工作树干净，固定 config/teaching-source.toml 的 commit 到该版本；教学原文不作本地改写。
+
+新阅读、完形受检教学包均真实生成并通过原文/依赖/缓存核验，missing_dependencies=[]，原校验脚本仍是 ANSWER 的 gaokao-grammar-fill/scripts/check_lesson.py。复用已批准原题的原始文本，只执行新包原脚本 SOURCE 兼容性检查，退出0；不生成新答案、不改真实消息时间、不把此检查当作真实网页验收。旧 b04 snapshot、原始捕获和数据库均保留；当前全局版本保护会拒绝旧 manifest 继续生成，须明确冻结新任务，不改旧 run 身份或版本。
+
+REAL 浏览器预检：原 ego TaskSpace 1 返回“task space not found”，同一项目名称的空间不存在，listTaskSpaces 返回空列表。没有新建替代空间、没有提交请求；按 ego-browser 运行指南已请求用户授权重建一个空间。该条件不算真实网页通过。等待确认期间继续本机来源准备，未声称运行中的浏览器任务仍在等待。
+
+只读检查旧练习数据库：quick_check=ok，原 run 仍 RUNNING，answers=0、performance_units=0、delivery_checks=0、实际已核验交付=0。原 ego 捕获仍为 DRAFT_SAVED_REVIEW_REQUIRED，用户“直接采用，没有问题”记录为人工采用，不改原检查标记；修正已有私有 checkpoint 中“尚未教学”的过期阶段，防止依据旧说明重放请求。未改旧捕获或业务数据库。
+
+验证：`python -X utf8 -B -m unittest -q tests.test_answer_teaching tests.test_teaching_bundle tests.test_teaching_routes tests.test_lesson_checks`，57项执行，56通过、1 SKIPPED、0失败。单独复核 `tests.test_teaching_bundle.TeachingBundleTests.test_symbolic_link_dependency_is_rejected`，确因“Filesystem cannot create symbolic links”跳过，不算通过，不要求管理员运行或关闭系统安全。其余原路径和junction防护测试保留。新 SOURCE 兼容性检查是本机原脚本真实执行；教学/缓存回归仍以各 fixture 范围为准，不替代新版本 DeepSeek 教学质量验收。
+
+当前 ANSWER_COMMIT=1c388a0596b13935ae7c6a1af00834915a8efa33。浏览器重建确认尚未收到；新直接模式的真实队列、实际发送与绩效、成本和稳定性仍未验收，整体 NOT_READY。
