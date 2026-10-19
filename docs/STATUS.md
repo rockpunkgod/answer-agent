@@ -1,5 +1,14 @@
 # 当前能力与缺口
 
+## 真实来源测试Ack入口接原生后端（2026-10-20）
+
+检查发现新WeComTools/CLI并未替换日常AutomaticDeliveryRuntime的MCPGroupDesktop，不能宣称demo已全量使用新封装。现有原生目标限定苇中鹤，不将该会话配置冒充正式群身份。最小接线在已有collector_test_ack_cli增加--backend native，prepare-pin/dispatch/inspect复用PinnedDesktop＋NativeWeComTransport及原CollectorTestAckWorkflow；老默认windows-mcp保留兼容，未新增服务、消息源或台账。
+
+原生模式需固定前台/显示器配方，构建前验证必要显示器配置，输入前再次检查暂停、原Outbox仍待发/发送中/待核验，并调用原flow._validate核验实际collector来源、证据、目标及pin。既有FIXTURE禁止真实传输、UNKNOWN只显式核验、不重复收到和不计正式绩效保护保留。没有全局后台自动启用。
+
+UNIT/MOCK：`python -X utf8 -B -m unittest -q tests.test_collector_ack_native tests.test_collector_test_ack tests.test_wecom_tools tests.test_wecom_native tests.test_automatic_delivery_workbench`，46项通过、0失败/跳过。覆盖原生不构建Windows-MCP、每次输入前重验来源、暂停及已发送状态停止、缺少显示器审核不构建传输，以及原工作台回归。CLI --help实际启动通过。REAL未发送：没有新合格提问及完整审核发送配方，本轮未建立测试Ack或调用桌面。原生测试Ack实际发送及日常群接线仍UNVERIFIED；整体NOT_READY，1/20。
+
+
 ## 新截图本地OCR及菜单中断真实恢复（2026-10-20）
 
 REAL：保持原苇中鹤和原消息，新原生截图经源日志/窗口/消息哈希核验，Windows OCR在实际菜单局部唯一识别复制位置，无Luna或Windows-MCP调用；识别结果及当前菜单哈希用于该本机私有配方，CLI随后复制原文一致。原始时间仍待核验，未猜时间或将历史记录重新作为新提问入库。此证明新截图定向OCR识别＋原生读取，不代表任意布局或持续采集通过。

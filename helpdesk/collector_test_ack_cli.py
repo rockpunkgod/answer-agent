@@ -1,6 +1,7 @@
 """Explicit operator commands; no automatic routing, selection or contact search."""
 import argparse
 from contextlib import closing
+from contextlib import contextmanager
 from datetime import datetime
 from hashlib import sha256
 import json
@@ -17,6 +18,37 @@ from .test_routing import TestRecipient
 
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+@contextmanager
+def ack_connection(backend,pin,store,collector,outbox_id):
+    """Select transport without changing the actual-source test ACK contract."""
+    if backend=='windows-mcp':
+        with MCPProcess() as transport:
+            desktop=MCPTestAnswerDesktop(transport,pin,ROOT)
+            yield desktop,CollectorTestAckWorkflow(store,collector,desktop)
+        return
+    if backend!='native':raise ValueError('UNKNOWN_ACK_BACKEND')
+    if (pin.get('observation_mode')!='fixed_foreground_probe'
+            or type(pin.get('display_index')) is not int
+            or not isinstance(pin.get('display_bounds'),list) or len(pin['display_bounds'])!=4):
+        raise ValueError('REVIEWED_NATIVE_DISPLAY_PIN_REQUIRED')
+    from .wecom_native import NativeWeComTransport
+    from .wecom_tools import PinnedDesktop
+    current={}
+    def guard():
+        flow=current.get('flow')
+        if flow is None or flow._stopped():raise ValueError('STOPPED')
+        row=store.one('SELECT * FROM outbox WHERE id=?',(outbox_id,))
+        if not row or row['state'] not in ('PENDING','SENDING','SEND_UNKNOWN'):
+            raise ValueError('TEST_ACK_STATE_CHANGED')
+        # Reuse actual collector lineage, target, source evidence and pin checks
+        # before every input. Never grant live transport to a fixture ACK.
+        flow._validate(row)
+    with NativeWeComTransport(pin,ROOT,guard=guard) as transport:
+        desktop=PinnedDesktop(transport,pin,ROOT)
+        current['flow']=CollectorTestAckWorkflow(store,collector,desktop)
+        yield desktop,current['flow']
 
 
 def _recipient(path):
@@ -67,6 +99,8 @@ def main(argv=None):
     parser.add_argument("--outbox")
     parser.add_argument("--pin", type=Path)
     parser.add_argument("--pin-template", type=Path, help="Still-valid operator-reviewed target visual pin; never renewed automatically")
+    parser.add_argument('--backend',choices=('native','windows-mcp'),default='windows-mcp',
+                        help='native uses the guarded Win32 transport; legacy default remains compatible')
     args = parser.parse_args(argv)
     with closing(Store(args.database)) as store:
         _schema(store)
@@ -103,9 +137,7 @@ def main(argv=None):
                 pin = json.loads(args.pin.read_text(encoding="utf-8"))
                 if pin.get("outbox_id") != args.outbox:
                     raise ValueError("PIN_AND_TEST_ACK_MISMATCH")
-            with MCPProcess() as mcp:
-                desktop = MCPTestAnswerDesktop(mcp, pin, ROOT)
-                flow = CollectorTestAckWorkflow(store, collector, desktop)
+            with ack_connection(args.backend,pin,store,collector,args.outbox) as (desktop,flow):
                 if args.command == "prepare-pin":
                     bound = flow._validate(row)
                     desktop.preflight(bound)

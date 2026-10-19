@@ -20,6 +20,8 @@ E:\作业帮\.venv-windows-mcp\Scripts\python.exe tools/wecom_mcp_server.py --da
 
 原生消息复制菜单可在本机审核的 `messages[].copy_menu.ocr_search_box` 中启用本地 Windows OCR 兜底（截图像素的左上右下，最大512×256）。正常仍先用原控件哈希；不一致时仅在该区域放大识别唯一“复制”标签，再核验窗口和菜单区域未变化。无匹配、歧义、超时、截图过期即停止，不转调用模型。OCR不确定收件人、原始时间或答案，也不能定位发送按钮；若上次读取中断留下该已审核复制菜单挡住消息，只确认后关闭一次，再重新核验消息；未确认菜单或消息仍变化时停止，不循环按Escape。不配置时行为不变。依赖本机已有Windows OCR语言包，不新增服务或模型。
 
+已有真实来源测试“收到”命令 `python -m helpdesk.collector_test_ack_cli` 支持 `--backend native`，其 `prepare-pin/dispatch/inspect` 复用原CollectorTestAckWorkflow和已审核目标，不创建第二套Ack。原生模式需有效原生显示器与完整发送/回读控件配方，仍验证实际来源证据；FIXTURE不能使用真实传输。旧命令默认Windows-MCP保持兼容。此接线仅用于已授权苇中鹤测试，日常学生群的AutomaticDeliveryRuntime仍是原群适配器，尚未迁移或通过原生群发送验收。
+
 ### 同一功能也可直接使用 CLI
 
 CLI 复用上述业务实现和全部守卫，无需启动 MCP 会话，默认原生后端：
