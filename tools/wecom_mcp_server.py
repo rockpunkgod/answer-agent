@@ -56,6 +56,11 @@ def build_server(service):
         return service.call('get_chat_state')
 
     @mcp.tool()
+    def wecom_verify_reply(outbox_id: str) -> dict:
+        """Read back a previously verified reply. Never marks an unknown/new send successful."""
+        return service.call('verify_reply',outbox_id=outbox_id)
+
+    @mcp.tool()
     def wecom_download_attachment(message_id: str) -> dict:
         """Verify an already saved original attachment; no arbitrary download path or new Save As."""
         return service.call('download_attachment',message_id=message_id)

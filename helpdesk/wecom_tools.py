@@ -10,11 +10,12 @@ from pathlib import Path
 import re
 import subprocess
 import time
+from uuid import uuid4
 
 from .locking import resource_lock
 from .mcp_test_delivery import MCPTestAnswerDesktop, verify_frame, pixel_hash, same_clipboard_body
 from .mcp_window_probe import FOREGROUND_COMMAND, parse_foreground
-from .storage import Store, now
+from .storage import Store, now, encode
 from .workflow import Workflow
 from .delivery import PreflightFailure
 
@@ -63,7 +64,41 @@ class PinnedDesktop(MCPTestAnswerDesktop):
     def _call(self, tool, **arguments):
         if tool == 'Screenshot':
             arguments={'display':[self.pin['display_index']],**arguments}
-        return super()._call(tool,**arguments)
+        result=super()._call(tool,**arguments)
+        if getattr(self.transport,'native_backend',False) and tool in ('Click','Shortcut'):
+            # Win32 dispatch returns before WeCom renders or updates clipboard.
+            # No additional input gesture is sent during this bounded settle.
+            time.sleep(.2 if tool=='Click' else .05)
+        return result
+
+    def preflight(self,message):
+        super().preflight(message)
+        if getattr(self.transport,'native_backend',False):
+            required=('send_point','receipt_point','receipt_box','copy_menu_point','copy_menu_box','copy_menu_hash')
+            if (self.pin.get('observation_mode')!='fixed_foreground_probe'
+                    or not self.pin.get('copy_menu_verified') or any(not self.pin.get(k) for k in required)):
+                raise PreflightFailure('NATIVE_SEND_CONTROLS_NOT_REVIEWED')
+            self._send_receipt_baseline=self._receipt_hash()
+
+    def _receipt_hash(self):
+        from PIL import Image
+        path=next(c['path'] for c in self.last_record['content'] if c.get('type')=='image')
+        with Image.open(path) as image:
+            return pixel_hash(image,self.pin['receipt_box'])
+
+    def reconcile(self,message):
+        if getattr(self.transport,'native_backend',False) and not getattr(self,'_historical_readback',False):
+            # Copying an older identical 收到 does not prove this submission.
+            # A restart without the pre-send frame requires manual reconciliation.
+            try:
+                self._frame(message)
+                baseline=getattr(self,'_send_receipt_baseline',None)
+                if baseline is None or baseline==self._receipt_hash():
+                    raise ValueError('NEW_RECEIPT_NOT_OBSERVED')
+            except Exception:
+                return {'confirmed':False,'simulated':False,'reason':'NEW_RECEIPT_NOT_OBSERVED',
+                        'source_student_delivered':False}
+        return super().reconcile(message)
 
 
 class WeComTools:
@@ -301,6 +336,34 @@ class WeComTools:
         self._audit('send_reply',state,controls=['reply_editor','send_button','outgoing_bubble','copy_menu'],outbox=outbox_id)
         return {'status':state,'outbox_id':outbox_id,'verified_delivery':state=='SENT_UI_CONFIRMED'}
 
+    def verify_reply(self,outbox_id):
+        """Read a previously verified receipt, never reconcile an unknown send.
+
+        A historical same-body bubble is insufficient to prove a new submission.
+        This command cannot change Outbox, completion or performance state.
+        """
+        self._require_input()
+        with self._desktop() as (desktop,pin),closing(Store(self.database)) as db:
+            row,bound=self._bound_reply(db,desktop,pin,outbox_id)
+            if row['state']!='SENT_UI_CONFIRMED':
+                raise ValueError('VERIFIED_HISTORICAL_REPLY_REQUIRED')
+            if (not pin.get('copy_menu_verified') or
+                    any(not pin.get(k) for k in ('receipt_point','copy_menu_point','copy_menu_box','copy_menu_hash'))):
+                raise ValueError('RECEIPT_CONTROLS_NOT_REVIEWED')
+            desktop._historical_readback=True
+            result=desktop.reconcile(bound)
+            status='HISTORICAL_TEXT_VERIFIED' if result.get('confirmed') else 'HISTORICAL_TEXT_UNCONFIRMED'
+            directory=self.root/'data/private/wecom-native-receipts'
+            directory.mkdir(parents=True,exist_ok=True)
+            path=directory/(uuid4().hex+'.json')
+            raw=encode({'outbox_id':outbox_id,'new_delivery':False,'result':result}).encode('utf-8')
+            with path.open('xb') as output:output.write(raw)
+            proof={'path':str(path),'sha256':sha256(raw).hexdigest()}
+            self._audit('verify_reply',status,controls=['outgoing_bubble','copy_menu'],outbox=outbox_id,
+                        evidence={'body_hash':bound.body_hash,'new_delivery':False,'proof':proof})
+            return {'status':status,'outbox_id':outbox_id,'new_delivery':False,'outbox_changed':False,
+                    'server_receipt':False,'recipient_read':False,'evidence':proof}
+
     def download_attachment(self,message_id):
         # Only already saved originals are returned. A native Save As recipe
         # will be added after that dialog's current UIA/fallback is reviewed.
@@ -319,7 +382,7 @@ class WeComTools:
     def call(self,operation,**arguments):
         try:
             if operation not in {'inspect_controls','get_chat_state','list_chats','open_chat','get_messages',
-                                 'open_image','prepare_reply','send_reply','download_attachment'}:
+                                 'open_image','prepare_reply','send_reply','verify_reply','download_attachment'}:
                 raise ValueError('OPERATION_OUTSIDE_ALLOWLIST')
             return getattr(self,operation)(**arguments)
         except Exception as exc:

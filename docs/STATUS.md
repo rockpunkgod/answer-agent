@@ -1,5 +1,16 @@
 # 当前能力与缺口
 
+## 原生CLI/MCP历史回复真实回读（2026-10-20）
+
+新增receipt/wecom_verify_reply，复用原MCPTestAnswerDesktop的目标/头像/窗口核验、原生复制菜单及全文Clipboard回读。只接受原Outbox已SENT_UI_CONFIRMED的PROGRESS/TEST_ANSWER，不允许借历史同文气泡将PENDING、SENDING或SEND_UNKNOWN提升为成功。结果明确new_delivery=false、outbox_changed=false、无服务器回执/已读声明，完整证据存私有目录，输出仅摘要/路径/哈希以减少token。
+
+新原生发送在preflight先检查完整发送/回读/复制控件已审核，缺失则在写草稿前停止；记录发送前回读区域基线，发送后未变或重启缺失基线时不确认新发送。原生鼠标/键盘调用后添加有界渲染等待，不增加重复点击，不模拟Windows-MCP Snapshot。当前独立MCP为10工具；默认仍禁输入与发送。
+
+REAL：既有苇中鹤已核验收到8766637dff0146ffae6959930ddf708c，经新CLI receipt及独立MCP stdio wecom_verify_reply实际复制全文核验通过；新MCP列出10工具。原生后端，全程Windows-MCP调用0，无新发送、无Outbox或绩效变更。细节证据私有保存。中途证据摘要改动漏导入encode导致单测/一次只读命令失败，修复导入后回归及真实回读通过，没有伪报此前失败为成功。
+
+UNIT/MOCK：`python -X utf8 -B -m unittest -q tests.test_wecom_cli tests.test_wecom_tools tests.test_wecom_native tests.test_mcp_test_delivery tests.test_routing tests.test_delivery_tasks tests.test_luna_navigation`，67项通过、0失败/跳过。覆盖待发/未知发送不得提升、历史回读不写台账、未审核控件发送前停止、旧同文区域不变/丢失基线不确认。新原生发送和新答案实际交付仍未通过真实验收；七选五原题修订仍REJECTED，没有放行，不增加完整任务计数。整体NOT_READY，1/20。
+
+
 ## 单次教学修订及真实原会话回流（2026-10-20）
 
 新增ego_revision，run_ego_answer支持--revise-rejected。仅明确的教学草稿检查拒绝可进入；验证原来源审核、当前Question/Version、固定ANSWER与捕获证据，事务内建立关联子run并更新原task的当前run引用。原REJECTED run/答案不修改；同Session不重传原图/课程，提示词只转交检查器提示和原稿片段，不增加教学来源。修订最多一次，重复准备返回同run，再次拒绝不得继续建修订；仍经原检查/Outbox，草稿不算交付或绩效。重建已丢失ego空间时只允许新修订冻结新浏览器位置，业务会话URL及来源仍必须匹配，审计记录新旧位置。

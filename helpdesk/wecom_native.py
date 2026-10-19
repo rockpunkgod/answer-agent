@@ -16,6 +16,7 @@ from .mcp_window_probe import FOREGROUND_COMMAND
 
 
 class NativeWeComTransport:
+    native_backend=True
     def __init__(self,pin,root,*,guard):
         if os.name!='nt':raise ValueError('WINDOWS_REQUIRED')
         self.pin=pin;self.guard=guard

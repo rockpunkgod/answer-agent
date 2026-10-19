@@ -99,6 +99,55 @@ class WeComToolTests(unittest.TestCase):
         self.assertNotIn('messages',result)
         self.assertEqual(self.transport.calls,[])
 
+    def test_historical_receipt_cannot_promote_pending_or_unknown_outbox(self):
+        for state in ('PENDING','SEND_UNKNOWN'):
+            with closing(Store(self.db_path)) as db:
+                db.execute('UPDATE outbox SET state=? WHERE id=?',(state,'reply'))
+            self.assertEqual(self.service.call('verify_reply',outbox_id='reply')['status'],'UNAVAILABLE')
+            self.assertEqual(self.transport.calls,[])
+            with closing(Store(self.db_path)) as db:
+                self.assertEqual(db.one('SELECT state FROM outbox WHERE id=?',('reply',))[0],state)
+
+    def test_historical_readback_keeps_original_completion_and_never_sends(self):
+        with closing(Store(self.db_path)) as db:
+            db.execute("UPDATE outbox SET state='SENT_UI_CONFIRMED' WHERE id='reply'")
+        self.pin.update(receipt_point=[100,50],copy_menu_verified=True,copy_menu_point=[110,55],
+                        copy_menu_box=[100,40,120,60],copy_menu_hash='reviewed-fixture')
+        with patch('helpdesk.wecom_tools.PinnedDesktop.reconcile',return_value={'confirmed':True}) as read:
+            result=self.service.call('verify_reply',outbox_id='reply')
+        self.assertEqual(result['status'],'HISTORICAL_TEXT_VERIFIED')
+        self.assertFalse(result['new_delivery']);self.assertFalse(result['outbox_changed'])
+        read.assert_called_once()
+        self.assertEqual(self.transport.calls,[])
+        with closing(Store(self.db_path)) as db:
+            self.assertEqual(db.one("SELECT state FROM outbox WHERE id='reply'")[0],'SENT_UI_CONFIRMED')
+            self.assertEqual(db.one('SELECT count(*) FROM performance_units')[0],0)
+
+    def test_native_send_requires_reviewed_controls_before_any_draft_input(self):
+        from helpdesk.wecom_tools import PinnedDesktop
+        from helpdesk.delivery import BoundMessage,PreflightFailure
+        self.transport.native_backend=True
+        desktop=PinnedDesktop(self.transport,self.pin,self.root)
+        message=BoundMessage('reply',self.binding,'wecom',self.target,'收到')
+        with patch.object(desktop,'_frame',return_value={'editor_blank':True}):
+            with self.assertRaisesRegex(PreflightFailure,'NATIVE_SEND_CONTROLS_NOT_REVIEWED'):
+                desktop.preflight(message)
+        self.assertEqual(self.transport.calls,[])
+
+    def test_native_receipt_needs_change_since_send_not_an_old_identical_bubble(self):
+        from helpdesk.wecom_tools import PinnedDesktop
+        self.transport.native_backend=True
+        desktop=PinnedDesktop(self.transport,self.pin,self.root)
+        with patch.object(desktop,'_frame'),patch.object(desktop,'_receipt_hash',return_value='same'):
+            self.assertFalse(desktop.reconcile(None)['confirmed'])  # Restart lost baseline.
+            desktop._send_receipt_baseline='same'
+            self.assertFalse(desktop.reconcile(None)['confirmed'])
+            desktop._send_receipt_baseline='previous'
+            with patch('helpdesk.wecom_tools.MCPTestAnswerDesktop.reconcile',return_value={'confirmed':True}) as read:
+                self.assertTrue(desktop.reconcile(None)['confirmed'])
+                read.assert_called_once()
+        self.assertEqual(self.transport.calls,[])
+
     def test_selection_variant_needs_exact_text_and_still_rejects_other_layouts(self):
         recipe={'region_box':[0,0,10,10],'region_hash':'0'*64,
             'selected_region_hash':self.pin['avatar_hash']}
