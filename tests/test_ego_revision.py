@@ -1,13 +1,37 @@
 """Anonymous SQLite + fake webpage. No real generation or delivery."""
 from hashlib import sha256
 import json
+import os
+from pathlib import Path
+import subprocess
+import sys
 import unittest
+from unittest.mock import patch
 
 from helpdesk.ego_generation import EgoDeepSeekGenerator,run_existing
 from helpdesk.ego_revision import prepare_revision,revision_source
 from helpdesk.storage import encode,now
+from helpdesk.storage import Store
 from helpdesk.workflow import Workflow
 from tests import test_ego_direct_queue as queue_fixtures
+
+
+def crash_revision(database,parent,manifest_file,phase):
+    """Real hard exit against an anonymous existing DB; no browser adapter."""
+    manifest=json.loads(Path(manifest_file).read_text(encoding='utf-8'))
+    with patch('helpdesk.automatic_preparation.verify_bundle',return_value=manifest), \
+            patch('helpdesk.workflow.verify_bundle',return_value=manifest), \
+            patch('helpdesk.ego_generation.verify_frozen_teaching',return_value=manifest):
+        store=Store(database)
+        original=store.execute
+        def execute(sql,args=()):
+            result=original(sql,args)
+            if phase=='BEFORE_COMMIT' and 'EGO_REVISION_PREPARED' in args:
+                os._exit(86)
+            return result
+        store.execute=execute
+        prepare_revision(store,parent)
+        os._exit(86)
 
 
 class RevisionTests(unittest.TestCase):
@@ -76,3 +100,36 @@ class RevisionTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'CHECK_FLAGS_REQUIRED'):
             prepare_revision(self.db,self.parent)
         self.assertEqual(self.db.one('SELECT count(*) FROM runs')[0],1)
+
+    def test_abrupt_exit_rolls_back_or_reuses_original_revision_without_browser(self):
+        manifest=self.fx.base/'restart-revision-manifest.json'
+        manifest.write_text(encode(self.fx.fx.manifest),encoding='utf-8')
+        for phase in ('BEFORE_COMMIT','AFTER_COMMIT'):
+            with self.subTest(phase=phase):
+                process=subprocess.run([sys.executable,'-X','utf8','-B','-m','tests.test_ego_revision',
+                    '--crash',str(self.db.path),self.parent,str(manifest),phase],
+                    cwd=Path(__file__).resolve().parents[1],capture_output=True,timeout=30,
+                    creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+                self.assertEqual(process.returncode,86,process.stderr.decode('utf-8',errors='replace'))
+                self.assertEqual(self.db.one('SELECT state FROM runs WHERE id=?',(self.parent,))[0],'REJECTED')
+                if phase=='BEFORE_COMMIT':
+                    self.assertEqual(self.db.one('SELECT count(*) FROM runs')[0],1)
+                    self.assertEqual(self.db.one('SELECT run_id FROM operator_tasks WHERE id=?',(self.task['id'],))[0],self.parent)
+                else:
+                    child=self.db.one('SELECT run_id FROM operator_tasks WHERE id=?',(self.task['id'],))[0]
+                    self.assertNotEqual(child,self.parent)
+                    calls=len(self.fx.calls)
+                    self.assertEqual(prepare_revision(self.db,self.parent),child)
+                    self.assertEqual(prepare_revision(self.db,self.parent),child)
+                    self.assertEqual(len(self.fx.calls),calls)
+                    self.assertEqual(self.db.one('SELECT count(*) FROM runs')[0],2)
+                    self.assertEqual(self.db.one('SELECT count(*) FROM answers')[0],1)
+                    self.assertEqual(self.db.one("SELECT count(*) FROM outbox WHERE purpose='ANSWER'")[0],0)
+                    self.assertEqual(self.db.one('SELECT count(*) FROM performance_units')[0],0)
+
+
+if __name__=='__main__':
+    if len(sys.argv)>1 and sys.argv[1]=='--crash':
+        crash_revision(*sys.argv[2:])
+    else:
+        unittest.main()

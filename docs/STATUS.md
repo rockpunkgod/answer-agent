@@ -1,5 +1,12 @@
 # 当前能力与缺口
 
+## 教学原文核验及修订强退恢复（2026-10-20）
+
+在原第5题上只读重新验证固定ANSWER 1c388a0596b13935ae7c6a1af00834915a8efa33，实际本地工作树干净、HEAD一致；冻结原文/依赖通过。实际上传teaching-input.md为77801字节，7份README/Skill/Agent/七选五模块/交付/路由/缺口原文逐字存在，未发现漏传教学模块，未改ANSWER或为消除拒绝放宽检查。私有核验证据teaching-input-audit-after-rejection.json。当前原稿和单次修订仍REJECTED，已询问用户该题转人工修订或保留待处理后继续其他题；没有额外网页提交。
+
+新增修订路径进程强退回归：真实Python子进程在匿名SQLite的EGO_REVISION_PREPARED写入后、事务提交前os._exit，重新打开保持父任务/父run且无子run；事务提交后强退保留唯一子run，重复prepare_revision返回同一ID，无新增网页调用、答案/Outbox或绩效。既有数据库正常回滚/恢复，不清空或重建任务。`python -X utf8 -B -m unittest -q tests.test_ego_revision`，6项通过、0失败/跳过。此为真实进程/SQLite恢复＋Mock网页，不能算真实DeepSeek或企业微信故障恢复验收。补跑原有 `python -X utf8 -B -m unittest -q tests.test_ego_process_restart tests.test_process_restart`，2个场景测试通过、0失败/跳过，106.057秒，覆盖ego准备/提交意图/已提交/已捕获，以及原六阶段强退恢复；该套网页/桌面仍为Mock。生产代码未变化。
+
+
 ## 单题全运行成本视图，保留修订调用（2026-10-20）
 
 检查确认原report已按已确认篇的关联Question汇总全部run，未发现只保留最新稿的成本漏算，故不修改其计量或分摊内核。新增只读question_cost及report_task_costs --question，与--run互斥，用于尚未交付时直接查看同题所有版本/修订/追问运行。保留每run费用证据与未核验原因；观察调用数与阶段覆盖是否完整分列，缺失账单不填0，修订关系不可靠时标记未核验且仍保留该run成本，不隐藏失败调用。没有新增数据库结构或绩效数量。
