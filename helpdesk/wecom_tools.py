@@ -238,6 +238,24 @@ class WeComTools:
             suggestion=locate_copy(path,recipe['ocr_search_box'],display_index=pin['display_index'])
             return suggestion['loc']
 
+    def _message_frame(self,desktop,pin,recipe):
+        record,_=self._frame(desktop,pin)
+        try:
+            self._checked_region(record,recipe)
+        except ValueError as exc:
+            menu=recipe.get('copy_menu',{})
+            if str(exc)!='MESSAGE_LAYOUT_CHANGED_RECAPTURE_REQUIRED' or not menu.get('ocr_search_box'):
+                raise
+            # An interrupted read may leave its own reviewed context menu over
+            # the message. Confirm that menu before one Escape; never blindly
+            # dismiss a dialog or retry changed message content.
+            self._copy_point(record,menu,pin)
+            desktop._call('Shortcut',shortcut='escape')
+            record,_=self._frame(desktop,pin)
+            self._checked_region(record,recipe)
+            self._audit('get_messages','DISMISSED_CONFIRMED_COPY_MENU',controls=['copy_menu'])
+        return record
+
     def get_messages(self, chat_id):
         if chat_id!=self.session.get('target_key'):
             raise ValueError('CHAT_OUTSIDE_ALLOWLIST')
@@ -248,7 +266,7 @@ class WeComTools:
         messages=[]
         with self._desktop() as (desktop,pin):
             for recipe in recipes:
-                record,_=self._frame(desktop,pin);self._checked_region(record,recipe)
+                record=self._message_frame(desktop,pin,recipe)
                 nonce='wecom-read-pending-'+str(time.time_ns())
                 desktop._call('Clipboard',mode='set',text=nonce)
                 desktop._call('Click',loc=recipe['point'],button='right')

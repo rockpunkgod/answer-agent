@@ -172,6 +172,32 @@ class WeComToolTests(unittest.TestCase):
             self.assertEqual(locate.call_args.kwargs['display_index'],0)
         self.assertEqual(self.transport.calls,[])
 
+    def test_interrupted_read_dismisses_only_one_confirmed_copy_menu(self):
+        from unittest.mock import Mock
+        record={'content':[{'type':'image','path':str(self.image)}]}
+        recipe={'copy_menu':{'ocr_search_box':[0,0,20,20]}}
+        desktop=Mock()
+        with patch.object(self.service,'_frame',return_value=(record,{})), \
+                patch.object(self.service,'_checked_region',side_effect=[ValueError('MESSAGE_LAYOUT_CHANGED_RECAPTURE_REQUIRED'),None]), \
+                patch.object(self.service,'_copy_point',return_value=[5,5]) as confirm:
+            self.assertIs(self.service._message_frame(desktop,self.pin,recipe),record)
+        confirm.assert_called_once()
+        desktop._call.assert_called_once_with('Shortcut',shortcut='escape')
+
+    def test_changed_message_or_unconfirmed_menu_never_retries_input(self):
+        from unittest.mock import Mock
+        desktop=Mock();record={};recipe={'copy_menu':{'ocr_search_box':[0,0,20,20]}}
+        with patch.object(self.service,'_frame',return_value=(record,{})), \
+                patch.object(self.service,'_checked_region',side_effect=ValueError('MESSAGE_LAYOUT_CHANGED_RECAPTURE_REQUIRED')), \
+                patch.object(self.service,'_copy_point',side_effect=ValueError('COPY_OCR_NOT_UNIQUE_OR_UNAVAILABLE')):
+            with self.assertRaises(ValueError):self.service._message_frame(desktop,self.pin,recipe)
+        desktop._call.assert_not_called()
+        with patch.object(self.service,'_frame',return_value=(record,{})), \
+                patch.object(self.service,'_checked_region',side_effect=ValueError('MESSAGE_LAYOUT_CHANGED_RECAPTURE_REQUIRED')), \
+                patch.object(self.service,'_copy_point',return_value=[5,5]):
+            with self.assertRaises(ValueError):self.service._message_frame(desktop,self.pin,recipe)
+        desktop._call.assert_called_once_with('Shortcut',shortcut='escape')
+
     def test_prepare_only_uses_original_outbox_and_never_sends_or_completes(self):
         result=self.service.call('prepare_reply',outbox_id='reply')
         self.assertEqual(result['status'],'PREPARED_VERIFIED')
