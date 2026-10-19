@@ -1,5 +1,13 @@
 # 当前能力与缺口
 
+## 苇中鹤新题真实收到与原图保存（2026-10-19）
+
+用户明确授权仅在“苇中鹤”完成新题收到、DeepSeek和答案交付测试，随后确认已发新题。实际Windows-MCP取得新题原话的Clipboard原件，并通过企业微信原图查看器的另存为保存1840×2329 JPEG；原件摘要、原始工具记录和授权保留私有目录，不上传。界面出现22:15及原图提示时间，但尚无可作为正式消息元数据使用的平台消息ID、完整原始时间或持续生产者，不伪造。
+
+REAL VERIFIED（受控联系人应答，不是正式学生Ack SLA）：第一次准备在发送点击前再次触发账号安全验证，保留FAILED和可能残留草稿，未生成提交意图。用户完成验证后，备份隔离库、核验原FAILED回执确为submission_attempted=false，复用原Outbox和原有“收到”草稿，逐字回读后提交一次。只读复制最新22:22本人气泡，Clipboard全文确为“收到”，原Workflow.inspect_unknown将本轮同一Outbox更新为SENT_UI_CONFIRMED；没有重发旧22:06气泡或本轮气泡。复制菜单因“撤回”过期发生布局变化，首次核验保持UNKNOWN，之后使用当前菜单位置完成，不放宽生产前台/窗口守卫。另一次点击被守卫发现前台为ChatGPT而阻止，未落入其他应用。实际绩效仍0；新题后续答案尚未交付。
+
+使用隔离OPERATOR_TEST题目入口冻结ANSWER 1c388a0596b13935ae7c6a1af00834915a8efa33，绑定本轮原话和JPEG，并通过既有audit关联已核验联系人应答，不把本地测试身份冒充真实平台身份。REAL FAILED（网页准备）：ego报告原TaskSpace 3不存在；实际listTaskSpaces返回空列表。原请求保持PREPARING，尚未上传、填写或提交DeepSeek，没有生成新答案。遵循ego Skill请求重建空间许可，不删除未决占用或换请求编号盲目重提。生产消息配置、原正式数据库和教学规则未改变。本轮无源码改动，未重复运行模拟回归。整体NOT_READY。
+
 ## ego 进程硬退出恢复与只读发送观察（2026-10-19）
 
 新增 `tests/test_ego_process_restart.py`，实际启动独立Python子进程，分别在PREPARING、SUBMISSION_INTENT、SUBMITTED、CAPTURED后直接os._exit，未走finally释放锁。父进程用同一证据目录和新的适配器恢复：未决任务不能普通重提或被其他请求占页；准备未完成转人工；提交后只允许capture_only；完整捕获直接读取、不调用网页，核验后释放页面占用。没有改生产逻辑、数据库或ANSWER。
