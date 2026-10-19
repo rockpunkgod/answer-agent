@@ -1,0 +1,139 @@
+"""SQLite + mocked ego integration; no real browser, student or delivery."""
+from hashlib import sha256
+import json
+from pathlib import Path
+import tempfile
+import unittest
+from unittest.mock import patch
+
+from helpdesk.__main__ import demo_question
+from helpdesk.domain import Intent
+from helpdesk.ego_generation import EgoDeepSeekGenerator, selected_option
+from helpdesk.service import Helpdesk, Incoming
+from helpdesk.storage import Store, encode
+from helpdesk.workflow import Workflow
+from helpdesk.session_isolation import claim_deepseek_chat
+
+
+class EgoGenerationTests(unittest.TestCase):
+    def setUp(self):
+        self.temp=tempfile.TemporaryDirectory();self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name)
+        self.store=Store(self.root/'business.db');self.addCleanup(self.store.close)
+        self.service=Helpdesk(self.store)
+        student=self.service.bind('anonymous-group','student-1','anonymous',verified=True)
+        self.incoming=self.service.ingest(Incoming(student,'请讲第12题',Intent.NEW,
+            verified_question=demo_question(),raw_material='Passage',verified_material='Passage'))
+        self.course=self.root/'teaching.md';self.course.write_text('original teaching',encoding='utf-8')
+        self.skill={'name':self.course.name,'path':str(self.course),'sha256':sha256(self.course.read_bytes()).hexdigest(),
+                    'manifest_path':str(self.root/'manifest.json'),'content':'original teaching','source':'verified_teaching_manifest'}
+        self.generator=EgoDeepSeekGenerator(1,self.root/'evidence')
+        self.workflow=Workflow(self.store,teaching_manifest=self.root/'manifest.json',generation_adapter=self.generator)
+        with patch.object(self.workflow,'_skills',return_value=[self.skill]), \
+                patch.object(self.workflow,'_require_confirmed_ack'):
+            self.run_id=self.workflow.start(self.incoming.turn_id)
+        self.snapshot=json.loads(self.store.one('SELECT input_json FROM runs WHERE id=?',(self.run_id,))[0])
+        self.url='https://chat.deepseek.com/a/chat/s/anonymous'
+        claim_deepseek_chat(self.snapshot,self.url)
+        self.calls=[]
+        self.body='第12题选D，因为应根据学生版本判断。'
+        self.action=None
+        self.patches=[patch('helpdesk.ego_generation.verify_frozen_teaching',return_value={}),
+            patch('helpdesk.ego_generation.frozen_receipt',return_value={}),
+            patch('helpdesk.ego_generation.EgoDeepSeek',side_effect=lambda *a,**k:self)]
+        for p in self.patches:p.start();self.addCleanup(p.stop)
+
+    def submit(self, request_id, url, prompt, *, attachments, capture_only):
+        self.calls.append((request_id,url,prompt,attachments,capture_only))
+        if self.action:self.action()
+        result={'adapter':'EGO_LITE','complete':True,'session_url':url,'text':self.body,
+            'upload_manifest':[{'path':str(p),'name':p.name,'sha256':sha256(p.read_bytes()).hexdigest()} for p in attachments]}
+        directory=self.root/'evidence';directory.mkdir(exist_ok=True)
+        (directory/(request_id+'.answer.json')).write_text(json.dumps(result),encoding='utf-8')
+        return result
+
+    def test_natural_draft_returns_to_existing_outbox_without_delivery(self):
+        result=self.generator.generate(self.snapshot)
+        completed=self.workflow.finish(self.run_id,result)
+        self.assertEqual(completed['state'],'GENERATED',completed)
+        outbox=self.store.one('SELECT * FROM outbox WHERE id=?',(completed['outbox_id'],))
+        self.assertEqual(outbox['body'],self.body)
+        self.assertEqual(outbox['state'],'PENDING')
+        self.assertEqual(outbox['simulated'],0)
+        self.assertEqual(self.store.one('SELECT COUNT(*) FROM answers')[0],1)
+        again=self.workflow.finish(self.run_id,result)
+        self.assertEqual(again['outbox_id'],completed['outbox_id'])
+        self.assertEqual(self.store.one('SELECT COUNT(*) FROM answers')[0],1)
+        self.assertNotIn('BEGIN_',self.calls[0][2])
+        self.assertNotIn('JSON',self.calls[0][2])
+        self.assertEqual(self.calls[0][3],[self.course])
+        self.assertEqual(self.store.one("SELECT COUNT(*) FROM audit WHERE event='ANSWER_CALL_STARTED'")[0],1)
+
+    def test_paused_or_changed_question_stops_before_browser(self):
+        for reason in ['paused','changed']:
+            with self.subTest(reason=reason):
+                with self.store.transaction():
+                    if reason=='paused':self.store.execute("UPDATE settings SET value='true' WHERE key='stop_requested'")
+                    else:
+                        self.store.execute("UPDATE settings SET value='false' WHERE key='stop_requested'")
+                        self.store.execute('UPDATE questions SET context_revision=context_revision+1 WHERE id=?',(self.snapshot['question_id'],))
+                with self.assertRaises(ValueError):self.generator.generate(self.snapshot)
+        self.assertEqual(self.calls,[])
+
+    def test_correction_while_generating_blocks_old_result(self):
+        def correct():
+            with self.store.transaction():
+                self.store.execute('UPDATE questions SET context_revision=context_revision+1 WHERE id=?',(self.snapshot['question_id'],))
+        self.action=correct
+        with self.assertRaisesRegex(ValueError,'CURRENT_QUESTION_CHANGED'):
+            self.generator.generate(self.snapshot)
+        self.assertEqual(self.store.one('SELECT COUNT(*) FROM answers')[0],0)
+        self.assertEqual(self.store.one("SELECT COUNT(*) FROM outbox WHERE purpose='ANSWER'")[0],0)
+
+    def test_unverified_match_or_changed_teaching_stops_before_browser(self):
+        for target in ['frozen_receipt','verify_frozen_teaching']:
+            with patch('helpdesk.ego_generation.'+target,side_effect=ValueError('unverified')):
+                with self.assertRaisesRegex(ValueError,'unverified'):self.generator.generate(self.snapshot)
+        self.assertEqual(self.calls,[])
+
+    def test_plain_answer_requires_one_explicit_student_option_and_question(self):
+        for text in ['不选B，答案是D。','第12题选D。']:
+            self.assertTrue(selected_option(self.snapshot,text))
+        for text in ['我认为可以。','选B，也选D。','第13题选D。','不选B。','不能选B。','不应该选择B。']:
+            with self.assertRaises(ValueError):selected_option(self.snapshot,text)
+
+    def test_unknown_browser_is_not_a_completed_draft(self):
+        with patch.object(self,'submit',side_effect=TimeoutError('anonymous timeout')):
+            with self.assertRaises(TimeoutError):self.generator.generate(self.snapshot)
+        self.assertEqual(self.store.one('SELECT COUNT(*) FROM answers')[0],0)
+        row=self.store.one("SELECT details FROM audit WHERE event='ANSWER_CALL_RESULT'")
+        self.assertEqual(json.loads(row[0])['status'],'UNKNOWN')
+
+    def test_changed_capture_is_rejected_by_workflow_before_outbox(self):
+        result=self.generator.generate(self.snapshot)
+        proof=Path(result['web_session_evidence'])
+        raw=json.loads(proof.read_text(encoding='utf-8'));raw['text']='第12题选B。'
+        proof.write_text(json.dumps(raw),encoding='utf-8')
+        completed=self.workflow.finish(self.run_id,result)
+        self.assertEqual(completed['state'],'REJECTED')
+        self.assertEqual(completed['reason'],'EGO_CAPTURE_EVIDENCE_INVALID')
+        self.assertIsNone(completed['outbox_id'])
+
+    def test_original_run_entry_does_not_replay_a_completed_run(self):
+        from helpdesk.ego_generation import run_existing
+        first=run_existing(self.store,self.run_id,1,self.root/'evidence')
+        self.assertEqual(first['state'],'GENERATED',first)
+        second=run_existing(self.store,self.run_id,1,self.root/'evidence')
+        self.assertFalse(second['resubmitted'])
+        self.assertEqual(len(self.calls),1)
+        self.assertEqual(self.store.one('SELECT COUNT(*) FROM answers')[0],1)
+
+    def test_capture_change_also_blocks_existing_delivery_validation(self):
+        from helpdesk.test_answer_queue import validate_source_answer
+        result=self.generator.generate(self.snapshot)
+        completed=self.workflow.finish(self.run_id,result)
+        row=self.store.one('SELECT * FROM outbox WHERE id=?',(completed['outbox_id'],))
+        validate_source_answer(self.store,row,approval=False)
+        Path(result['web_session_evidence']).write_text('{}',encoding='utf-8')
+        with self.assertRaisesRegex(ValueError,'EVIDENCE_CHANGED'):
+            validate_source_answer(self.store,row,approval=False)

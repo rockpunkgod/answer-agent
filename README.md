@@ -52,6 +52,11 @@ ego-lite 网页入口：`python -m tools.run_ego_deepseek --help`。使用已登
 
 重复执行同一已捕获请求直接读取本地结果；提交不确定时仅使用原参数加 `--capture-only` 读取原会话，不能换请求编号重提。登录、人工接管、附件失败和题面更正应暂停。该入口是网页采集/生成 CLI，输出仍需原题目版本、ANSWER 和交付核验；当前没有把后台自动答疑队列切到 ego-lite，也不会因捕获草稿增加绩效。操作细节见 [ego-lite Skill 参考](skills/answer-agent-deepseek-web/references/ego-lite.md)。
 
+已冻结的 ego 教学生成回流入口：`python -m tools.run_ego_answer --help`。它从原数据库按 `--run` 读取题目、版本和已绑定会话，核验已有第一阶段结果及固定 ANSWER，再上传原图和教学原文、发送原话，将自然语言结果交回原 Workflow/Outbox。未明确识别唯一答案、原题已更正、原始捕获变化时停止；完整草稿保持待交付，不能算完成或绩效。调用及未知结果进入原调用台账，金额没有账单仍未知。
+
+该入口仅接受已由 `EgoDeepSeekGenerator` 冻结、已完成题面核验并绑定会话的 RUNNING run，不会改写旧 Windows-MCP run 的身份，也不会自动新建任务或会话。现有工作台冻结入口、第一阶段核验和追问复用尚未适配 ego，因此本轮不是后台队列切换完成；普通用户暂继续使用上一段网页入口获取草稿。CLI 不调用群发送。
+
+
 ## 收到与答案独立发送
 
 `AckTask`直接消费原消息的ACK Outbox，不等待OCR、题面审核或DeepSeek；`AnswerTask`消费原有答案/更正Outbox。二者复用同一发送台账和已有阶段策略，没有新增数据库或迁移。后台每秒调度一条到期任务，收到优先；生成等待不会占用该发送循环，UI操作期间不持有业务数据库写锁。审核是否必需仍由`stage.answer_review_required`控制：需要审核时批准后自动发，不需要时按原题面确认流程继续。MANUAL/DISABLED目的保持原义，开启发送循环不会改成AUTO。

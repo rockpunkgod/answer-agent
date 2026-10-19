@@ -200,7 +200,11 @@ class BatchTests(unittest.TestCase):
     def test_equal_times_merge_old_partial_and_new_complete_in_delivery_order(self):
         with patch('helpdesk.delivery.now', return_value='2026-10-03T09:00:00+00:00'):
             self.fx.engine.tick()
-            old_part = self.fx.desktop.receipts()[-1]['body']
+            # Receipts are sorted by time; the synthetic date can predate the ACK.
+            part_id = read_plan(self.db, self.row())['parts'][0]['transport_id']
+            receipts = [r for r in self.fx.desktop.receipts() if r['outbox_id'] == part_id]
+            self.assertEqual(len(receipts), 1)
+            old_part = receipts[0]['body']
             follow = self.fx.app.ingest(Incoming(self.fx.binding, 'Synthetic next question', Intent.FOLLOWUP,
                                                 quote_message_id=self.original.message_id))
             flow = Workflow(self.db, desktop=self.fx.desktop)

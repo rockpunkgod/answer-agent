@@ -15,3 +15,5 @@
 旧标记协议仅能读取已有结果或恢复已提交请求，禁止用它建立新请求。正常任务不再额外执行旧 Windows-MCP 的准备、上下文 JSON 上传和第二套生成命令。
 
 同一 TaskSpace/Page 由程序跨进程串行；上一请求未核验时新请求报 EGO_PAGE_HAS_UNRESOLVED_REQUEST。只恢复原请求，不删除占用文件、不换 TaskSpace 绕过。准备中断需人工核验，不自动解除。
+
+已有 ego 冻结 run、原第一阶段核验及会话绑定齐全时，可用 `python -m tools.run_ego_answer --help` 回流原 Workflow/Outbox。不得把旧 MCP run 改名为 ego；该入口不负责冻结新任务、第一阶段和追问复用，现有后台默认入口仍未切换。原始捕获与 ANSWER 检查不通过时停下，不把草稿计作实际交付。

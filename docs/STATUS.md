@@ -621,3 +621,13 @@ ANSWER仍为干净固定提交`57159d7a8b03a0743225ed27f3f1e6128bbcd45d`，客�
 队列接入检查发现：旧入口仅锁 request-id，多个结果目录中的任务可以并发占用同一 TaskSpace/Page。现以用户本地目录中按 space/page 命名的跨进程锁串行网页调用，并保存当前请求状态文件的位置；未知结果持续占用页面，新题被阻断。仅原请求允许只读恢复，完整捕获并验证摘要后释放。缓存可直接读取，读取其他缓存不会释放当前请求的占用。进程中断后占用信息仍保留，不自动清除或重提；准备阶段中断仍须人工核验，暂未提供自动解除入口。
 
 `python -X utf8 -B -m unittest -v tests.test_ego_browser tests.test_ego_worker`：9项 Python 测试通过，包含6项 JS 模拟用例；新增真实本地资源锁竞争、跨结果目录未知任务隔离测试。无失败、跳过。本轮未进行真实网页或群发送验证。后台队列适配仍未完成，整体 NOT_READY。
+
+## ego 教学生成回流原 Workflow（2026-10-19）
+
+新增 `EgoDeepSeekGenerator` 和 `python -m tools.run_ego_answer`，对已冻结的 EGO_LITE_DEEPSEEK run 复用原题目、版本、会话绑定和第一阶段核验；校验固定 ANSWER，原图/教学原文直接上传，学生原话作为请求。明确的自然语言答案字母映射回学生版 option ID，不解题、不由模型输出机器 JSON。题号不符、多个答案或没有明确答案停止待核对。调用写入原 RunMeter，原始回复摘要和绑定写入既有 audit；Workflow.finish 及实际交付前都核验该证据。完整稿进入原 answers/Outbox，未交付不增加绩效。重复回流原 run 不重复创建答案或提交。
+
+UNIT/MOCK：`python -X utf8 -B -m unittest -q tests.test_ego_generation tests.test_ego_browser tests.test_ego_worker tests.test_workflow tests.test_call_costs tests.test_delivery_batches tests.test_mcp_test_delivery tests.test_manual_send_policy tests.test_question_session_isolation`，96项 Python 测试通过（其中包含6项 JS 模拟用例），无跳过。新增 SQLite+模拟网页用例验证原 Outbox 回流、重复回流、中途更正、暂停、版本变化、未核验题面、捕获篡改在生成及交付校验被拦截、UNKNOWN 不算草稿。
+
+回归初次发现旧批量交付测试失败：固定的2026-10-03回执时间早于当前 ACK，测试按排序后的最后回执误选“收到”。已按交付计划的 transport_id 唯一定位原片段，保留原交付顺序断言；未修改生产交付排序。修正后上述96项通过。
+
+REAL：本轮未调用 DeepSeek、未操作生产数据库、未真实外发。真实 ANSWER 及第一阶段证据在新适配器上的端到端验证尚缺；测试中这些依赖明确 Mock。金额、时效没有新增真实证明。工作台任务冻结、第一阶段网页执行、普通追问复用及后台默认入口尚未切换到 ego；不能改写旧冻结 run 的 adapter 来绕过。整体 NOT_READY。

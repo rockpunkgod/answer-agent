@@ -51,10 +51,13 @@ def validate_source_answer(store, row, *, approval=True):
                 from .question_matching import validate_receipt
                 validate_receipt(store, frozen)
         if (row['state'] == 'PENDING' and frozen.get('simulated') is False
-                and frozen.get('generation_adapter') == 'WINDOWS_MCP_PREPARED_DEEPSEEK'):
+                and frozen.get('generation_adapter') in ('WINDOWS_MCP_PREPARED_DEEPSEEK', 'EGO_LITE_DEEPSEEK')):
             from .mcp_generation import input_fingerprint
             if input_fingerprint(context) != input_fingerprint(frozen):
                 raise ValueError('GENERATION_CONTEXT_CHANGED')
+    if run and frozen.get('generation_adapter') == 'EGO_LITE_DEEPSEEK' and frozen.get('simulated') is False:
+        from .ego_generation import validate_ego_capture
+        validate_ego_capture(store, frozen, row['body'])
     answer = store.one("SELECT * FROM answers WHERE id=?", (row["answer_id"],))
     evidence = store.one("SELECT * FROM answer_evidence WHERE answer_id=?", (row["answer_id"],))
     if (not answer or answer["state"] != "GENERATED" or answer["text"] != row["body"]

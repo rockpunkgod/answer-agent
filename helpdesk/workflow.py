@@ -374,6 +374,12 @@ class Workflow:
                 if (not expected or len(expected) != len(snapshot["teaching_skills"])
                         or result.get("uploaded_teaching_hashes") != expected):
                     error = error or "TEACHING_UPLOAD_MISMATCH"
+            if adapter_identity == 'EGO_LITE_DEEPSEEK' and not simulated:
+                from .ego_generation import validate_ego_capture
+                try:
+                    validate_ego_capture(self.db, snapshot, result.get('text'), result.get('correct_option_id'))
+                except (ValueError, OSError, KeyError, TypeError):
+                    error = error or 'EGO_CAPTURE_EVIDENCE_INVALID'
             option = next((o for o in snapshot["student_question"]["options"] if o["id"] == result.get("correct_option_id")), None)
             if not option:
                 error = error or "OPTION_VERSION_MISMATCH"
@@ -386,7 +392,7 @@ class Workflow:
             if not stale:
                 try:
                     current_context = self.app.context(run["turn_id"])
-                    if adapter_identity == 'WINDOWS_MCP_PREPARED_DEEPSEEK' and not simulated:
+                    if adapter_identity in ('WINDOWS_MCP_PREPARED_DEEPSEEK', 'EGO_LITE_DEEPSEEK') and not simulated:
                         from .mcp_generation import input_fingerprint
                         if input_fingerprint(current_context) != input_fingerprint(snapshot):
                             error = error or 'GENERATION_CONTEXT_CHANGED'
