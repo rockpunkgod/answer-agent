@@ -139,16 +139,23 @@ class EgoDeepSeekGenerator:
         if snapshot.get('ego_material_reuse'):
             with closing(Store(snapshot['session_store_path'])) as store:
                 origin = material_origin(store, snapshot)
-        files = [] if origin else [Path(item['path']).resolve(strict=True) for item in skills]
+        revision = None
+        if snapshot.get('ego_revision'):
+            from .ego_revision import revision_source
+            with closing(Store(snapshot['session_store_path'])) as store:
+                revision = revision_source(store,snapshot)
+        files = [] if origin or revision else [Path(item['path']).resolve(strict=True) for item in skills]
         for item in snapshot['attachments']:
             path = Path(item['path']).resolve(strict=True)
             if sha256(path.read_bytes()).hexdigest() != item['sha256']:
                 raise ValueError('EGO_STUDENT_ATTACHMENT_CHANGED')
-            if not origin or item['sha256'] not in {a['sha256'] for a in origin['attachments']}:
+            if not revision and (not origin or item['sha256'] not in {a['sha256'] for a in origin['attachments']}):
                 files.append(path)
         words = snapshot.get('student_words') or ''
         prompt = words if words.strip() else '第' + str(snapshot['student_question']['number']) + '题'
-        if not snapshot['attachments'] and not origin:
+        if revision:
+            prompt=snapshot['ego_revision']['prompt']
+        if not snapshot['attachments'] and not origin and not revision:
             q = snapshot['student_question']
             prompt = '\n'.join([snapshot.get('student_material') or '', q['verified_stem'],
                 *[o['label'] + '. ' + o['verified_text'] for o in q['options']], prompt])
@@ -231,6 +238,9 @@ def _capture_record(store, snapshot, body, option_id=None):
     """Read immutable capture evidence; this never approves a current source."""
     verify_frozen_teaching(snapshot)
     actual_delivery_files(snapshot)
+    if snapshot.get('ego_revision'):
+        from .ego_revision import revision_source
+        revision_source(store,snapshot)
     rows = store.all("SELECT details FROM audit WHERE run_id=? AND event='EGO_TEACH_CAPTURED'", (snapshot['run_id'],))
     if len(rows) != 1:
         raise ValueError('EGO_CAPTURE_EVIDENCE_MISSING')

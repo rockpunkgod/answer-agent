@@ -25,7 +25,7 @@ def _digest(path):
     return sha256(Path(path).read_bytes()).hexdigest()
 
 
-def _source_review(store, task_id, *, allow_ego=False, allow_completed=False):
+def _source_review(store, task_id, *, allow_ego=False, allow_completed=False, allow_rejected=False):
     """Read and cross-check the original task, immutable revision and frozen run."""
     task = store.one('SELECT * FROM operator_tasks WHERE id=?', (task_id,))
     _require(task is not None and task['label'] in ('OPERATOR_TEST', 'SOURCE_MESSAGE'), 'REVIEWED_OPERATOR_TASK_REQUIRED')
@@ -44,7 +44,10 @@ def _source_review(store, task_id, *, allow_ego=False, allow_completed=False):
              'REVIEWED_SOURCE_REVISION_CHANGED')
     payload = json.loads(revision['payload'])
     run = store.one('SELECT * FROM runs WHERE id=?', (task['run_id'],))
-    _require(run is not None and run['state'] in (('RUNNING', 'GENERATED') if allow_completed else ('RUNNING',)), 'RUNNING_FROZEN_RUN_REQUIRED')
+    states=('RUNNING','GENERATED') if allow_completed else ('RUNNING',)
+    if allow_rejected:
+        states+=('REJECTED',)
+    _require(run is not None and run['state'] in states, 'RUNNING_FROZEN_RUN_REQUIRED')
     snapshot = json.loads(run['input_json'])
     marker = snapshot.get('source_clarity_review' if source else 'operator_test', {})
     _require(all(isinstance(task[k], str) and task[k].strip()

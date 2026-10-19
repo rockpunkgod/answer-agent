@@ -1,5 +1,14 @@
 # 当前能力与缺口
 
+## 单次教学修订及真实原会话回流（2026-10-20）
+
+新增ego_revision，run_ego_answer支持--revise-rejected。仅明确的教学草稿检查拒绝可进入；验证原来源审核、当前Question/Version、固定ANSWER与捕获证据，事务内建立关联子run并更新原task的当前run引用。原REJECTED run/答案不修改；同Session不重传原图/课程，提示词只转交检查器提示和原稿片段，不增加教学来源。修订最多一次，重复准备返回同run，再次拒绝不得继续建修订；仍经原检查/Outbox，草稿不算交付或绩效。重建已丢失ego空间时只允许新修订冻结新浏览器位置，业务会话URL及来源仍必须匹配，审计记录新旧位置。
+
+UNIT/MOCK：`python -X utf8 -B -m unittest -q tests.test_ego_revision tests.test_ego_generation tests.test_ego_direct_queue tests.test_operator_tasks tests.test_automatic_preparation tests.test_seven_five_tasks`，73项通过、0失败/跳过。新增验证父稿保留、修订幂等、同版本/Session、不重传文件、不提前交付/计绩效、暂停/更正阻止、预算耗尽及父检查篡改阻止。Mock网页与合成检查提示仅作开发验证。
+
+REAL：空间7确认已不存在，列表为空；按用户长期授权重建8/p1，重新打开原f1f3c746会话，无重发原题。SQLite可恢复备份后建立修订run 0769175b23624e22904b3fedd3aececc，实际网页单次提交修订、捕获自然答复并回流；原run 2e1b7ce666244d35a8fe012bf932a858保持REJECTED。新稿9d6a83d76f9444f2b7da66db985f3977仍被固定ANSWER 1c388a0596b13935ae7c6a1af00834915a8efa33检查拒绝，标记method_visibility/source_position_cue；子run为REJECTED，未创建答案Outbox，未外发或增加绩效。预算已用尽，未继续网页重试、未放宽检查；ego已handOff保留原会话供查看。真实验证的是单次受控修订及拒绝回流，不是答疑交付成功。原课程不改，价格无凭据，不将网页调用虚报0元。整体NOT_READY，累计完整任务仍1/20。
+
+
 ## CLI真实重复读取通过，未重发历史消息（2026-10-20）
 
 沿用原苇中鹤会话和原请求，CLI state/open已真实核验；messages通过原生右键复制回读取得“老师能讲一下七选五和这篇阅读吗”，全程Windows-MCP调用0。原始消息发送时间没有足够证据，输出source_sent_at=null、时间待核验，未用采集时间替代；未重新入库为新提问或重建Ack。
