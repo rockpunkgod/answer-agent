@@ -21,7 +21,7 @@ class EgoBridgeTests(unittest.TestCase):
         self.file.write_text('anonymous fixture',encoding='utf-8')
         self.adapter=EgoDeepSeek(1,self.root/'receipts',allowed_files=[self.file],executable=self.root/'ego.exe')
         self.args=('run-teach','https://chat.deepseek.com/a/chat/s/fixture','fixture prompt')
-        self.kwargs={'attachments':[self.file],'response_token':'answer_fixture'}
+        self.kwargs={'attachments':[self.file]}
 
     def complete(self,*args,**kwargs):
         state_path=self.root/'receipts/run-teach.state.json'
@@ -83,3 +83,24 @@ class EgoBridgeTests(unittest.TestCase):
         (self.root/'receipts/run-teach.answer.json').write_text('tampered')
         with self.assertRaisesRegex(BrowserPaused,'CAPTURE_CHANGED'):
             self.adapter.submit(*self.args,**self.kwargs)
+
+    def test_old_marker_protocol_cannot_start_a_new_request(self):
+        with patch('helpdesk.ego_browser.subprocess.run') as run:
+            with self.assertRaisesRegex(BrowserPaused, 'LEGACY_PROTOCOL_RECOVERY_ONLY'):
+                self.adapter.submit(*self.args, response_token='old_marker')
+            run.assert_not_called()
+        self.assertFalse((self.root/'receipts/run-teach.state.json').exists())
+
+    def test_old_captured_request_is_readable_without_browser(self):
+        request={'space_id':1,'page':'p1','session_url':self.args[1],
+                 'prompt':self.args[2],'files':[],'response_token':'old_marker'}
+        fingerprint=sha256(json.dumps(request,sort_keys=True,ensure_ascii=False).encode()).hexdigest()
+        directory=self.root/'receipts';directory.mkdir()
+        raw=json.dumps({'text':'historical reply','delivered':False}).encode()
+        (directory/'run-teach.answer.json').write_bytes(raw)
+        (directory/'run-teach.state.json').write_text(json.dumps({
+            'fingerprint':fingerprint,'phase':'CAPTURED','output_sha256':sha256(raw).hexdigest()}))
+        with patch('helpdesk.ego_browser.subprocess.run') as run:
+            result=self.adapter.submit(*self.args,response_token='old_marker')
+            self.assertEqual(result['text'],'historical reply')
+            run.assert_not_called()

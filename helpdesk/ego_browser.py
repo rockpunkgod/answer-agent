@@ -58,6 +58,9 @@ class EgoDeepSeek:
         state_path = self.directory / (request_id + '.state.json')
         output_path = self.directory / (request_id + '.answer.json')
         with resource_lock(self.directory / (request_id + '.lock'), timeout=5):
+            # Old marker protocol is recovery-only; never create a new marked request.
+            if response_token is not None and not state_path.exists():
+                raise BrowserPaused('LEGACY_PROTOCOL_RECOVERY_ONLY')
             if state_path.exists():
                 state = json.loads(state_path.read_text(encoding='utf-8'))
                 if state.get('fingerprint') != fingerprint:
