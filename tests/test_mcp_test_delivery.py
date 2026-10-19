@@ -79,6 +79,21 @@ class TestDeliveryContractTests(unittest.TestCase):
             with self.assertRaises(NotSubmitted):desktop.send(message)
             self.assertFalse(any(t=='Click' and a['loc']==[2,2] for t,a in transport.calls))
 
+    def test_existing_draft_is_read_without_retyping_or_repasting(self):
+        with tempfile.TemporaryDirectory() as directory:
+            desktop,transport,message=self.make_desktop(directory,body='已有第一段。\n已有第二段。')
+            desktop.resume_existing_draft=True
+            desktop._frame=lambda message:{'editor_blank':any(t=='Click' and a['loc']==[2,2] for t,a in transport.calls)}
+            desktop.send(message)
+            self.assertFalse(any(t=='Type' or (t=='Shortcut' and a['shortcut']=='ctrl+v') for t,a in transport.calls))
+            self.assertEqual(sum(t=='Click' and a['loc']==[2,2] for t,a in transport.calls),1)
+        with tempfile.TemporaryDirectory() as directory:
+            desktop,transport,message=self.make_desktop(directory,wrong_clipboard=True)
+            desktop.resume_existing_draft=True
+            desktop._frame=lambda message:{'editor_blank':False}
+            with self.assertRaises(NotSubmitted):desktop.send(message)
+            self.assertFalse(any(t=='Click' and a['loc']==[2,2] for t,a in transport.calls))
+
     def test_click_timeout_is_not_misreported_as_not_submitted(self):
         with tempfile.TemporaryDirectory() as directory:
             desktop,transport,message=self.make_desktop(directory,send_failure=True)

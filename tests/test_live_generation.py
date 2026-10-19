@@ -40,6 +40,40 @@ class StubAdapter:
 
 
 class LiveGenerationBoundaryTests(unittest.TestCase):
+    def test_explicit_draft_resume_requires_definite_failure_and_is_bounded(self):
+        from helpdesk.test_answer_queue import resume_unsubmitted_test_draft
+        _,oid,_=self.approved_test_copy()
+        for state in ('PENDING','SENDING','SEND_UNKNOWN','SENT_UI_CONFIRMED'):
+            self.db.execute('UPDATE outbox SET state=? WHERE id=?',(state,oid))
+            with self.assertRaisesRegex(ValueError,'FAILED_TEST_DRAFT_REQUIRED'):
+                resume_unsubmitted_test_draft(self.db,oid)
+        self.db.execute("UPDATE outbox SET state='FAILED' WHERE id=?",(oid,))
+        for index,evidence in enumerate(({}, {'submission_attempted':True,'draft_may_remain':True},
+                {'submission_attempted':False,'draft_may_remain':True})):
+            self.db.execute('INSERT INTO delivery_checks VALUES(?,?,?,?,?)',
+                ('resume-proof-'+str(index),oid,'FAILED',json.dumps(evidence),'fixture-time'))
+            if index<2:
+                with self.assertRaisesRegex(ValueError,'DEFINITE_NOT_SUBMITTED'):
+                    resume_unsubmitted_test_draft(self.db,oid)
+        for _ in range(3):
+            resume_unsubmitted_test_draft(self.db,oid)
+            self.assertEqual(self.db.one('SELECT state FROM outbox WHERE id=?',(oid,))[0],'PENDING')
+            self.db.execute("UPDATE outbox SET state='FAILED' WHERE id=?",(oid,))
+        with self.assertRaisesRegex(ValueError,'RESUME_LIMIT'):
+            resume_unsubmitted_test_draft(self.db,oid)
+
+    def test_draft_resume_rejects_prior_unknown_even_with_later_failure_claim(self):
+        from helpdesk.test_answer_queue import resume_unsubmitted_test_draft
+        _,oid,_=self.approved_test_copy()
+        self.db.execute("UPDATE outbox SET state='FAILED' WHERE id=?",(oid,))
+        for key,status,evidence in [('older','SEND_UNKNOWN',{}),('latest','FAILED',
+                {'submission_attempted':False,'draft_may_remain':True})]:
+            self.db.execute('INSERT INTO delivery_checks VALUES(?,?,?,?,?)',
+                (key,oid,status,json.dumps(evidence),'fixture-time'))
+        with self.assertRaisesRegex(ValueError,'PRIOR_UNCERTAIN'):
+            resume_unsubmitted_test_draft(self.db,oid)
+        self.assertEqual(self.db.one('SELECT state FROM outbox WHERE id=?',(oid,))[0],'FAILED')
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.base = Path(self.tmp.name)

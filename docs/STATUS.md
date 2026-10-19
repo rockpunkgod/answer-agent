@@ -1,5 +1,11 @@
 # 当前能力与缺口
 
+## 明确未提交草稿的现有CLI恢复（2026-10-19）
+
+将真实Pilot中需要私有SQL处理的步骤收敛到原dispatch_test_answer的显式`--resume-draft`。复用原test_answer_queue、Outbox/audit及MCPTestAnswerDesktop，没有新服务、数据库或发送通道。只接受原FAILED TEST_ANSWER及最后FAILED回执明确submission_attempted=false、draft_may_remain=true；原答案/版本/目标重新通过原验证，历史存在UNKNOWN或成功回执一律拒绝，最多3次显式恢复。适配器必须看到已有草稿，跳过Type/粘贴，完整Clipboard回读一致才允许原单次发送；无自动恢复未知发送、无LLM判断或额外模型调用。暂停、窗口/针脚、正文和原有发送守卫不改变。
+
+UNIT/MOCK：`python -X utf8 -B -m unittest -q tests.test_mcp_test_delivery tests.test_live_generation tests.test_demo_real_http`，41项通过，0失败/跳过，11.275秒；覆盖已有稿不重贴、错误回读不发送、缺未提交证据、非FAILED状态、历史UNKNOWN、有限次数。首次新增测试错误沿用“空编辑器”模拟状态而被正确拒绝，调整fixture为真实预期的“发送前有稿、发送后为空”后通过，未修改该断言。REAL仅验证已完成Pilot测试Outbox增加新选项仍返回SENT_UI_CONFIRMED/resubmitted=false、不进入桌面；没有再次执行真实失败恢复或外发，不把Mock恢复写成新的真实通过。README及项目/本机Skill参考同步当前命令。整体NOT_READY。
+
 ## 已交付任务的独立进程重读与定位用量保留（2026-10-19）
 
 REAL（本机已保存Pilot库，无Mock）：分别用全新Python进程调用现有dispatch_test_answer及run_ego_answer各两次，共4次。均返回原SENT_UI_CONFIRMED/GENERATED及resubmitted=false；前后messages/runs/answers/outbox/delivery_checks/performance_units/audit数量及Outbox状态完全一致，原生MCP attempt和ego round文件列表完全一致。未启动新桌面/浏览器调用、未生成新请求或外发。此项仅证明已完成任务在独立进程下读取结果，不代表实际生成中或发送中的所有重启恢复通过。私有验证记录留在原Pilot目录。

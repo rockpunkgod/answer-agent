@@ -57,6 +57,8 @@ ego-lite 网页入口：`python -m tools.run_ego_deepseek --help`。使用已登
 该入口仅接受已由 `EgoDeepSeekGenerator` 冻结、已完成原题清晰度确认的 RUNNING run，不会改写旧 Windows-MCP run 的身份，也不会自动新建任务或会话。本地任务冻结与工作台自动排队已支持显式选择 ego；新原题默认一次取答，不再依赖旧网页 MATCH。追问材料复用已通过模拟闭环，真实队列联调仍待验证，尚不能据此宣称生产闭环稳定。CLI 不调用群发送。
 
 
+联系人联调沿用 `python -m tools.dispatch_test_answer --database <原库> --outbox <原TEST_ANSWER编号> --pin <当前有效针脚文件>`。明确未提交而输入框保留完整草稿时，可显式增加 `--resume-draft`，无需手改数据库；脚本核验失败证据、原题/版本/目标和完整草稿，跳过重贴正文再发送。最多3次显式恢复，历史UNKNOWN或成功回执禁止恢复；未知结果继续使用 `--inspect` 只读核验。已完成记录重复运行只读返回，不连接桌面。该入口只适用于已授权的“苇中鹤”测试副本，不提升为学生正式交付或绩效。
+
 ## 收到与答案独立发送
 
 `AckTask`直接消费原消息的ACK Outbox，不等待OCR、题面审核或DeepSeek；`AnswerTask`消费原有答案/更正Outbox。二者复用同一发送台账和已有阶段策略，没有新增数据库或迁移。后台每秒调度一条到期任务，收到优先；生成等待不会占用该发送循环，UI操作期间不持有业务数据库写锁。审核是否必需仍由`stage.answer_review_required`控制：需要审核时批准后自动发，不需要时按原题面确认流程继续。MANUAL/DISABLED目的保持原义，开启发送循环不会改成AUTO。

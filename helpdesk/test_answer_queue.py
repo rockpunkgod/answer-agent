@@ -160,3 +160,26 @@ def queue_test_answer(store, source_outbox_id: str, recipient: TestRecipient) ->
              sha256(source["body"].encode("utf-8")).hexdigest(), source["question_version"],
              source["context_revision"], answer["answer_revision"], now(), PLAIN_BODY_FORMAT))
         return test_id
+
+
+def resume_unsubmitted_test_draft(store, outbox_id):
+    """Explicit operator recovery only; never infer an unknown send was absent."""
+    with store.transaction():
+        row = store.one('SELECT * FROM outbox WHERE id=?', (outbox_id,))
+        if not row or row['purpose'] != 'TEST_ANSWER' or row['state'] != 'FAILED':
+            raise ValueError('FAILED_TEST_DRAFT_REQUIRED')
+        validate_test_copy(store, row)
+        if store.one("SELECT 1 FROM delivery_checks WHERE outbox_id=? AND status IN ('SENDING','SEND_UNKNOWN','SENT_UI_CONFIRMED') LIMIT 1", (outbox_id,)):
+            raise ValueError('PRIOR_UNCERTAIN_TEST_SEND_REQUIRES_INSPECTION')
+        check = store.one('SELECT status,evidence FROM delivery_checks WHERE outbox_id=? ORDER BY rowid DESC LIMIT 1', (outbox_id,))
+        evidence = json.loads(check['evidence']) if check else {}
+        if (not check or check['status'] != 'FAILED'
+                or evidence.get('submission_attempted') is not False
+                or evidence.get('draft_may_remain') is not True):
+            raise ValueError('DEFINITE_NOT_SUBMITTED_DRAFT_PROOF_REQUIRED')
+        if store.one("SELECT count(*) FROM audit WHERE outbox_id=? AND event='TEST_DRAFT_RESUME_AUTHORIZED'", (outbox_id,))[0] >= 3:
+            raise ValueError('TEST_DRAFT_RESUME_LIMIT_REACHED')
+        store.execute("UPDATE outbox SET state='PENDING',last_error=NULL WHERE id=?", (outbox_id,))
+        store.execute('INSERT INTO audit(outbox_id,event,details,created_at) VALUES(?,?,?,?)',
+                      (outbox_id, 'TEST_DRAFT_RESUME_AUTHORIZED',
+                       json.dumps({'submission_attempted': False, 'reuse_existing_draft': True}), now()))

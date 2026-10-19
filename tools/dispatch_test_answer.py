@@ -16,6 +16,7 @@ from helpdesk.mcp_transport import MCPProcess
 from helpdesk.mcp_test_delivery import MCPTestAnswerDesktop
 from helpdesk.storage import Store
 from helpdesk.workflow import Workflow
+from helpdesk.test_answer_queue import resume_unsubmitted_test_draft
 
 
 def main():
@@ -23,7 +24,9 @@ def main():
     parser.add_argument('--database',type=Path,required=True)
     parser.add_argument('--outbox',required=True)
     parser.add_argument('--pin',type=Path,required=True)
-    parser.add_argument('--inspect',action='store_true',help='Only inspect a prior uncertain send; never submit')
+    mode=parser.add_mutually_exclusive_group()
+    mode.add_argument('--inspect',action='store_true',help='Only inspect a prior uncertain send; never submit')
+    mode.add_argument('--resume-draft',action='store_true',help='Explicitly reuse a FAILED test draft proven not submitted; never paste again')
     args=parser.parse_args()
     pin=json.loads(args.pin.read_text(encoding='utf-8'))
     if pin.get('outbox_id')!=args.outbox:
@@ -32,11 +35,13 @@ def main():
         row=store.one('SELECT * FROM outbox WHERE id=?',(args.outbox,))
         if not row or row['purpose']!='TEST_ANSWER':
             parser.error('Only an existing TEST_ANSWER is eligible')
-        if not args.inspect and row['state']!='PENDING':
+        if not args.inspect and row['state']!='PENDING' and not (args.resume_draft and row['state']=='FAILED'):
             print(json.dumps({'outbox_id':args.outbox,'state':row['state'],'resubmitted':False}))
             return
+        if args.resume_draft:
+            resume_unsubmitted_test_draft(store,args.outbox)
         with MCPProcess() as mcp:
-            flow=Workflow(store,desktop=MCPTestAnswerDesktop(mcp,pin,ROOT))
+            flow=Workflow(store,desktop=MCPTestAnswerDesktop(mcp,pin,ROOT,resume_existing_draft=args.resume_draft))
             result=flow.inspect_unknown(args.outbox) if args.inspect else flow.dispatch(args.outbox)
             print(json.dumps({'outbox_id':args.outbox,'state':result,'source_student_delivered':False}))
 

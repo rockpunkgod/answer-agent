@@ -63,11 +63,14 @@ class MCPTestAnswerDesktop:
     test_only = True
     test_answer_transport = True
 
-    def __init__(self, transport, pin, workspace):
+    def __init__(self, transport, pin, workspace, *, resume_existing_draft=False):
         from .mcp_transport import MCPProcess
         if isinstance(transport, MCPProcess):
             transport.bound_input_process = 'WXWork'
         self.transport = transport
+        if type(resume_existing_draft) is not bool:
+            raise ValueError('EXPLICIT_DRAFT_RESUME_REQUIRED')
+        self.resume_existing_draft = resume_existing_draft
         self.pin = dict(pin)
         self.lock_path = str(Path(workspace).resolve() / 'data/windows-interactive-desktop.lock')
         self.last_frames = []
@@ -112,7 +115,9 @@ class MCPTestAnswerDesktop:
     def preflight(self, message):
         try:
             frame = self._frame(message)
-            if not frame['editor_blank']:
+            if self.resume_existing_draft and frame['editor_blank']:
+                raise PreflightFailure('EXPECTED_EXISTING_DRAFT')
+            if not self.resume_existing_draft and not frame['editor_blank']:
                 raise PreflightFailure('COMPOSE_AREA_NOT_EMPTY')
         except ValueError as exc:
             raise PreflightFailure(str(exc)) from exc
@@ -127,7 +132,9 @@ class MCPTestAnswerDesktop:
     def send(self, message):
         try:
             self.preflight(message)
-            if '\n' in message.body or '\r' in message.body:
+            if self.resume_existing_draft:
+                pass  # Full clipboard readback below must match before submit.
+            elif '\n' in message.body or '\r' in message.body:
                 # Native Type routes newlines through SendKeys. Paste literally
                 # so a paragraph break cannot become an accidental send key.
                 self._call('Click', loc=self.pin['compose_point'])
