@@ -48,6 +48,15 @@ class SevenFiveTasks(unittest.TestCase):
             fixture.review(fixture.intake.create_draft(incomplete))
         with self.assertRaises(ValueError):
             fixture.intake.create_draft({**payload, 'question_type': '阅读理解'})
+        sibling = {**payload,'number':'13','stem':'Choose the sentence for blank 13.',
+                   'request_text':'第13题'}
+        child_draft = fixture.intake.create_draft(sibling,parent_task_id=task['id'],intent='SUBQUESTION')
+        child = fixture.review(child_draft)
+        self.assertEqual(child['case_id'],task['case_id'])
+        self.assertNotEqual(child['question_id'],task['question_id'])
+        changed = {**sibling,'number':'14','options':{**payload['options'],'G':'Changed shared option.'}}
+        with self.assertRaisesRegex(ValueError,'shared original options'):
+            fixture.intake.create_draft(changed,parent_task_id=task['id'],intent='SUBQUESTION')
 
     def test_seven_choice_mapping_preserves_student_g_and_rejects_incomplete(self):
         reference = question()

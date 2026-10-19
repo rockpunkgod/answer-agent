@@ -63,6 +63,54 @@ class OperatorTaskTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'stale'):
             self.intake.review(draft['id'], expected_revision=1, reviewer='reviewer', source_evidence='page')
 
+    def test_subquestion_reuses_case_material_and_student_but_not_question_or_session(self):
+        parent = self.review(self.intake.create_draft(self.payload))
+        sibling = {**self.payload, 'number':'13', 'stem':'What did John do next?',
+                   'request_text':'第13题'}
+        draft = self.intake.create_draft(sibling, parent_task_id=parent['id'],
+                                        intent='SUBQUESTION', request_id='same-material-q13')
+        task = self.review(draft)
+        first = Helpdesk(self.db).context(parent['turn_id'])
+        second = Helpdesk(self.db).context(task['turn_id'])
+        self.assertEqual(task['binding_id'], parent['binding_id'])
+        self.assertEqual(task['case_id'], parent['case_id'])
+        self.assertNotEqual(task['question_id'], parent['question_id'])
+        flow = Workflow(self.db)
+        flow.set_require_ack_before_generation(False, actor='Anonymous session isolation test')
+        flow.generate(parent['turn_id']); flow.generate(task['turn_id'])
+        first_session = self.db.one('SELECT session_id FROM runs WHERE turn_id=?',(parent['turn_id'],))[0]
+        second_session = self.db.one('SELECT session_id FROM runs WHERE turn_id=?',(task['turn_id'],))[0]
+        self.assertNotEqual(first_session, second_session)
+        material_ids = self.db.all('SELECT DISTINCT material_id FROM questions WHERE case_id=?', (parent['case_id'],))
+        self.assertEqual(len(material_ids),1)
+        self.assertEqual(self.review(draft)['id'], task['id'])
+        self.assertEqual(self.intake.create_draft(sibling,parent_task_id=parent['id'],
+                         intent='SUBQUESTION',request_id='same-material-q13')['id'],draft['id'])
+        self.assertEqual(self.db.one('SELECT count(*) FROM performance_units')[0],0)
+        for payload in (sibling, self.payload, {**sibling,'number':'14','passage':'A different text.'}):
+            with self.subTest(payload=payload), self.assertRaises(ValueError):
+                self.intake.create_draft(payload,parent_task_id=parent['id'],intent='SUBQUESTION')
+        follow = self.intake.create_followup_draft(task['id'],'为什么不选B？',request_id='q13-followup')
+        follow_task = self.review(follow)
+        self.assertEqual(follow_task['question_id'], task['question_id'])
+        self.assertNotEqual(follow_task['question_id'], parent['question_id'])
+        flow.generate(follow_task['turn_id'])
+        self.assertEqual(self.db.one('SELECT session_id FROM runs WHERE turn_id=?',
+                                    (follow_task['turn_id'],))[0],second_session)
+
+    def test_two_staged_copies_of_same_subquestion_cannot_both_create_tasks(self):
+        parent = self.review(self.intake.create_draft(self.payload))
+        payload = {**self.payload,'number':'13'}
+        first = self.intake.create_draft(payload,parent_task_id=parent['id'],intent='SUBQUESTION')
+        second = self.intake.create_draft(payload,parent_task_id=parent['id'],intent='SUBQUESTION')
+        self.review(first)
+        before = {table:self.db.one('SELECT count(*) FROM '+table)[0]
+                  for table in ('messages','outbox','questions','operator_tasks')}
+        with self.assertRaisesRegex(ValueError,'already exists'):
+            self.review(second)
+        self.assertEqual(before,{table:self.db.one('SELECT count(*) FROM '+table)[0] for table in before})
+        self.assertEqual(self.intake.get_draft(second['id'])['status'],'DRAFT')
+
     def test_review_idempotency_survives_restart_and_preserves_source_limits(self):
         draft = self.intake.create_draft(self.payload)
         task = self.review(draft)

@@ -16,7 +16,7 @@ def main():
     commands = parser.add_subparsers(dest='command', required=True)
     create = commands.add_parser('draft')
     create.add_argument('--payload', required=True, help='UTF-8 JSON transcription file')
-    create.add_argument('--intent', choices=['NEW', 'FOLLOWUP', 'CORRECTION'], default='NEW')
+    create.add_argument('--intent', choices=['NEW', 'SUBQUESTION', 'FOLLOWUP', 'CORRECTION'], default='NEW')
     create.add_argument('--parent-task')
     create.add_argument('--request-id', help='Stable client request ID for duplicate-safe creation')
     followup = commands.add_parser('followup', help='Reuse an explicit test task with a plain UTF-8 message file; draft only')

@@ -1,5 +1,13 @@
 # 当前能力与缺口
 
+## 同篇多小题复用原事项，原网页提交仍待核验（2026-10-19）
+
+复用已有Intent.SUBQUESTION和Helpdesk材料归属，OperatorTasks/CLI允许显式已审核parent-task的同篇小题；没有新增表、服务或自动分类。只允许隔离OPERATOR_TEST父任务，材料、题型、附件必须一致，七选五共享A—G不得变化。新小题与原题使用同学生/事项/材料但独立Question、Version与业务Session；相同题号重复审核停止，事务不留下重复消息/Ack/任务。普通追问仍引用对应小题。题面JSON仅为原本本地输入格式，不上传DeepSeek。
+
+UNIT/MOCK：`python -X utf8 -B -m unittest -q tests.test_operator_tasks tests.test_seven_five_tasks tests.test_ego_direct_queue`，48项通过、0失败/跳过，10.540秒。覆盖两个已预存相同小题草稿的重复审核、共享材料和独立Session、追问复用正确Session、七选五换共享选项拒绝、幂等请求及绩效0。首次新断言误从尚未生成任务的context读取session_id而失败；改为通过现有Mock生成流程建立真实本地Session后验证隔离/复用，不将Mock结果算真实网页成功。
+
+REAL只读：原ego空间7/p2仍是首页、原题号保留输入、没有提问或答复；三个原图预览已加载，进度图标的祖先opacity=0，未发现可证明上传失败的可见错误。不能仅凭首页和草稿断言原Enter没有提交；未重提、重传、换页或发送。已请求用户核验原页面状态。另在原联系人测试库先备份，再为已保存七选五第6—9空建立SUBQUESTION草稿，两次运行返回相同四个ID；messages/outbox/runs/performance数量保持不变。仅准备草稿，未审核或生成，不能计为新增真实完成任务。累计完整完成仍1/20，整体NOT_READY。
+
 ## 七选五单空接通及原请求继续联调（2026-10-19）
 
 在上轮实际失败点上增量适配，不改数据库或ANSWER。Question新增显式seven_five_blank种类，必须完整A—G；原single_choice仍必须A—D。沿用原选项ID、版本比较/一一映射、OperatorTasks审核冻结、ego捕获和Outbox；声明答案可为E/F/G，但不得出现不存在的字母、多个结论或错误小题。原SOURCE/DRAFT检查接ANSWER实际支持的seven-five参数，选定空号必须存在于学生材料；冻结原件与题型检查一致。七选五受检教学包单独缓存，缺依赖仍阻止；其他未接通题型不放行。多题整卷尚未自动分题，本次仅准备原请求的第5空，其余部分仍待处理。

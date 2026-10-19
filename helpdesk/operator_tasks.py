@@ -190,10 +190,10 @@ class OperatorTasks:
                 raise ValueError('Invalid request_id')
         payload = _payload(payload)
         intent = Intent(intent)
-        if intent not in (Intent.NEW, Intent.FOLLOWUP, Intent.CORRECTION):
-            raise ValueError('Only NEW, FOLLOWUP and CORRECTION are supported')
+        if intent not in (Intent.NEW, Intent.SUBQUESTION, Intent.FOLLOWUP, Intent.CORRECTION):
+            raise ValueError('Only NEW, SUBQUESTION, FOLLOWUP and CORRECTION are supported')
         if (intent == Intent.NEW) != (parent_task_id is None):
-            raise ValueError('Followup/correction requires an explicit reviewed task reference')
+            raise ValueError('Related question requires an explicit reviewed task reference')
         with self.db.transaction():
             if request_id is not None:
                 previous = self.db.one('SELECT * FROM operator_draft_requests WHERE request_id=?', (request_id,))
@@ -204,6 +204,8 @@ class OperatorTasks:
             parent = self.get_task(parent_task_id) if parent_task_id else None
             if parent:
                 context = Helpdesk(self.db).context(parent['turn_id'])
+                if intent == Intent.SUBQUESTION:
+                    self._check_subquestion(parent, payload)
             draft_id = new_id()
             self.db.execute('INSERT INTO operator_drafts VALUES(?,?,?,?,?,?,?,?,?)',
                 (draft_id, 'OPERATOR_TEST', 'DRAFT', 1, intent, parent_task_id,
@@ -214,6 +216,22 @@ class OperatorTasks:
                 self.db.execute('INSERT INTO operator_draft_requests VALUES(?,?,?)',
                                 (request_id, request_hash, draft_id))
         return self.get_draft(draft_id)
+
+    def _check_subquestion(self, parent, payload):
+        """Keep a reviewed sibling on the existing material, never a guessed case."""
+        if parent['label'] != 'OPERATOR_TEST':
+            raise ValueError('Subquestion requires an explicit operator test parent')
+        original = self.get_draft(parent['draft_id'])['payload']
+        if any(payload[k] != original[k] for k in ('passage', 'question_type', 'attachments')):
+            raise ValueError('Subquestion must retain the reviewed material, type and attachments')
+        if payload['number'] == original['number']:
+            raise ValueError('Subquestion must identify a different question number')
+        if payload['question_type'] == '七选五' and payload['options'] != original['options']:
+            raise ValueError('Seven-five subquestions must retain the shared original options')
+        if self.db.one('''SELECT 1 FROM questions q JOIN question_versions v ON v.id=q.current_version
+                          WHERE q.case_id=? AND json_extract(v.payload,'$.number')=?''',
+                       (parent['case_id'], payload['number'])):
+            raise ValueError('Question number already exists in this case; reference that task')
 
     def create_followup_draft(self, parent_task_id, message, *, request_id):
         """Copy an explicitly chosen test question; never classify or send."""
@@ -262,6 +280,8 @@ class OperatorTasks:
                 if (context['question_version'], context['context_revision']) != (
                         draft['base_version'], draft['base_context_revision']):
                     raise ValueError('Referenced task input is stale; create a new draft')
+                if draft['intent'] == Intent.SUBQUESTION:
+                    self._check_subquestion(parent, payload)
                 if draft['intent'] == Intent.FOLLOWUP and not payload['request_text'].strip():
                     raise ValueError('Followup requires request_text')
                 if draft['intent'] == Intent.FOLLOWUP:
