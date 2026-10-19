@@ -294,10 +294,17 @@ async function refreshOperatorTasks(){
   const original=draft.label==='SOURCE_MESSAGE';
   const automatic=data.question_auto_continue===true||!!task?.auto_queue;
   const delivered=task?.actual_delivery||draft.actual_delivery;
-  const state=delivered?(delivered.stale?'历史已人工交付，题目已更正':'已人工核验交付'):task?.run_state==='STALE'?'旧输入已失效':task?.auto_queue?(queueNames[task.auto_queue.phase]||'后台准备中'):task?.run_state==='GENERATED'?(answerReviewRequired?'已生成，待答案审核':'已生成，等你按发送'):task?.run_id?(task.preparation_reviewed?'材料已核验，可生成':'已冻结，材料待准备'):task?'题面已审核':'草稿待核对';
+  const state=delivered?(delivered.stale?'历史已人工交付，题目已更正':'已人工核验交付'):task?.run_state==='STALE'?'旧输入已失效':task?.run_state==='REJECTED'?'生成稿未通过核验，需人工处理':task?.auto_queue?(queueNames[task.auto_queue.phase]||'后台准备中'):task?.run_state==='GENERATED'?(answerReviewRequired?'已生成，待答案审核':'已生成，等你按发送'):task?.run_id?(task.preparation_reviewed?'材料已核验，可生成':'已冻结，材料待准备'):task?'题面已审核':'草稿待核对';
   item.append(el('summary','',`第${draft.payload.number||'待核对'}题 · ${state}`));
   if(original){const source=draft.original_source;if(source){item.append(el('p','',`${source.group_name} · ${source.student_display_name} · 提问 ${display(source.student_sent_at,'created_at')}`));for(let i=0;i<source.image_count;i++){const image=document.createElement('img');image.src=`/api/source-question-image?draft_id=${encodeURIComponent(draft.id)}&index=${i}`;image.alt=`学生原题图片 ${i+1}`;image.className='source-question-image';image.loading='lazy';item.append(image);}}else{item.append(el('p','','原消息来源需核对，暂不能继续准备。'));}}
   item.append(el('pre','native-text',`${draft.payload.passage}\n\n${draft.payload.stem}\n${Object.entries(draft.payload.options).map(([key,value])=>`${key}. ${value}`).join('\n')}`));
+  if(task?.answer_review){
+   item.append(el('h4','','待复核生成稿'),el('pre','native-text',task.answer_review.text));
+   const reasons={ANSWER_DRAFT_CHECK_REQUIRES_REVIEW:'教学检查标出了待复核项',ANSWER_DRAFT_CHECK_FAILED:'教学检查未能完成'};
+   item.append(el('p','',reasons[task.answer_review.reason]||'生成稿未通过原核验，请检查任务原因。'));
+   for(const flag of task.answer_review.flags)item.append(el('p','',flag.message));
+   item.append(el('p','','此稿不可发送，尚未交付、不计绩效；原检查结果保留。'));
+  }
   if(delivered){item.append(el('p','',`实际交付 ${display(delivered.completed_at,'created_at')} · 人工核验记录已回流，原生成稿保留。`));}
   else if(!task){const button=el('button','secondary',original||automatic?'确认题面清楚并排队':'核对题面并建立测试任务');button.type='button';button.dataset.sourceUnavailable=String(original&&(!automatic||draft.source_valid!==true));button.disabled=busy||button.dataset.sourceUnavailable==='true';button.onclick=()=>operatorRequest({action:'review',draft_id:draft.id,revision:draft.revision,reviewer:document.getElementById('operator-reviewer').value,source_evidence:document.getElementById('operator-evidence').value});item.append(button);}
   else if(!automatic&&!task.run_id&&realMode){const button=el('button','secondary','冻结已审核生成输入');button.type='button';button.onclick=()=>operatorRequest({action:'freeze',task_id:task.id});item.append(button);}

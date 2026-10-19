@@ -1,5 +1,11 @@
 # 当前能力与缺口
 
+## 工作台可查看未通过核验的生成稿（2026-10-19）
+
+复用原任务卡与原answers/audit记录展示REJECTED草稿全文、原失败原因和教学检查提示，不再把这种任务显示成“材料待准备”。只增加只读投影和页面文字展示，没有批准、重生成、发送或计量入口，不更改原检查结论。文本以textContent展示；不把附加证据字段或本机路径混进复核提示。一般答案列表保留。
+
+验证：`python -X utf8 -B -m unittest -q tests.test_operator_tasks tests.test_source_question_http tests.test_ego_direct_queue`，46项UNIT/MOCK通过，0跳过、0失败；`node --check helpdesk/static/app.js`通过。对真实第32题追问练习库用mode=ro核验同一get_task投影，全文与原捕获一致、method_visibility提示一致、send_eligible=false、total_changes=0。仅真实本机只读投影，不算浏览器渲染通过；没有启动或重启生产服务，页面真实渲染尚未验证。整体NOT_READY。
+
 ## 同题真实追问与质量停止（2026-10-19）
 
 在已生成第32题的隔离OPERATOR_TEST库内，先备份原库，再按相同题面和版本创建操作端练习追问“为什么不选B？”。这不是学生真实新消息，没有伪造身份、原始时间、实际交付或Ack。原任务绑定同一会话；冻结引用首次已核验捕获，sent_history为空，未把上一份未发送稿标为学生已收到。

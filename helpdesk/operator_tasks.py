@@ -147,8 +147,21 @@ class OperatorTasks:
         result['task_id'] = result['id']
         result['revision'] = result['draft_revision']
         result['status'] = 'FROZEN' if result['run_id'] else 'REVIEWED'
-        run = self.db.one('SELECT state FROM runs WHERE id=?', (result['run_id'],)) if result['run_id'] else None
+        run = self.db.one('SELECT state,error FROM runs WHERE id=?', (result['run_id'],)) if result['run_id'] else None
         result['run_state'] = run['state'] if run else None
+        if run and run['state'] == 'REJECTED':
+            result['run_error'] = run['error']
+            answer = self.db.one('''SELECT a.id,a.text FROM answers a JOIN answer_evidence e ON e.answer_id=a.id
+                WHERE e.run_id=? AND a.turn_id=? AND a.question_version=? AND a.state='REJECTED'
+                ORDER BY a.rowid DESC LIMIT 1''', (result['run_id'],result['turn_id'],result['question_version']))
+            if answer:
+                flags = []
+                for checked in self.db.all("SELECT details FROM audit WHERE run_id=? AND event='TEACHING_DRAFT_CHECKED' ORDER BY id",
+                                           (result['run_id'],)):
+                    flags.extend({'code':f.get('code',''), 'message':f.get('message','')}
+                                 for f in json.loads(checked[0]).get('output',{}).get('automatic_flags',[]))
+                result['answer_review'] = {'answer_id':answer['id'], 'text':answer['text'],
+                    'reason':run['error'], 'flags':flags, 'send_eligible':False}
         result['generation_submitted_by_intake'] = False
         from .manual_delivery import completion_for_turn
         delivery = completion_for_turn(self.db, result['turn_id'])

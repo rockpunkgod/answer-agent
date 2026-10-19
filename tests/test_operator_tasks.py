@@ -9,6 +9,7 @@ from unittest.mock import patch
 from helpdesk.operator_tasks import OperatorTasks
 from helpdesk.service import Helpdesk
 from helpdesk.storage import Store
+from helpdesk.workflow import Workflow
 from helpdesk.teaching_bundle import build_bundle
 from helpdesk import teaching_bundle as teaching_module
 
@@ -218,6 +219,27 @@ class OperatorTaskTests(unittest.TestCase):
         frozen=json.loads(self.db.one('SELECT input_json FROM runs WHERE id=?',(original['run_id'],))[0])
         self.assertEqual(frozen['generation_adapter'],'WINDOWS_MCP_PREPARED_DEEPSEEK')
         self.assertNotIn('ego_browser',frozen)
+
+    def test_rejected_draft_is_visible_without_promoting_or_mutating_task(self):
+        manifest=build_bundle(question_type='阅读理解',skill_root=self.skill_root,output_root=self.base/'bundles')
+        task=self.review(self.intake.create_draft(self.payload))
+        task=self.intake.freeze(task['id'],teaching_manifest=manifest,
+            preparation_path=self.base/'prep.json',evidence_dir=self.base/'evidence')
+        text='<script>untrusted draft text</script> Synthetic rejected answer'
+        result=Workflow(self.db).finish(task['run_id'],{'text':text,'adapter':'WRONG_ADAPTER'})
+        self.assertEqual(result['state'],'REJECTED')
+        self.db.execute("INSERT INTO audit(run_id,event,details,created_at) VALUES(?,?,?,?)",
+            (task['run_id'],'TEACHING_DRAFT_CHECKED',json.dumps({'output':{'automatic_flags':[
+                {'code':'method_visibility','message':'Synthetic review finding','excerpt':'private extra fields are omitted'}]}}),'2026-10-01T10:00:00+08:00'))
+        before=self.db.connection.total_changes
+        viewed=OperatorTasks.read_only(self.db).get_task(task['id'])
+        self.assertEqual(self.db.connection.total_changes,before)
+        self.assertEqual(viewed['answer_review']['text'],text)
+        self.assertFalse(viewed['answer_review']['send_eligible'])
+        self.assertEqual(viewed['answer_review']['flags'],[{'code':'method_visibility','message':'Synthetic review finding'}])
+        self.assertEqual(viewed['run_state'],'REJECTED')
+        self.assertEqual(self.db.one("SELECT count(*) FROM outbox WHERE purpose='ANSWER'")[0],0)
+        self.assertEqual(self.db.one('SELECT count(*) FROM performance_units')[0],0)
 
 
 if __name__ == '__main__':
