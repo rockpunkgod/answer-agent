@@ -134,8 +134,8 @@ def queue_test_answer(store, source_outbox_id: str, recipient: TestRecipient) ->
         if not source or source["state"] != "PENDING" or source["simulated"] != 0:
             raise ValueError("Approved real pending answer required")
         bound, answer = validate_source_answer(store, source)
-        if any(char in source["body"] for char in "\r\n\t{}"):
-            raise ValueError("TEST_ANSWER_REQUIRES_SINGLE_LINE_SAFE_BODY")
+        if any(char in source["body"] for char in "\t{}"):
+            raise ValueError("TEST_ANSWER_REQUIRES_SAFE_PLAIN_BODY")
         prior = store.one("SELECT * FROM test_answer_copies WHERE source_outbox_id=?", (source_outbox_id,))
         if prior:
             if (prior["target_platform"], prior["target_key"], prior["target_display_name"]) != (

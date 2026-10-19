@@ -8,10 +8,14 @@ from unittest.mock import patch
 from PIL import Image
 
 from helpdesk.delivery import BoundMessage, NotSubmitted, PreflightFailure
-from helpdesk.mcp_test_delivery import MCPTestAnswerDesktop, pixel_hash, verify_frame
+from helpdesk.mcp_test_delivery import MCPTestAnswerDesktop, pixel_hash, verify_frame, same_clipboard_body
 
 
 class TestDeliveryContractTests(unittest.TestCase):
+    def test_readback_allows_only_windows_newline_conversion(self):
+        self.assertTrue(same_clipboard_body('第一段。\r\n\r\n第二段。','第一段。\n\n第二段。'))
+        for changed in ['第一段。\r\n第二段。','第一段。\r\n\r\n 第二段。','第一段。\r第二段。','第一段。\r\n\r\n第三段。']:
+            self.assertFalse(same_clipboard_body(changed,'第一段。\n\n第二段。'))
     def test_frame_requires_pinned_window_and_visual_identity(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)/'frame.png'
@@ -31,8 +35,8 @@ class TestDeliveryContractTests(unittest.TestCase):
             record['content'][0]['text']=text.replace('企业微信','个人微信')
             with self.assertRaises(PreflightFailure): verify_frame(record,pin)
 
-    def make_desktop(self, directory, *, wrong_clipboard=False, send_failure=False):
-        body='【测试答案副本 123456】 同学，选A。'
+    def make_desktop(self, directory, *, wrong_clipboard=False, send_failure=False, body=None):
+        body=body or '【测试答案副本 123456】 同学，选A。'
         message=BoundMessage('oid','binding','wecom','session-key',body)
         pin=dict(platform='wecom',display_name='苇中鹤',expires_at=time.time()+60,
                  outbox_id='oid',binding_id='binding',target_key='session-key',body_hash=message.body_hash,
@@ -56,6 +60,23 @@ class TestDeliveryContractTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             desktop,transport,message=self.make_desktop(directory,wrong_clipboard=True)
             with self.assertRaises(NotSubmitted): desktop.send(message)
+            self.assertFalse(any(t=='Click' and a['loc']==[2,2] for t,a in transport.calls))
+
+    def test_multiline_is_literal_paste_and_readback_before_single_send(self):
+        with tempfile.TemporaryDirectory() as directory:
+            body='第一段选A。\n\n第二段解释。'
+            desktop,transport,message=self.make_desktop(directory,body=body)
+            self.assertTrue(desktop.send(message)['confirmed'])
+            self.assertFalse(any(t=='Type' for t,a in transport.calls))
+            self.assertIn(('Clipboard',{'mode':'set','text':body}),transport.calls)
+            self.assertIn(('Shortcut',{'shortcut':'ctrl+v'}),transport.calls)
+            self.assertFalse(any(t=='Shortcut' and a['shortcut']=='enter' for t,a in transport.calls))
+            self.assertEqual(sum(t=='Click' and a['loc']==[2,2] for t,a in transport.calls),1)
+
+    def test_multiline_mismatch_stops_before_send(self):
+        with tempfile.TemporaryDirectory() as directory:
+            desktop,transport,message=self.make_desktop(directory,body='第一段。\n第二段。',wrong_clipboard=True)
+            with self.assertRaises(NotSubmitted):desktop.send(message)
             self.assertFalse(any(t=='Click' and a['loc']==[2,2] for t,a in transport.calls))
 
     def test_click_timeout_is_not_misreported_as_not_submitted(self):

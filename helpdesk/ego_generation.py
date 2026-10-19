@@ -38,6 +38,9 @@ def selected_option(snapshot, text, inherited_option_id=None):
     affirmative = re.sub(r'(?:不(?:能|要|应(?:该)?|是|会)?|未|别|避免)选(?:择)?\s*[A-D]\b', '', text)
     claims = re.findall(r"(?<![不未])选(?:择)?\s*([A-D])\b|答案(?:是|为)?\s*[:：]?\s*([A-D])\b", affirmative)
     letters = {a or b for a, b in claims}
+    # Natural replies can explicitly conclude “第2题落在C。” without “选/答案”.
+    # Require the question and a terminal separator, not discussion of C/D.
+    letters.update(re.findall(r'第\s*\d+\s*题\s*(?:最终)?落在\s*([A-D])(?=[。.!！；;，,\s]|$)', affirmative))
     matches = [o['id'] for o in snapshot['student_question']['options'] if o['label'] in letters]
     if not letters and inherited_option_id in {o['id'] for o in snapshot['student_question']['options']}:
         matches = [inherited_option_id]

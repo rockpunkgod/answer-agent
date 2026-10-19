@@ -1,5 +1,17 @@
 # 当前能力与缺口
 
+## 新题真实联系人交付、脚本优先与长期空间恢复授权（2026-10-19）
+
+用户批准重建ego空间后，实际建立空间6；原空间3请求确认PREPARING且在取得TaskSpace前即报不存在，没有上传或提交。备份隔离库后保留原失败run和原输入，在同一题目、同一任务、同一业务轮次冻结新的run；重建授权、新旧空间和旧失败证据进入原audit，没有重建题目或伪造一次成功。固定ANSWER原文与本轮1840×2329原JPEG实际上传，一次自然语言请求使用复制来的疑问。完整答案捕获，结论为第2题C。原“第2题落在C”表述被旧解析器遗漏，现只扩展明确带题号、单一字母及分隔符的结论识别，仍拒绝错题号、多个选择或“C和D之间”；修补后读取同一缓存完成原Workflow，不重提DeepSeek。SOURCE/DRAFT原检查通过，生成一个答案和一个原ANSWER Outbox。
+
+REAL VERIFIED（仅授权联系人测试）：保留完整自然语言原文，无测试前缀、无压缩；通过现有TEST_ANSWER路由向“苇中鹤”实际发送一次。原测试适配器限制单行，本次支持多段正文并改用Clipboard+Ctrl+V；不把换行交给原生Type/SendKeys。编辑器回读发现LF被Windows转换为CRLF，最初在发送点击前正确停止；仅将CRLF/LF编码视为相同，其他文字、空格及段落改变仍拦截。备份后复用该草稿和原Outbox，不重复粘贴，点击发送一次。新本人气泡的完整Clipboard原文与答案一致。临时回执最初遗漏target字段导致UNKNOWN，随后只读检查原生Clipboard原件、当前窗口/会话/空编辑器并补关联目标，原Workflow更新同一测试Outbox为SENT_UI_CONFIRMED，未再次发送。已核验联系人收到应答1次、答案1次；本轮正式绩效0，原学生ANSWER仍PENDING，测试副本不冒充学生正式交付。没有向学生群发送。
+
+更新项目及本机安装的answer-agent-deepseek-web Skill：用户长期允许本项目空间确认丢失时重建，不再重复询问；保留原请求核验、防重复提交和外发范围。默认可确定的采集、复制、上传、等待、捕获和台账操作由脚本执行，不默认开subagent；仅控件无法定位或布局变化时必要调用Luna，教学仍交给DeepSeek和ANSWER。本轮后段发送及回执修复全由脚本完成，没有新增定位模型调用。
+
+UNIT/MOCK：`python -X utf8 -B -m unittest -q tests.test_ego_process_restart tests.test_ego_browser tests.test_ego_worker tests.test_ego_generation tests.test_ego_direct_queue tests.test_call_costs tests.test_mcp_test_delivery tests.test_routing tests.test_live_generation tests.test_demo_real_http`，108项通过，0跳过、0失败，25.619秒。较早一次命令误列不存在的test_test_answer_queue模块而报ImportError；更正为实际覆盖queue_test_answer的测试模块后通过，不把该次失败算通过。新增覆盖自然结论、多行粘贴无Type/Enter、回读不符不点击及严格换行转换。Skill两副本逐字一致。
+
+仍NOT_READY：本轮是隔离OPERATOR_TEST联系人Pilot，没有取得可靠完整平台身份/原始时间、持续采集生产者或正式学生交付，不作为15分钟SLA或正式绩效证明。参考搜索未配置，费用未完整核实，真实20任务及A–H稳定性未验收。此前账号验证、空间丢失和控件/回执失败记录保留，不用最终一次成功掩盖。
+
 ## 苇中鹤新题真实收到与原图保存（2026-10-19）
 
 用户明确授权仅在“苇中鹤”完成新题收到、DeepSeek和答案交付测试，随后确认已发新题。实际Windows-MCP取得新题原话的Clipboard原件，并通过企业微信原图查看器的另存为保存1840×2329 JPEG；原件摘要、原始工具记录和授权保留私有目录，不上传。界面出现22:15及原图提示时间，但尚无可作为正式消息元数据使用的平台消息ID、完整原始时间或持续生产者，不伪造。

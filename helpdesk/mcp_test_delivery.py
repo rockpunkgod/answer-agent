@@ -19,6 +19,11 @@ def pixel_hash(image, box):
     return sha256(image.crop(tuple(box)).convert('RGB').tobytes()).hexdigest()
 
 
+def same_clipboard_body(copied, body):
+    # WeCom copies paragraph breaks as Windows CRLF. Preserve all other text.
+    return copied.replace('\r\n', '\n') == body.replace('\r\n', '\n')
+
+
 def verify_frame(record, pin, *, foreground=None):
     from PIL import Image
     if foreground is None:
@@ -76,8 +81,8 @@ class MCPTestAnswerDesktop:
         if (message.outbox_id, message.binding_id, message.group_key, message.student_key, message.body_hash) != (
                 p.get('outbox_id'), p.get('binding_id'), 'wecom', p.get('target_key'), p.get('body_hash')):
             raise ValueError('TEST_ANSWER_PIN_MISMATCH')
-        if any(c in message.body for c in '\r\n\t{}'):
-            raise ValueError('ANSWER_NEEDS_VERIFIED_SINGLE_LINE_INPUT')
+        if any(c in message.body for c in '\t{}'):
+            raise ValueError('ANSWER_NEEDS_VERIFIED_PLAIN_INPUT')
 
     def _call(self, tool, **arguments):
         result = self.transport.call(tool, arguments)
@@ -122,13 +127,20 @@ class MCPTestAnswerDesktop:
     def send(self, message):
         try:
             self.preflight(message)
-            self._call('Type', loc=self.pin['compose_point'], text=message.body, press_enter=False)
+            if '\n' in message.body or '\r' in message.body:
+                # Native Type routes newlines through SendKeys. Paste literally
+                # so a paragraph break cannot become an accidental send key.
+                self._call('Click', loc=self.pin['compose_point'])
+                self._call('Clipboard', mode='set', text=message.body)
+                self._call('Shortcut', shortcut='ctrl+v')
+            else:
+                self._call('Type', loc=self.pin['compose_point'], text=message.body, press_enter=False)
             self._frame(message)
             self._call('Click', loc=self.pin['compose_point'])
             self._call('Clipboard', mode='set', text='draft-readback-'+uuid4().hex)
             self._call('Shortcut', shortcut='ctrl+a')
             self._call('Shortcut', shortcut='ctrl+c')
-            if self._clipboard_text() != message.body:
+            if not same_clipboard_body(self._clipboard_text(), message.body):
                 raise NotSubmitted('DRAFT_VERIFICATION_FAILED')
             self._call('Shortcut', shortcut='right')
             self._frame(message)
@@ -180,7 +192,7 @@ class MCPTestAnswerDesktop:
             self._call('Click', loc=copy_point)
             copied = self._clipboard_text()
             after = self._frame(message)
-            if copied != message.body or not after['editor_blank']:
+            if not same_clipboard_body(copied, message.body) or not after['editor_blank']:
                 raise ValueError('SENT_BUBBLE_TEXT_MISMATCH')
             return {'confirmed': True, 'simulated': False, 'body_hash': message.body_hash,
                     'confirmed_at': now(), 'target_platform': 'wecom', 'target_name': '苇中鹤',

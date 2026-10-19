@@ -1,6 +1,6 @@
 # ego-lite 固定网页步骤
 
-先按安装的 ego-browser Skill 运行 `ego-browser skill`。一项用户目标只使用一个 TaskSpace；登录或人工接管时 handOff，用户确认后再接管原空间。不开新 Profile，不从其他浏览器复制登录数据，不在失败时新建空间。
+先按安装的 ego-browser Skill 运行 `ego-browser skill`。一项用户目标只使用一个 TaskSpace；登录或人工接管时 handOff，用户确认后再接管原空间。不开新 Profile，不从其他浏览器复制登录数据。用户已长期授权：本项目空间确认丢失时可重建一个空间，不再重复询问；遵循主 Skill 的原请求核验和防重放要求，普通报错仍复用现有空间。
 
 项目入口：`python -m tools.run_ego_deepseek --help`。Python 会从 PATH 或本机 `.local/share/ego/active_version_dir/ego-browser.exe` 找已安装 CLI；无需重装或修改系统 PATH。
 

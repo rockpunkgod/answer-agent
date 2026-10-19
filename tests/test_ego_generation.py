@@ -122,9 +122,10 @@ class EgoGenerationTests(unittest.TestCase):
         self.assertEqual(self.calls,[])
 
     def test_plain_answer_requires_one_explicit_student_option_and_question(self):
-        for text in ['不选B，答案是D。','第12题选D。']:
+        for text in ['不选B，答案是D。','第12题选D。','所以第12题落在D。']:
             self.assertTrue(selected_option(self.snapshot,text))
-        for text in ['我认为可以。','选B，也选D。','第13题选D。','不选B。','不能选B。','不应该选择B。']:
+        for text in ['我认为可以。','选B，也选D。','第13题选D。','不选B。','不能选B。','不应该选择B。',
+                     '第12题落在C和D之间。','第12题不落在D。','第13题落在D。','选C，所以第12题落在D。']:
             with self.assertRaises(ValueError):selected_option(self.snapshot,text)
 
     def test_unknown_browser_is_not_a_completed_draft(self):
