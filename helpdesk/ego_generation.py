@@ -173,7 +173,13 @@ class EgoDeepSeekGenerator:
             raise
         proof = self.directory / (request_id + '.answer.json')
         evidence = 'sha256:' + sha256(proof.read_bytes()).hexdigest()
-        meter.finish(call_id, 'CONFIRMED', evidence)
+        with closing(Store(snapshot['session_store_path'])) as store:
+            prior = [json.loads(r[0]) for r in store.all(
+                "SELECT details FROM audit WHERE run_id=? AND event='ANSWER_CALL_RESULT'", (snapshot['run_id'],))]
+        if any(r['call_id'] == call_id and r['status'] == 'UNKNOWN' for r in prior):
+            meter.confirm_ego_capture(call_id,proof)
+        else:
+            meter.finish(call_id, 'CONFIRMED', evidence)
         meter.close('DEEPSEEK_TEACH', evidence)
         # The approved direct policy makes no search or MATCH model calls.
         meter.close('DEEPSEEK_MATCH', 'direct-original-policy')

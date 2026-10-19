@@ -49,11 +49,33 @@ class EgoGenerationTests(unittest.TestCase):
     def submit(self, request_id, url, prompt, *, attachments, capture_only, new_session=False):
         self.calls.append((request_id,url,prompt,attachments,capture_only))
         if self.action:self.action()
-        result={'adapter':'EGO_LITE','complete':True,'session_url':self.url if new_session else url,'text':self.body,
+        result={'adapter':'EGO_LITE','space_id':1,'page':'p1','complete':True,'session_url':self.url if new_session else url,'text':self.body,
             'upload_manifest':[{'path':str(p),'name':p.name,'sha256':sha256(p.read_bytes()).hexdigest()} for p in attachments]}
         directory=self.root/'evidence';directory.mkdir(exist_ok=True)
         (directory/(request_id+'.answer.json')).write_text(json.dumps(result),encoding='utf-8')
+        (directory/(request_id+'.state.json')).write_text(json.dumps({'phase':'CAPTURED',
+            'output_sha256':sha256((directory/(request_id+'.answer.json')).read_bytes()).hexdigest()}),encoding='utf-8')
         return result
+
+    def test_unknown_capture_recovery_preserves_initial_result_and_one_call(self):
+        from helpdesk.call_costs import task_cost,confirm_ego_capture
+        with patch.object(self,'submit',side_effect=TimeoutError('synthetic observation timeout')):
+            with self.assertRaises(TimeoutError):self.generator.generate(self.snapshot)
+        result=self.generator.generate(self.snapshot)
+        initial=json.loads(self.store.one("SELECT details FROM audit WHERE event='ANSWER_CALL_RESULT'")[0])
+        self.assertEqual(initial['status'],'UNKNOWN')
+        self.assertEqual(self.store.one("SELECT count(*) FROM audit WHERE event='ANSWER_CALL_STARTED'")[0],1)
+        confirm_ego_capture(self.store,self.run_id,initial['call_id'],result['web_session_evidence'])
+        self.assertEqual(self.store.one("SELECT count(*) FROM audit WHERE event='ANSWER_EGO_CALL_RECOVERED'")[0],1)
+        costs=task_cost(self.store,self.run_id)
+        self.assertEqual(costs['confirmed_calls'],1)
+        self.assertEqual(costs['cost_status'],'UNVERIFIED')
+        self.assertIsNone(costs['total_cny'])
+        self.assertEqual(self.workflow.finish(self.run_id,result)['state'],'GENERATED')
+        Path(result['web_session_evidence']).write_text('{}',encoding='utf-8')
+        costs=task_cost(self.store,self.run_id)
+        self.assertEqual(costs['confirmed_calls'],0)
+        self.assertTrue(any(r.startswith('RECOVERY_PROOF_CHANGED:') for r in costs['unverified']))
 
     def test_natural_draft_returns_to_existing_outbox_without_delivery(self):
         result=self.generator.generate(self.snapshot)

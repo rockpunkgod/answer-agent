@@ -23,7 +23,7 @@ async function fixture(options={}) {
     querySelectorAll(selector){return selector.startsWith('textarea')?[{value:state.value}]:[...(options.oldAnswer?[old]:[]),...(state.answer?[node]:[])]},
     querySelector(selector){return selector==='.aaff8b8f'?{
       innerText:options.uploadFailure?'approved.md 上传失败':'approved.md',
-      querySelector(){return null},querySelectorAll(){return []}
+      querySelector(){return null},querySelectorAll(selector){return selector==='.ds-animated-size-item'?[{}]:[]}
     }:{value:state.value}}
   };
   globalThis.location={get href(){return state.url}};
@@ -42,7 +42,9 @@ async function fixture(options={}) {
 
 test('image upload requires named loaded thumbnail and no active progress',()=>{
   const image={alt:'original.jpg',complete:true,naturalWidth:1279};
-  const composer={innerText:'teaching.md',querySelector(){return null},querySelectorAll(){return [image]}};
+  let progress=[];
+  const composer={innerText:'teaching.md',querySelectorAll(selector){return selector==='img'?[image]:progress}};
+  globalThis.getComputedStyle=node=>node.style || {display:'flex',visibility:'visible',opacity:'1'};
   globalThis.document={querySelector(){return composer}};
   assert.equal(attachmentsReady(['teaching.md','original.jpg']),true);
   assert.equal(attachmentsReady(['teaching.md','other.jpg']),false);
@@ -50,9 +52,15 @@ test('image upload requires named loaded thumbnail and no active progress',()=>{
   assert.equal(attachmentsReady(['original.jpg']),false);
   image.complete=true;image.naturalWidth=0;
   assert.equal(attachmentsReady(['original.jpg']),false);
-  image.naturalWidth=1279;composer.querySelector=()=>({});
+  image.naturalWidth=1279;
+  const overlay={parentElement:composer,style:{display:'flex',visibility:'visible',opacity:'1'}};
+  progress=[{parentElement:overlay,getClientRects:()=>[{}]}];
   assert.equal(attachmentsReady(['teaching.md','original.jpg']),false);
-  composer.querySelector=()=>null;composer.innerText='teaching.md 上传失败';
+  overlay.style.opacity='0';
+  assert.equal(attachmentsReady(['teaching.md','original.jpg']),true);
+  overlay.style.opacity='1';overlay.style.display='none';
+  assert.equal(attachmentsReady(['teaching.md','original.jpg']),true);
+  progress=[];composer.innerText='teaching.md 上传失败';
   assert.equal(attachmentsReady(['teaching.md','original.jpg']),false);
 });
 
@@ -60,6 +68,16 @@ test('upload failure prevents prompt submission',async()=>{
   const f=await fixture({uploadFailure:true});try{
     await assert.rejects(run(f.request),/WAIT_CONDITION_FAILED/);
     assert.equal(f.state.presses,0);
+  }finally{await f.cleanup()}
+});
+
+test('explicit staged recovery uses ready original attachments without uploading again',async()=>{
+  const f=await fixture({plain:true});try{
+    f.request.response_token=null;
+    await run(f.request,{resumeStaged:true});
+    assert.equal(f.state.uploads,0);assert.equal(f.state.presses,1);
+    await assert.rejects(run(f.request,{resumeStaged:true}),/STAGED_RESUME_REQUIRES_UNSUBMITTED_REQUEST/);
+    assert.equal(f.state.presses,1);
   }finally{await f.cleanup()}
 });
 

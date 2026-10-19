@@ -1,5 +1,15 @@
 # 当前能力与缺口
 
+## 新一次取答真实草稿闭环通过（2026-10-19）
+
+用户确认图片上传完成后接回原ego空间。真实DOM证明加载控件仍在，但其祖先opacity为0；此前依据控件存在就判定“仍在转圈”的结论证据不足，本次确认是检测误判，不能把等待超时全部归因于网站上传失败。现只阻止实际可见的加载、busy或进度控件；仍检查附件名称、图片加载与明确失败。受控恢复核对原未提交状态、同一页面、附件数量和本机文件摘要，不重传、不刷新，题号仅“第32题”，自然语言一次取答。
+
+REAL VERIFIED（仅历史练习草稿）：固定ANSWER 1c388a0596b13935ae7c6a1af00834915a8efa33的教学原文与原始JPEG被使用，DeepSeek实际提交一次、完整捕获，返回D；原SOURCE检查SOURCE_READY、原DRAFT检查NO_AUTOMATIC_FLAGS。原业务run为GENERATED，answers=1、ANSWER Outbox=1且PENDING；重复执行原CLI返回resubmitted=false，数量不变。交付确认=0、绩效单位=0，全部发送目的仍禁用。原始学生身份和提问时间未取得，不补造。未执行真实新消息、Ack、群发送、追问、日报或试运行，不将这一题算完整Level 3验收。
+
+真实恢复发现调用台账拒绝UNKNOWN后确认捕获，已补原run的ANSWER_EGO_CALL_RECOVERED追加记录；原UNKNOWN不修改、不重复创建调用。只接受原冻结目录下、原调用对应的CAPTURED证据、摘要及空间/页面绑定；成本读取时重新校验证据，变化则保持未验证。原通用finish_call仍拒绝改写结果。该题实际TEACH调用=1，恢复记录=1；费用和其他未计量项仍UNVERIFIED，不能宣称零成本或达到金额门槛。
+
+UNIT/MOCK：`python -X utf8 -B -m unittest -q tests.test_ego_browser tests.test_ego_worker tests.test_ego_generation tests.test_ego_direct_queue tests.test_call_costs`，63项通过，0跳过、0失败，包含12个native worker模拟用例。覆盖隐藏加载层、可见进度拦截、受控恢复不再上传、提交后不能重复恢复、UNKNOWN追加确认及证据篡改后成本失效。整体仍NOT_READY；原上传人工等待已解除，继续验收实际追问、交付、绩效、费用与稳定性。
+
 ## 已交付图片进入 ego 追问（2026-10-19）
 
 最小补通原实际交付历史中的图片：从已冻结的原 sent_history 取得人工登记记录，只接受数据库旁既有 delivery-attachments 批准目录内、登记大小与SHA256均匹配的PNG/JPEG/WebP/GIF。原有目录被链接替换、路径越界、文件丢失或内容改变、超过20MB、非图片均停止。无新目录配置、数据库字段、教学规则或消息通道；旧MCP历史投影不改变。普通追问上传必要老师图片，复用原教学与学生原图，不把草稿当已交付。冻结、生成及发送前继续复核原交付上下文与文件；捕获后发现变化，保留捕获证据但不创建可发送新稿。

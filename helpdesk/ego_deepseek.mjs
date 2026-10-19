@@ -8,7 +8,16 @@ const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 
 export function attachmentsReady(names) {
   const composer=document.querySelector('.aaff8b8f');
-  if(!composer || composer.querySelector('.ds-loading, [aria-busy="true"], [role="progressbar"]')) return false;
+  if(!composer) return false;
+  const visible=node=>{
+    for(let current=node;current;current=current.parentElement) {
+      const style=getComputedStyle(current);
+      if(style.display==='none'||style.visibility==='hidden'||style.visibility==='collapse'||Number(style.opacity)===0) return false;
+      if(current===composer) break;
+    }
+    return node.getClientRects().length>0;
+  };
+  if([...composer.querySelectorAll('.ds-loading, [aria-busy="true"], [role="progressbar"]')].some(visible)) return false;
   const text=composer.innerText || '';
   if(/上传中|解析中|上传失败|解析失败|文件过大|uploading|processing|upload failed|parse failed/i.test(text)) return false;
   const images=[...composer.querySelectorAll('img')];
@@ -36,14 +45,16 @@ async function saveState(request, values) {
   await fs.rename(path,request.state_path);
 }
 
-export async function run(request) {
+export async function run(request, {resumeStaged=false}={}) {
   const persisted=JSON.parse(await fs.readFile(request.state_path,'utf8'));
   if(persisted.fingerprint !== request.fingerprint) throw new Error('REQUEST_CHANGED');
   if(request.capture_only && !['SUBMISSION_INTENT','SUBMITTED'].includes(persisted.phase)) throw new Error('NOT_SUBMITTED');
+  if(resumeStaged && (request.capture_only || persisted.phase!=='PREPARING')) throw new Error('STAGED_RESUME_REQUIRES_UNSUBMITTED_REQUEST');
   const task = await taskSpace(request.space_id);
   const page = task.page(request.page);
   const expected=persisted.resolved_session_url || request.session_url;
   const isChat=url=>/^https:\/\/chat\.deepseek\.com\/a\/chat\/s\/[A-Za-z0-9-]+$/.test(url);
+  if(resumeStaged && await page.url() !== expected) throw new Error('STAGED_PAGE_CHANGED');
   if(request.new_session && request.capture_only && !persisted.resolved_session_url) {
     // Unknown first Enter: observe the original page, never navigate to a blank chat.
     throw new Error('NEW_SESSION_IDENTITY_REQUIRES_MANUAL_CHECK');
@@ -68,7 +79,11 @@ export async function run(request) {
     }
     if (request.files.length) {
       if (await page.url() !== request.session_url) throw new Error('SESSION_CHANGED');
-      await page.setInputFiles('input[type="file"]',request.files.map(f=>f.path));
+      if(resumeStaged) {
+        const count=await page.evaluate(()=>document.querySelector('.aaff8b8f')?.querySelectorAll('.ds-animated-size-item').length);
+        if(count !== request.files.length) throw new Error('STAGED_ATTACHMENTS_CHANGED');
+      }
+      if(!resumeStaged) await page.setInputFiles('input[type="file"]',request.files.map(f=>f.path));
       await page.waitForFunction(attachmentsReady, request.files.map(f=>f.name), {timeout:60_000});
     }
     if (await page.url() !== request.session_url) throw new Error('SESSION_CHANGED');

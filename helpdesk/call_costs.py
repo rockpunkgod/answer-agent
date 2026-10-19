@@ -91,6 +91,43 @@ def finish_call(store, run_id, call_id, status, evidence):
             _event(store, run_id, RESULT, details)
 
 
+def _ego_capture_proof(store, run_id, call_id, capture):
+    row, _ = _run(store, run_id)
+    snapshot = json.loads(row['input_json'])
+    calls = [c for c in _records(store, run_id, START) if c['call_id'] == call_id]
+    _require(len(calls) == 1 and calls[0]['provider'] == 'EGO_LITE_DEEPSEEK'
+             and calls[0]['kind'] == 'DEEPSEEK_TEACH'
+             and calls[0]['request_key'] == run_id + '-teach', 'COST_RECOVERY_CALL_MISMATCH')
+    expected = Path(snapshot['ego_browser']['evidence_dir']) / (run_id + '-teach.answer.json')
+    path = Path(capture).resolve(strict=True)
+    _require(path == expected.resolve(strict=True), 'COST_RECOVERY_CAPTURE_PATH_CHANGED')
+    raw = path.read_bytes()
+    digest = sha256(raw).hexdigest()
+    value = json.loads(raw)
+    state = json.loads(path.with_name(run_id + '-teach.state.json').read_text(encoding='utf-8'))
+    _require(snapshot['generation_adapter'] == 'EGO_LITE_DEEPSEEK'
+             and value.get('adapter') == 'EGO_LITE' and value.get('complete') is True
+             and value.get('space_id') == snapshot['ego_browser']['space_id']
+             and value.get('page') == snapshot['ego_browser']['page']
+             and isinstance(value.get('text'),str) and bool(value['text'].strip())
+             and re.fullmatch(r'https://chat\.deepseek\.com/a/chat/s/[A-Za-z0-9-]+',value.get('session_url',''))
+             and state.get('phase') == 'CAPTURED' and state.get('output_sha256') == digest,
+             'COST_RECOVERY_CAPTURE_UNCONFIRMED')
+    return {'call_id':call_id,'status':'CONFIRMED','evidence':'sha256:'+digest,'capture':str(path)}
+
+
+def confirm_ego_capture(store, run_id, call_id, capture):
+    """Append a verified recovery observation; never rewrite the UNKNOWN fact."""
+    with store.transaction():
+        details = _ego_capture_proof(store, run_id, call_id, capture)
+        previous = [r for r in _records(store, run_id, RESULT) if r['call_id'] == call_id]
+        _require(len(previous) == 1 and previous[0]['status'] == 'UNKNOWN', 'COST_RECOVERY_REQUIRES_UNKNOWN')
+        recovered = [r for r in _records(store,run_id,'ANSWER_EGO_CALL_RECOVERED') if r['call_id'] == call_id]
+        _require(not recovered or recovered == [details], 'COST_RECOVERY_RESULT_CHANGED')
+        if not recovered:
+            _event(store,run_id,'ANSWER_EGO_CALL_RECOVERED',details)
+
+
 def close_stage(store, run_id, kind, evidence, *, injected=False):
     """Trusted adapter completed its measurement, including verified cache/reuse."""
     _require(kind in KINDS and type(injected) is bool and isinstance(evidence, str) and 0 < len(evidence) <= 256,
@@ -173,6 +210,14 @@ def task_cost(store, run_id):
     coverage = {r['kind']: r for r in _records(store, run_id, COVERAGE)}
     reconciled = _records(store, run_id, 'ANSWER_COST_SCOPE_RECONCILED')
     reasons, items, subtotal = [], [], Decimal('0')
+    for recovered in _records(store, run_id, 'ANSWER_EGO_CALL_RECOVERED'):
+        try:
+            proof = _ego_capture_proof(store,run_id,recovered['call_id'],recovered['capture'])
+            _require(proof == recovered, 'COST_RECOVERY_RESULT_CHANGED')
+            _require(results.get(recovered['call_id'],{}).get('status') == 'UNKNOWN','COST_RECOVERY_RESULT_CHANGED')
+            results[recovered['call_id']] = recovered
+        except (OSError,ValueError,KeyError,TypeError):
+            reasons.append('RECOVERY_PROOF_CHANGED:'+str(recovered.get('call_id')))
     for kind in KINDS:
         ids = sorted(c['call_id'] for c in calls if c['kind'] == kind)
         if kind not in coverage or coverage[kind]['call_ids'] != ids:
@@ -278,6 +323,13 @@ class RunMeter:
         store = self._store()
         try:
             finish_call(store, self.run_id, call_id, status, evidence)
+        finally:
+            store.close()
+
+    def confirm_ego_capture(self, call_id, capture):
+        store = self._store()
+        try:
+            confirm_ego_capture(store,self.run_id,call_id,capture)
         finally:
             store.close()
 
