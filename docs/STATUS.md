@@ -14,6 +14,8 @@ UNIT/MOCK：`python -X utf8 -B -m unittest -q tests.test_ego_worker tests.test_e
 
 ## ego-lite 网页入口（2026-10-19）
 
+追问交付上下文补充回归：实际交付已由原 input_fingerprint 纳入，无需新增校验或重构。新增三例证明老师在追问冻结后、网页生成中、生成后发送前登记实际回复时，分别由原队列、生成后当前上下文检查、发送门禁停止；不提交额外请求、不丢弃已捕获证据、不创建失效草稿的 Outbox。图片交付上下文仍明确转人工，不冒充已上传。`python -X utf8 -B -m unittest -q tests.test_ego_direct_queue tests.test_ego_generation tests.test_automatic_preparation`：39项 UNIT/MOCK 通过，0跳过；这些测试没有操作真实账号或数据库，不解除浏览器人工接管状态。
+
 新增 `python -m tools.run_ego_deepseek`，复用已有 TaskSpace、Page 和绑定会话；仅上传显式批准附件。默认上传原图与固定 ANSWER 原文，`--question` 直接写题号/学生原话，自然语言取答，不上传上下文 JSON、不要求 JSON 输出或 BEGIN/END 标记。内部状态、附件摘要和未知提交记录仅在本机保存；重复读取缓存，提交不确定仅允许只读恢复。
 
 REAL：原阅读题同一会话经 ego-lite 实际上传、提交、完整取答；该次发生于简化格式前，使用原两阶段输入。ANSWER 原检查保留一项 REVIEW_REQUIRED，用户明确“直接采用，没有问题”；不伪造检查通过。新自然语言捕获逻辑另经真实页面只读验证（783字符、没有再次提交）。没有重做这道题或发送群消息。固定 ANSWER 来源仍为 b04ebc26d7fa096404111a0bb12f6c77cc8525b9。

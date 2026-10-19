@@ -174,6 +174,52 @@ class DirectQueueTests(unittest.TestCase):
         self.assertNotIn('因为要照顾母亲。',self.calls[-1][2])
         self.assertEqual(self.calls[-1][3],[])
 
+    def register_actual_original(self):
+        from helpdesk.manual_delivery import ManualDeliveries
+        row=self.db.one("SELECT * FROM outbox WHERE purpose='ANSWER' ORDER BY rowid LIMIT 1")
+        return ManualDeliveries(self.db).register(row['id'],question_version=row['question_version'],
+            context_revision=row['context_revision'],reviewer='anonymous verifier',
+            verification_evidence='Synthetic actual delivery registered while a followup was frozen',
+            delivered_at='2026-10-01T10:00:00+08:00',content='第12题选C。这是老师后来实际交付的说明。')
+
+    def test_new_actual_delivery_after_freeze_stops_before_followup_submission(self):
+        self.admit();self.assertEqual(self.runtime.tick()['state'],'GENERATED')
+        self.followup();self.register_actual_original()
+        result=self.runtime.tick()
+        self.assertEqual(result['state'],'NEEDS_ATTENTION',result)
+        self.assertEqual(result['reason'],'QUEUE_EVIDENCE_INVALID:ValueError')
+        self.assertEqual(len(self.calls),1)
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM answers')[0],1)
+
+    def test_actual_delivery_while_generating_blocks_new_outbox(self):
+        self.admit();self.assertEqual(self.runtime.tick()['state'],'GENERATED')
+        self.followup()
+        original=self.submit
+        def changing(*args,**kwargs):
+            captured=original(*args,**kwargs)
+            self.register_actual_original()
+            return captured
+        with patch.object(self,'submit',side_effect=changing):
+            result=self.runtime.tick()
+        self.assertEqual(result['state'],'EXECUTION_UNCERTAIN',result)
+        self.assertEqual(result['reason'],'GENERATION_UNCERTAIN:ValueError')
+        self.assertEqual(len(self.calls),2)
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM answers')[0],1)
+        task=self.fx.tasks.get_task(self.task['id'])
+        self.assertTrue((Path(task['evidence_dir'])/(task['run_id']+'-teach.answer.json')).is_file())
+        self.assertEqual(self.db.one("SELECT COUNT(*) FROM outbox WHERE run_id=?",(task['run_id'],))[0],0)
+
+    def test_actual_delivery_after_generation_blocks_pending_followup_delivery(self):
+        from helpdesk.test_answer_queue import validate_source_answer
+        self.admit();self.assertEqual(self.runtime.tick()['state'],'GENERATED')
+        self.followup();self.assertEqual(self.runtime.tick()['state'],'GENERATED')
+        row=self.db.one("SELECT * FROM outbox WHERE purpose='ANSWER' ORDER BY rowid DESC LIMIT 1")
+        self.register_actual_original()
+        with self.assertRaisesRegex(ValueError,'GENERATION_CONTEXT_CHANGED'):
+            validate_source_answer(self.db,row,approval=False)
+        self.assertEqual(len(self.calls),2)
+        self.assertEqual(self.db.one('SELECT state FROM outbox WHERE id=?',(row['id'],))[0],'PENDING')
+
     def test_followup_can_explain_without_repeating_original_answer_letter(self):
         self.admit();self.assertEqual(self.runtime.tick()['state'],'GENERATED')
         self.followup();self.reply_text='B 说的是度假，原文说的是照顾母亲，目的不一致。'
