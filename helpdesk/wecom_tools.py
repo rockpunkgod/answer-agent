@@ -223,6 +223,21 @@ class WeComTools:
             if pixel_hash(image,recipe['region_box']) not in hashes:
                 raise ValueError('MESSAGE_LAYOUT_CHANGED_RECAPTURE_REQUIRED')
 
+    def _copy_point(self,record,recipe,pin):
+        try:
+            self._checked_region(record,recipe)
+            return recipe['point']
+        except ValueError:
+            # Explicit local opt-in, limited to a reviewed menu search region.
+            # OCR cannot authorize a send or widen a target/window whitelist.
+            if not recipe.get('ocr_search_box'):raise
+            if record.get('backend')!='WECOM_NATIVE':
+                raise ValueError('COPY_OCR_NATIVE_CAPTURE_REQUIRED')
+            from .wecom_control_ocr import locate_copy
+            path=self.root/'data/private/wecom-native'/(record['attempt_id']+'.json')
+            suggestion=locate_copy(path,recipe['ocr_search_box'],display_index=pin['display_index'])
+            return suggestion['loc']
+
     def get_messages(self, chat_id):
         if chat_id!=self.session.get('target_key'):
             raise ValueError('CHAT_OUTSIDE_ALLOWLIST')
@@ -241,8 +256,15 @@ class WeComTools:
                 # settle period, never a repeated click or message submission.
                 time.sleep(.2)
                 menu=desktop._call('Screenshot')
-                self._checked_region(menu,recipe['copy_menu'])
-                desktop._call('Click',loc=recipe['copy_menu']['point'])
+                copy_point=self._copy_point(menu,recipe['copy_menu'],pin)
+                current,_=self._frame(desktop,pin)
+                from PIL import Image
+                scope=recipe['copy_menu'].get('ocr_search_box',recipe['copy_menu']['region_box'])
+                image_path=next(c['path'] for c in menu['content'] if c.get('type')=='image')
+                with Image.open(image_path) as image:
+                    menu_hash=pixel_hash(image,scope)
+                self._checked_region(current,{'region_box':scope,'region_hash':menu_hash})
+                desktop._call('Click',loc=copy_point)
                 time.sleep(.15)
                 result=desktop._call('Clipboard',mode='get')
                 values=[c.get('text','') for c in result.get('content',[]) if c.get('type')=='text']

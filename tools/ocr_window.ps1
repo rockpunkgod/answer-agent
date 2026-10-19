@@ -2,7 +2,8 @@
     [Parameter(Mandatory = $true)]
     [string]$ImagePath,
     [string]$ExpectedText = '',
-    [switch]$ProbeTextOnly
+    [switch]$ProbeTextOnly,
+    [switch]$CopyControlOnly
 )
 
 # Read-only Windows.Media.Ocr probe. Never prints raw OCR text or a chat history.
@@ -63,6 +64,24 @@ try {
             if (-not $engine) { $engine = $engineType::TryCreateFromUserProfileLanguages() }
             if (-not $engine) { throw 'No Windows OCR language pack available' }
             $ocr = Await-WinRT ($engine.RecognizeAsync($bitmap)) $ocrResultType
+            if ($CopyControlOnly) {
+                # Exact UI label only. Never emit conversation text or authorize input.
+                $copyLabel = -join @([char]0x590d,[char]0x5236)
+                $matches = @()
+                foreach ($line in $ocr.Lines) {
+                    $label = $line.Text -replace '\s+', ''
+                    if ($label -ne $copyLabel -and $label -ne ($copyLabel+'(C)')) { continue }
+                    if ($line.Words.Count -eq 0) { continue }
+                    $left = [math]::Floor(($line.Words | ForEach-Object { $_.BoundingRect.X } | Measure-Object -Minimum).Minimum)
+                    $top = [math]::Floor(($line.Words | ForEach-Object { $_.BoundingRect.Y } | Measure-Object -Minimum).Minimum)
+                    $right = [math]::Ceiling(($line.Words | ForEach-Object { $_.BoundingRect.X + $_.BoundingRect.Width } | Measure-Object -Maximum).Maximum)
+                    $bottom = [math]::Ceiling(($line.Words | ForEach-Object { $_.BoundingRect.Y + $_.BoundingRect.Height } | Measure-Object -Maximum).Maximum)
+                    $matches += ,@($left,$top,$right,$bottom)
+                }
+                [pscustomobject]@{ available=$true; image_size=@($bitmap.PixelWidth,$bitmap.PixelHeight);
+                    copy_control_boxes=@($matches); control='copy_menu'; authorizes_input=$false } | ConvertTo-Json -Compress -Depth 4
+                return
+            }
             if ($ProbeTextOnly) {
                 if (-not $ExpectedText.StartsWith('TEST ')) { throw 'Only the known probe text is eligible' }
                 $observed = $ocr.Text.Normalize([Text.NormalizationForm]::FormKC) -replace '\s+', ''

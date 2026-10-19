@@ -1,5 +1,16 @@
 # 当前能力与缺口
 
+## 本地OCR定向复制按钮兜底（2026-10-20）
+
+复用现有ocr_window.ps1的Windows.Media.Ocr，增加CopyControlOnly，只输出精确复制标签的区域，不输出聊天原文。新增wecom_control_ocr复用已有原生截图日志/单显示器/有效期校验，不调用Luna；只处理本机指定最大512×256区域，局部放大4倍，15秒有界识别，唯一匹配才返回当前显示器坐标建议。位置本身不授权输入。
+
+原get_messages复制菜单在固定哈希不匹配且本机显式配置ocr_search_box时才使用该兜底，仅接受WECOM_NATIVE记录；点击前再次核验当前窗口及菜单区域未变化。收件人、题面、发送按钮、原时间与绩效不使用OCR猜测。不自动修改既有会话配方，没有新服务/依赖/模型调用，也未新增MCP工具或CLI子命令。
+
+REAL OFFLINE：在已保存的实际企业微信复制菜单图上，整屏识别未找到精确标签（明确非通过）；局部90×45放大4倍后，Windows OCR实际唯一识别复制标签，返回[28,67,133,120]。图片只在私有目录，本轮无截图采集、桌面输入或外发。完整运行时兜底尚未在真实新菜单上验证，不能报真实读取闭环成功。
+
+UNIT/MOCK：`python -X utf8 -B -m unittest -q tests.test_wecom_control_ocr tests.test_wecom_tools tests.test_luna_navigation tests.test_wecom_native tests.test_wecom_cli tests.test_mcp_test_delivery tests.test_routing tests.test_delivery_tasks`，71项通过、0失败/跳过。覆盖离散/负坐标显示器映射、唯一标签、歧义/缺失/越界、来源不可信时不执行OCR、显式启用及不产生输入；原消息/发送守卫回归保留。首次插入测试时将原选中态测试后半段放错函数，已恢复原断言位置，未删断言。第5题原拒绝与修订预算不变，完整任务仍1/20，NOT_READY。
+
+
 ## 教学原文核验及修订强退恢复（2026-10-20）
 
 在原第5题上只读重新验证固定ANSWER 1c388a0596b13935ae7c6a1af00834915a8efa33，实际本地工作树干净、HEAD一致；冻结原文/依赖通过。实际上传teaching-input.md为77801字节，7份README/Skill/Agent/七选五模块/交付/路由/缺口原文逐字存在，未发现漏传教学模块，未改ANSWER或为消除拒绝放宽检查。私有核验证据teaching-input-audit-after-rejection.json。当前原稿和单次修订仍REJECTED，已询问用户该题转人工修订或保留待处理后继续其他题；没有额外网页提交。

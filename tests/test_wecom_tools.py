@@ -160,6 +160,18 @@ class WeComToolTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'MESSAGE_LAYOUT_CHANGED'):
             self.service._checked_region(record,recipe)
 
+    def test_copy_ocr_fallback_is_opt_in_and_cannot_invoke_input(self):
+        record={'attempt_id':'a'*32,'backend':'WECOM_NATIVE','content':[{'type':'image','path':str(self.image)}]}
+        recipe={'region_box':[0,0,10,10],'region_hash':'0'*64,'point':[5,5]}
+        with patch('helpdesk.wecom_control_ocr.locate_copy',return_value={'loc':[12,13]}) as locate:
+            with self.assertRaisesRegex(ValueError,'MESSAGE_LAYOUT_CHANGED'):
+                self.service._copy_point(record,recipe,self.pin)
+            locate.assert_not_called()
+            recipe['ocr_search_box']=[0,0,20,20]
+            self.assertEqual(self.service._copy_point(record,recipe,self.pin),[12,13])
+            self.assertEqual(locate.call_args.kwargs['display_index'],0)
+        self.assertEqual(self.transport.calls,[])
+
     def test_prepare_only_uses_original_outbox_and_never_sends_or_completes(self):
         result=self.service.call('prepare_reply',outbox_id='reply')
         self.assertEqual(result['status'],'PREPARED_VERIFIED')
