@@ -7,6 +7,7 @@ Neither a model's approval nor an exit code alone proves teaching correctness.
 from hashlib import sha256
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -18,7 +19,7 @@ from .teaching_bundle import verify_frozen_teaching
 
 
 MAX_BYTES = 1_000_000
-KINDS = {'阅读理解': 'reading', '完形填空': 'cloze'}
+KINDS = {'阅读理解': 'reading', '完形填空': 'cloze', '七选五': 'seven-five'}
 
 
 class LessonCheckError(ValueError):
@@ -32,7 +33,12 @@ def _source(snapshot):
             or not question.number.isdigit() or not 1 <= int(question.number) <= 999):
         raise LessonCheckError('ANSWER_CHECK_REQUIRES_VERIFIED_STUDENT_SOURCE')
     # Preserve the student's text and labels; only introduce ordinary separators.
-    text = material + '\n\n' + question.number + '. ' + question.verified_stem + '\n'
+    if question.kind == 'seven_five_blank':
+        if not re.search(r'_{2,}\s*' + re.escape(question.number) + r'\s*_{2,}', material):
+            raise LessonCheckError('ANSWER_CHECK_BLANK_NOT_IN_STUDENT_MATERIAL')
+        text = material + '\n\n'
+    else:
+        text = material + '\n\n' + question.number + '. ' + question.verified_stem + '\n'
     text += '\n'.join(o.label + '. ' + o.verified_text for o in sorted(question.options, key=lambda o: o.order))
     if len(text.encode('utf-8')) > MAX_BYTES:
         raise LessonCheckError('ANSWER_CHECK_INPUT_TOO_LARGE')
@@ -43,6 +49,9 @@ def _contract(snapshot, manifest):
     if manifest.get('format_version') != 3 or manifest.get('required_task_checks') != ['SOURCE', 'DRAFT']:
         raise LessonCheckError('ANSWER_TASK_CHECK_CONTRACT_REQUIRED')
     kind = KINDS.get(manifest['question_type'])
+    question_kind = snapshot['student_question'].get('kind', 'single_choice')
+    if question_kind != ('seven_five_blank' if kind == 'seven-five' else 'single_choice'):
+        raise LessonCheckError('ANSWER_CHECK_QUESTION_KIND_MISMATCH')
     if not kind or len(manifest['required_dependencies']) != 1:
         raise LessonCheckError('ANSWER_CHECKER_ROUTE_NOT_SUPPORTED')
     source = _source(snapshot)

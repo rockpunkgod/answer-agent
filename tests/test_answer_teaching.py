@@ -318,13 +318,17 @@ class AnswerTeachingTests(unittest.TestCase):
             verify_bundle(path, for_generation=True)
 
     def test_task_checked_build_blocks_missing_dependency_and_unsupported_shape(self):
-        for kind in ('七选五', '语法填空', '应用文', '读后续写'):
+        seven = self.bundle('七选五', for_generation=True)
+        self.assertTrue(verify_bundle(seven, for_generation=True)['answer_generation_allowed_by_course'])
+        for kind in ('语法填空', '应用文', '读后续写'):
             with self.subTest(kind=kind), self.assertRaisesRegex(source.TeachingSourceError, 'TASK_SHAPE_NOT_SUPPORTED'):
                 self.bundle(kind, for_generation=True)
             self.assertIsNotNone(self.bundle(kind))
         self.remove_required_checker()
         with self.assertRaisesRegex(source.TeachingSourceError, 'REQUIRED_DEPENDENCIES_MISSING'):
             self.bundle(for_generation=True)
+        with self.assertRaisesRegex(source.TeachingSourceError, 'REQUIRED_DEPENDENCIES_MISSING'):
+            self.bundle('七选五', for_generation=True)
 
     def test_task_check_contract_cannot_be_removed(self):
         path = self.bundle(for_generation=True)

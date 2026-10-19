@@ -35,8 +35,9 @@ def _unique_node(tree: str, pattern: str, label: str):
 def question_text_fields(snapshot):
     question = snapshot['student_question']
     options = question.get('options', [])
-    if len(options) != 4 or {x.get('label') for x in options} != set('ABCD'):
-        raise ValueError('Text-only preparation requires four verified A-D options')
+    labels = {'single_choice':'ABCD', 'seven_five_blank':'ABCDEFG'}.get(question.get('kind', 'single_choice'))
+    if not labels or len(options) != len(labels) or {x.get('label') for x in options} != set(labels):
+        raise ValueError('Text-only preparation requires all verified options of the question kind')
     fields = {'passage': snapshot['student_material'], 'number': question.get('number'),
               'stem': question.get('verified_stem'),
               'options': {x['label']: x.get('verified_text') for x in options}}

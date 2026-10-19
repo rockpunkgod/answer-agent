@@ -64,10 +64,15 @@ class Question:
             raise ValueError("Option provenance is required")
 
     @property
+    def option_labels(self) -> str:
+        return {'single_choice': 'ABCD', 'seven_five_blank': 'ABCDEFG'}.get(self.kind, '')
+
+    @property
     def complete(self) -> bool:
         return (bool(self.verified_stem and self.verified_stem.strip()) and not self.uncertain_fields
-                and self.visual_evidence is not None and self.kind == "single_choice"
-                and len(self.options) == 4 and {o.label for o in self.options} == set("ABCD")
+                and self.visual_evidence is not None and bool(self.option_labels)
+                and len(self.options) == len(self.option_labels)
+                and {o.label for o in self.options} == set(self.option_labels)
                 and all(bool(o.verified_text and o.verified_text.strip()) for o in self.options))
 
     def to_dict(self) -> dict:
@@ -194,14 +199,14 @@ def compare(reference_version: str, reference: Question, reference_material: str
         return result([Difference.DIFFERENT], "Material and stem differ; no migration")
     if not material_equal or not stem_equal or reference.visual_evidence != student.visual_evidence:
         return result([Difference.SUBSTANTIVE], "Material, stem or visual evidence changed")
-    if reference.kind != "single_choice" or student.kind != "single_choice":
+    if reference.kind != student.kind or not reference.option_labels:
         return result([Difference.UNCERTAIN], "Unsupported question kind")
     for question in (reference, student):
-        if len(question.options) != 4 or {o.label for o in question.options} != set("ABCD"):
-            return result([Difference.UNCERTAIN], "Requires exactly four A-D options")
+        if len(question.options) != len(question.option_labels) or {o.label for o in question.options} != set(question.option_labels):
+            return result([Difference.UNCERTAIN], "Requires all options of the verified question kind")
         texts = [normalize(o.verified_text) for o in question.options]
         position_dependent = r"\b(?:both|either|neither|all|none|above|below)\b|以上|下列|上述|两项"
-        if any(re.search(position_dependent, text, re.I) or re.search(r"\b[A-D]\b", text) for text in texts):
+        if any(re.search(position_dependent, text, re.I) or re.search(r"\b[" + question.option_labels + r"]\b", text) for text in texts):
             return result([Difference.UNCERTAIN], "Potential label/order dependency; manual review")
         for i, text in enumerate(texts):
             for other in texts[i + 1:]:
@@ -225,6 +230,8 @@ def mapped_label(comparison: Comparison, reference_version: str, student_version
     if (reference_version, student_version) != (comparison.reference_version, comparison.student_version):
         raise ValueError("Mapping belongs to different versions")
     mapping = dict(comparison.option_mapping)
-    if len(mapping) != 4 or correct_reference_option_id not in mapping:
+    if (not student.complete or len(mapping) != len(student.options)
+            or set(mapping.values()) != {o.id for o in student.options}
+            or correct_reference_option_id not in mapping):
         raise ValueError("No verified one-to-one mapping")
     return next(o.label for o in student.options if o.id == mapping[correct_reference_option_id])

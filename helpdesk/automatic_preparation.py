@@ -112,7 +112,9 @@ def _source_review(store, task_id, *, allow_ego=False, allow_completed=False):
     expected = {key: payload[key] for key in ('passage', 'stem', 'number', 'options')}
     snapshot_images = canonical_attachments(snapshot['attachments']) if source else snapshot['attachments']
     _require(question_text_fields(snapshot) == expected
-             and payload['attachments'] == snapshot_images,
+             and payload['attachments'] == snapshot_images
+             and snapshot['student_question'].get('kind', 'single_choice') ==
+                 ('seven_five_blank' if payload['question_type'] == '七选五' else 'single_choice'),
              'REVIEWED_SOURCE_FIELDS_CHANGED')
     _require(draft['intent'] == snapshot['intent'], 'REVIEWED_SOURCE_INTENT_CHANGED')
     expected_words = payload['request_text'] if source else (payload['request_text'].strip() or f"请讲解第{payload['number']}题。")

@@ -155,9 +155,9 @@ def _bundle_key(pin, question_type, request_kind, hashes, *, for_generation=Fals
 def build_answer_bundle(*, question_type, output_root, request_kind='answer', repository=None, for_generation=False):
     if type(for_generation) is not bool:
         raise TeachingSourceError('ANSWER_BUILD_MODE_INVALID')
-    # The current Question/generation contract supports four-option objective
-    # tasks. Preserve the other original source previews and manual workflows.
-    if for_generation and (question_type not in ('阅读理解', '完形填空') or request_kind != 'answer'):
+    # Each run answers one verified subquestion. Seven-five blanks retain all
+    # seven original choices; this does not approve an unpartitioned whole paper.
+    if for_generation and (question_type not in ('阅读理解', '完形填空', '七选五') or request_kind != 'answer'):
         raise TeachingSourceError('ANSWER_AUTOMATIC_TASK_SHAPE_NOT_SUPPORTED')
     pin = source_pin()
     root = _repository(repository, pin)
@@ -241,7 +241,7 @@ def _verify_answer_bundle(manifest_path, *, check_sources):
         raise TeachingSourceError('ANSWER_SOURCE_PIN_MISMATCH')
     route, selected, required = _selection(manifest['question_type'], manifest['request_kind'])
     active = manifest['format_version'] == 3
-    if active and (manifest['question_type'] not in ('阅读理解', '完形填空')
+    if active and (manifest['question_type'] not in ('阅读理解', '完形填空', '七选五')
                    or manifest['request_kind'] != 'answer'
                    or manifest.get('required_task_checks') != ['SOURCE', 'DRAFT']):
         raise TeachingSourceError('ANSWER_TASK_CHECK_CONTRACT_CHANGED')

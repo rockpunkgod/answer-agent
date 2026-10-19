@@ -397,7 +397,7 @@ class Workflow:
             else:
                 # A claimed answer letter must match the selected content. Follow-up mentions
                 # (e.g. '不选B') are not affirmative answer claims.
-                claims = re.findall(r"(?<!不)选\s*([A-D])", str(result.get("text", "")))
+                claims = re.findall(r"(?<!不)选\s*([A-G])", str(result.get("text", "")))
                 if any(letter != option["label"] for letter in claims):
                     error = error or "ANSWER_LABEL_MISMATCH"
             if not stale:

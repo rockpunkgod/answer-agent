@@ -62,10 +62,11 @@ def _payload(payload, *, complete=False):
         raise ValueError('Unsupported question_type')
     result['request_text'] = _text(payload.get('request_text', ''), 'request_text')
     options = payload.get('options', {})
-    if not isinstance(options, dict) or set(options) - set('ABCD'):
-        raise ValueError('Options must be an A-D object')
+    labels = 'ABCDEFG' if result['question_type'] == '七选五' else 'ABCD'
+    if not isinstance(options, dict) or set(options) - set(labels):
+        raise ValueError('Options must match the declared question type: ' + labels)
     result['options'] = {label: _text(options.get(label, ''), 'option ' + label, required=complete)
-                         for label in 'ABCD'}
+                         for label in labels}
     attachments = payload.get('attachments', [])
     if not isinstance(attachments, list) or len(attachments) > 20:
         raise ValueError('Invalid attachments')
@@ -274,7 +275,8 @@ class OperatorTasks:
             provenance = 'OPERATOR_TEST reviewed transcription: ' + source_evidence
             question = Question(payload['number'], payload['stem'], payload['stem'],
                 tuple(Option.confirmed(label, payload['options'][label], index, provenance)
-                      for index, label in enumerate('ABCD')), provenance)
+                      for index, label in enumerate(payload['options'])), provenance,
+                kind='seven_five_blank' if payload['question_type'] == '七选五' else 'single_choice')
             message_text = payload['request_text'].strip() or f"请讲解第{payload['number']}题。"
             outcome = app.ingest(Incoming(binding, message_text,
                 intent=Intent(draft['intent']), source='OPERATOR_TEST', observation_id=draft_id,
