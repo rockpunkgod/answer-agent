@@ -50,11 +50,11 @@ Edge对应入口为`ActivateEdgeOnDisplay`，只接受当前物理坐标`loc`和
 
 ego-lite 网页入口：`python -m tools.run_ego_deepseek --help`。使用已登录的 TaskSpace/Page，通过 DOM 上传原图、冻结 ANSWER 原文，直接发送题号和学生原话（如 `--question "第34题"`），直接获取自然语言讲解，无需截图定位。不上传内部上下文 JSON，不要求 DeepSeek 输出 JSON 或编号边界。调用的 `--space`、`--session-url`、`--request-id`（原 run + 阶段）、`--evidence-dir`由本机执行端固定，附件逐个用 `--attachment` 明确批准；也可用 `--prompt-file`直接读取学生原话。
 
-重复执行同一已捕获请求直接读取本地结果；提交不确定时仅使用原参数加 `--capture-only` 读取原会话，不能换请求编号重提。登录、人工接管、附件失败和题面更正应暂停。该入口是网页采集/生成 CLI，输出仍需原题目版本、ANSWER 和交付核验；当前没有把后台自动答疑队列切到 ego-lite，也不会因捕获草稿增加绩效。操作细节见 [ego-lite Skill 参考](skills/answer-agent-deepseek-web/references/ego-lite.md)。
+重复执行同一已捕获请求直接读取本地结果；提交不确定时仅使用原参数加 `--capture-only` 读取原会话，不能换请求编号重提。登录、人工接管、附件失败和题面更正应暂停。该入口是网页采集/生成 CLI，输出仍需原题目版本、ANSWER 和交付核验；后台队列已支持显式选择 ego-lite，但生产配置本轮未启用；捕获草稿不会增加绩效。操作细节见 [ego-lite Skill 参考](skills/answer-agent-deepseek-web/references/ego-lite.md)。
 
-已冻结的 ego 教学生成回流入口：`python -m tools.run_ego_answer --help`。它从原数据库按 `--run` 读取题目、版本和已绑定会话，核验已有第一阶段结果及固定 ANSWER，再上传原图和教学原文、发送原话，将自然语言结果交回原 Workflow/Outbox。未明确识别唯一答案、原题已更正、原始捕获变化时停止；完整草稿保持待交付，不能算完成或绩效。调用及未知结果进入原调用台账，金额没有账单仍未知。
+已冻结的 ego 教学生成回流入口：`python -m tools.run_ego_answer --help`。它从原数据库按 `--run` 读取题目、版本和已绑定会话，核验已确认原题、当前版本及固定 ANSWER，再上传原图和教学原文、发送原话，将自然语言结果交回原 Workflow/Outbox。未明确识别唯一答案、原题已更正、原始捕获变化时停止；完整草稿保持待交付，不能算完成或绩效。调用及未知结果进入原调用台账，金额没有账单仍未知。
 
-该入口仅接受已由 `EgoDeepSeekGenerator` 冻结、已完成题面核验并绑定会话的 RUNNING run，不会改写旧 Windows-MCP run 的身份，也不会自动新建任务或会话。本地任务冻结 CLI 已可显式选择 ego；工作台自动排队、第一阶段核验和追问复用尚未适配 ego，因此仍不是后台队列切换完成；普通用户暂继续使用上一段网页入口获取草稿。CLI 不调用群发送。
+该入口仅接受已由 `EgoDeepSeekGenerator` 冻结、已完成原题清晰度确认的 RUNNING run，不会改写旧 Windows-MCP run 的身份，也不会自动新建任务或会话。本地任务冻结与工作台自动排队已支持显式选择 ego；新原题默认一次取答，不再依赖旧网页 MATCH。追问材料复用及真实队列联调仍待验证，尚不能据此宣称生产闭环稳定。CLI 不调用群发送。
 
 
 ## 收到与答案独立发送
@@ -266,4 +266,6 @@ python -m playwright install chromium
 
 独立模拟入口是 `.\run_demo.ps1`，端口8765，模拟数据与正式记录分开。
 
-本地已审核任务可用现有 `python -m tools.operator_task --database <本地库> freeze --help` 查看冻结参数，新增 `--ego-space <已有空间编号>` 与 `--ego-page p1`，不执行网页或发送。冻结后空间、页面、结果目录及后端写入原 run，重启沿用；不能把已冻结的旧 MCP run 改为 ego，也不能换空间绕过未知请求。`run_ego_answer` 只接受与冻结值相同的参数，第一阶段证据仍是先决条件。
+本地已审核任务可用现有 `python -m tools.operator_task --database <本地库> freeze --help` 查看冻结参数，新增 `--ego-space <已有空间编号>` 与 `--ego-page p1`，不执行网页或发送。冻结后空间、页面、结果目录及后端写入原 run，重启沿用；不能把已冻结的旧 MCP run 改为 ego，也不能换空间绕过未知请求。`run_ego_answer` 只接受与冻结值相同的参数，原消息审核、本机版本和固定教学来源仍是先决条件；新会话链接在首次生成后核验绑定。
+
+当前确认的 ego 流程是一次取答：题面确认 → 原任务排队 → 原图和教学原文上传 → 题号/原话 → 自然语言答案 → 原 Outbox。沿用现有自动答疑配置入口，设置 backend 为 ego_lite、space_id 为已有 TaskSpace 编号、page 为已有页面标签，并显式启用 enabled；不需要 display_index、new_chat_button 或旧 preparation_controls。配置来自本机，网页请求不能修改空间、附件目录或收件人。默认配置和生产库本轮未自动切换。

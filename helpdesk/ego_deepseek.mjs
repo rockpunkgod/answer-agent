@@ -32,8 +32,19 @@ export async function run(request) {
   if(request.capture_only && !['SUBMISSION_INTENT','SUBMITTED'].includes(persisted.phase)) throw new Error('NOT_SUBMITTED');
   const task = await taskSpace(request.space_id);
   const page = task.page(request.page);
-  if (await page.url() !== request.session_url) await page.goto(request.session_url);
-  if (await page.url() !== request.session_url) throw new Error('LOGIN_OR_SESSION_MISMATCH');
+  const expected=persisted.resolved_session_url || request.session_url;
+  const isChat=url=>/^https:\/\/chat\.deepseek\.com\/a\/chat\/s\/[A-Za-z0-9-]+$/.test(url);
+  if(request.new_session && request.capture_only && !persisted.resolved_session_url) {
+    // Unknown first Enter: observe the original page, never navigate to a blank chat.
+    throw new Error('NEW_SESSION_IDENTITY_REQUIRES_MANUAL_CHECK');
+  } else {
+    if (await page.url() !== expected) await page.goto(expected);
+    if (await page.url() !== expected) throw new Error('LOGIN_OR_SESSION_MISMATCH');
+  }
+  if(request.new_session && !request.capture_only) {
+    const count=await page.evaluate(selector=>document.querySelectorAll(selector).length,answers);
+    if(count !== 0) throw new Error('NEW_CHAT_NOT_EMPTY');
+  }
   if (!request.capture_only) {
     const state = JSON.parse(await fs.readFile(request.state_path, 'utf8'));
     if (state.fingerprint !== request.fingerprint || state.phase !== 'PREPARING') throw new Error('PRIOR_ATTEMPT');
@@ -64,17 +75,26 @@ export async function run(request) {
     if(baseline.some(key=>key === null || key === undefined)) throw new Error('ANSWER_IDENTITY_UNAVAILABLE');
     await saveState(request,{phase:'SUBMISSION_INTENT',baseline_answer_keys:baseline}); // Persist before Enter.
     await page.press(editor,'Enter');
-    await saveState(request,{phase:'SUBMITTED'});
+    if(request.new_session) {
+      await page.waitForFunction(()=>/^https:\/\/chat\.deepseek\.com\/a\/chat\/s\/[A-Za-z0-9-]+$/.test(location.href),null,{timeout:15_000});
+      const created=await page.url();
+      if(!isChat(created)) throw new Error('NEW_SESSION_IDENTITY_REQUIRES_MANUAL_CHECK');
+      await saveState(request,{phase:'SUBMITTED',resolved_session_url:created});
+    } else await saveState(request,{phase:'SUBMITTED'});
   }
   const saved=JSON.parse(await fs.readFile(request.state_path,'utf8'));
   if(!request.response_token && !Array.isArray(saved.baseline_answer_keys)) throw new Error('MISSING_REPLY_BASELINE');
   const capture={selector:answers,token:request.response_token,baseline:saved.baseline_answer_keys || []};
   await page.waitForFunction(readReply,capture,{timeout:request.timeout_ms});
-  if (await page.url() !== request.session_url) throw new Error('SESSION_CHANGED');
+  const resolved=await page.url();
+  if(request.new_session) {
+    if(!isChat(resolved) || (saved.resolved_session_url && saved.resolved_session_url !== resolved)) throw new Error('SESSION_CHANGED');
+    await saveState(request,{resolved_session_url:resolved});
+  } else if(resolved !== request.session_url) throw new Error('SESSION_CHANGED');
   const response=await page.evaluate(readReply,capture);
   if(!response) throw new Error('OUTPUT_NOT_UNIQUE');
   const result={adapter:'EGO_LITE',space_id:request.space_id,page:request.page,
-    session_url:request.session_url,response_token:request.response_token,text:response,
+    session_url:resolved,response_token:request.response_token,text:response,
     complete:true,completion_evidence:request.response_token?'END_MARKER_AND_READ_ALOUD_CONTROL':'NEW_ASSISTANT_AND_READ_ALOUD_CONTROL',
     upload_manifest:request.files,delivered:false,formal_statistics_eligible:false};
   const raw=JSON.stringify(result,null,2);

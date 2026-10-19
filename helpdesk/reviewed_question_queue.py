@@ -135,6 +135,16 @@ def _validate_admission_materials(store, row):
     return task
 
 
+def _ego_admission(store, task_id):
+    rows = store.all("SELECT details FROM audit WHERE event='REVIEWED_QUESTION_ADMISSION_REQUESTED' AND json_extract(details,'$.task_id')=?", (task_id,))
+    _require(len(rows) <= 1, 'ADMISSION_BACKEND_EVIDENCE_CHANGED')
+    value = json.loads(rows[0][0]).get('ego_browser') if rows else None
+    if value is None:
+        return {}
+    _require(isinstance(value,dict) and set(value)=={'space_id','page'}, 'ADMISSION_BACKEND_EVIDENCE_CHANGED')
+    return {'ego_space':value['space_id'],'ego_page':value['page']}
+
+
 def _resume_admission(store, row):
     if row['phase'] in ('NEEDS_ATTENTION', 'ENQUEUED'):
         return
@@ -156,7 +166,7 @@ def _resume_admission(store, row):
             _set_admission(store, row['task_id'], 'WAITING_ACK', 'ACK_REQUIRED')
             return
         enqueue(store, row['task_id'], row['manifest_path'], preparation_path=row['preparation_path'],
-                evidence_dir=row['evidence_dir'], candidate_path=row['candidate_path'])
+                evidence_dir=row['evidence_dir'], candidate_path=row['candidate_path'], **_ego_admission(store,row['task_id']))
         _set_admission(store, row['task_id'], 'ENQUEUED')
     except Exception as exc:
         if isinstance(exc, ValueError) and str(exc) in ('ACK_REQUIRED', 'STOPPED'):
@@ -165,7 +175,8 @@ def _resume_admission(store, row):
             _set_admission(store, row['task_id'], 'NEEDS_ATTENTION', 'ADMISSION_VALIDATION_FAILED:' + type(exc).__name__)
 
 
-def request_enqueue(store, task_id, manifest, *, preparation_path=None, evidence_dir=None, candidate_path=None):
+def request_enqueue(store, task_id, manifest, *, preparation_path=None, evidence_dir=None, candidate_path=None,
+                    ego_space=None, ego_page='p1'):
     """Persist trusted scheduling intent, then admit if actual ACK/stop allow it.
 
     A WAITING_ACK task stays reviewed but unfrozen. Later resume_pending reuses
@@ -173,6 +184,11 @@ def request_enqueue(store, task_id, manifest, *, preparation_path=None, evidence
     Configuration must come from trusted backend state, never browser payload.
     """
     _require(not store.connection.in_transaction, 'COMMITTED_REVIEW_TRANSACTION_REQUIRED')
+    if ego_space is not None:
+        from .ego_generation import EgoDeepSeekGenerator
+        EgoDeepSeekGenerator(ego_space, evidence_dir or Path(store.path).parent, page=ego_page)
+    elif ego_page != 'p1':
+        raise ValueError('ego_page requires ego_space')
     with resource_lock(str(Path(store.path).resolve()) + '.reviewed-question-admissions.lock'):
         _, task, _ = _reviewed_task(store, task_id)
         prep, evidence, candidate = _paths(store, task, preparation_path, evidence_dir, candidate_path)
@@ -182,6 +198,8 @@ def request_enqueue(store, task_id, manifest, *, preparation_path=None, evidence
         config = (str(manifest), digest, str(prep), str(evidence), str(candidate))
         row = store.one('SELECT * FROM reviewed_question_admissions WHERE task_id=?', (task_id,))
         if row:
+            expected_backend = {'ego_space':ego_space,'ego_page':ego_page} if ego_space is not None else {}
+            _require(_ego_admission(store,task_id) == expected_backend, 'ADMISSION_BACKEND_CHANGED')
             _require(tuple(row[k] for k in ('manifest_path', 'manifest_sha256', 'preparation_path', 'evidence_dir', 'candidate_path')) == config,
                      'ADMISSION_CONFIGURATION_CHANGED')
         else:
@@ -191,7 +209,8 @@ def request_enqueue(store, task_id, manifest, *, preparation_path=None, evidence
                     (task_id,manifest_path,manifest_sha256,preparation_path,evidence_dir,candidate_path,
                      phase,created_at,updated_at) VALUES(?,?,?,?,?,?,'READY_FOR_ENQUEUE',?,?)''',
                     (task_id, *config, timestamp, timestamp))
-                _admission_audit(store, task_id, 'REVIEWED_QUESTION_ADMISSION_REQUESTED', {'phase': 'READY_FOR_ENQUEUE'})
+                _admission_audit(store, task_id, 'REVIEWED_QUESTION_ADMISSION_REQUESTED',
+                    {'phase':'READY_FOR_ENQUEUE', **({'ego_browser':{'space_id':ego_space,'page':ego_page}} if ego_space is not None else {})})
             row = store.one('SELECT * FROM reviewed_question_admissions WHERE task_id=?', (task_id,))
         _resume_admission(store, row)
         return next(a for a in list_admissions(store) if a['task_id'] == task_id)
@@ -271,7 +290,8 @@ def _generated_outbox(store, run_id):
     return answer
 
 
-def enqueue(store, task_id, manifest, *, preparation_path=None, evidence_dir=None, candidate_path=None):
+def enqueue(store, task_id, manifest, *, preparation_path=None, evidence_dir=None, candidate_path=None,
+            ego_space=None, ego_page='p1'):
     """Freeze an already reviewed task and queue it without desktop execution.
 
     Call after the initial review transaction commits. Repeated identical calls
@@ -281,7 +301,8 @@ def enqueue(store, task_id, manifest, *, preparation_path=None, evidence_dir=Non
     with resource_lock(str(Path(store.path).resolve()) + '.reviewed-question-enqueue.lock'):
         tasks, task, _ = _reviewed_task(store, task_id)
         prep, evidence, candidate = _paths(store, task, preparation_path, evidence_dir, candidate_path)
-        task = tasks.freeze(task_id, teaching_manifest=manifest, preparation_path=prep, evidence_dir=evidence)
+        task = tasks.freeze(task_id, teaching_manifest=manifest, preparation_path=prep, evidence_dir=evidence,
+                            **({'ego_space':ego_space,'ego_page':ego_page} if ego_space is not None else {}))
         _schema(store)
         existing = store.one('SELECT * FROM reviewed_question_queue WHERE task_id=?', (task_id,))
         if existing:
@@ -290,9 +311,9 @@ def enqueue(store, task_id, manifest, *, preparation_path=None, evidence_dir=Non
             # Terminal runs are authoritative and are never frozen/generated again.
             run = store.one('SELECT state FROM runs WHERE id=?', (task['run_id'],))
             if run[0] == 'RUNNING':
-                _source_review(store, task_id)
+                _source_review(store, task_id, allow_ego=True)
             return get(store, task_id)
-        _source_review(store, task_id)
+        _source_review(store, task_id, allow_ego=True)
         timestamp = now()
         with store.transaction():
             store.execute('''INSERT INTO reviewed_question_queue
@@ -323,7 +344,22 @@ def _authoritative_result(store, task_id, *, recover_attempts=True):
     if run['state'] != 'RUNNING':
         _phase(store, task_id, 'NEEDS_ATTENTION', reason='AUTHORITATIVE_RUN_' + run['state'])
         return None, None, 'NEEDS_ATTENTION'
-    checked_task, snapshot, _ = _source_review(store, task_id)
+    checked_task, snapshot, _ = _source_review(store, task_id, allow_ego=True)
+    if snapshot.get('generation_adapter') == 'EGO_LITE_DEEPSEEK':
+        _require(snapshot.get('ego_policy') == 'DIRECT_ORIGINAL', 'EGO_DIRECT_POLICY_REQUIRED')
+        saved_state = Path(task['evidence_dir']) / (run['id']+'-teach.state.json')
+        if saved_state.is_file() and json.loads(saved_state.read_text(encoding='utf-8')).get('phase') == 'CAPTURED':
+            # Only an already completed local capture may recover implicitly.
+            # UNKNOWN requires explicit read-only reconciliation, never a new call.
+            from .ego_generation import run_existing
+            browser=snapshot['ego_browser']
+            recovered=run_existing(store,run['id'],browser['space_id'],task['evidence_dir'],
+                                   page=browser['page'],capture_only=True)
+            if recovered.get('state'):
+                return _authoritative_result(store,task_id,recover_attempts=recover_attempts)
+        _phase(store, task_id, 'READY_FOR_GENERATION')
+        # No separate webpage MATCH or upload stage in the approved direct policy.
+        return checked_task, snapshot, 'GENERATION'
     owned = store.one('SELECT session_url FROM deepseek_chats WHERE session_id=?', (run['session_id'],))
     if owned:
         _require(not queue['session_url'] or queue['session_url'] == owned[0], 'QUEUE_CHAT_CHANGED')
@@ -402,7 +438,7 @@ def advance(store, task_id, *, executor=None, session_creator=None, preparer=Non
             return get(store, task_id)
         if executor != 'LUNA' or callback is None:
             phase = {'SESSION_CREATION': 'WAITING_DESKTOP_EXECUTOR', 'PREPARATION': 'READY_FOR_PREPARATION',
-                     'GENERATION': 'ATTACHMENTS_READY'}[stage]
+                     'GENERATION': 'READY_FOR_GENERATION' if snapshot.get('generation_adapter') == 'EGO_LITE_DEEPSEEK' else 'ATTACHMENTS_READY'}[stage]
             _phase(store, task_id, phase, reason='LUNA_EXECUTOR_REQUIRED:' + stage)
             return get(store, task_id)
         _require(callable(callback), 'EXECUTOR_CALLBACK_MUST_BE_CALLABLE')
@@ -422,7 +458,7 @@ def advance(store, task_id, *, executor=None, session_creator=None, preparer=Non
                 _require(isinstance(result, str), 'EXACT_CREATED_CHAT_URL_REQUIRED')
                 # A blank webpage may acquire its real URL during the first
                 # matching request. Recheck the now-persisted frozen context.
-                _, current_snapshot, _ = _source_review(store, task_id)
+                _, current_snapshot, _ = _source_review(store, task_id, allow_ego=True)
                 claim_deepseek_chat(current_snapshot, result)
                 _phase(store, task_id, 'READY_FOR_PREPARATION', session_url=result)
             elif stage == 'PREPARATION':

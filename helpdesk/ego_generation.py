@@ -1,7 +1,8 @@
 """Natural-language ego teaching results into the existing Workflow/Outbox.
 
-Requires an already frozen run and verified first-stage receipt. No sending,
-new session creation, JSON uploads, or independent completion ledger.
+Requires a frozen DIRECT_ORIGINAL run and its original source clarity review.
+One native request creates/binds its chat if needed. No sending, JSON uploads,
+or independent completion ledger.
 """
 from contextlib import closing
 from hashlib import sha256
@@ -15,7 +16,21 @@ from .mcp_generation import input_fingerprint, delivery_context
 from .session_isolation import claim_deepseek_chat
 from .storage import Store, encode, now
 from .teaching_bundle import verify_frozen_teaching
-from .question_matching import frozen_receipt
+
+
+def validate_direct_source(snapshot, *, allow_completed=False):
+    """One existing source review and local version checks; no webpage MATCH."""
+    if snapshot.get('ego_policy') != 'DIRECT_ORIGINAL':
+        raise ValueError('EGO_DIRECT_POLICY_REQUIRED')
+    from .automatic_preparation import _source_review
+    with closing(Store(Path(snapshot['session_store_path']).resolve(strict=True))) as store:
+        task = store.one('SELECT id FROM operator_tasks WHERE run_id=?',(snapshot['run_id'],)) if store.one(
+            "SELECT 1 FROM sqlite_master WHERE type='table' AND name='operator_tasks'") else None
+        if not task:
+            raise ValueError('EGO_REVIEWED_SOURCE_REQUIRED')
+        _, frozen, _ = _source_review(store, task[0], allow_ego=True, allow_completed=allow_completed)
+        if frozen != snapshot:
+            raise ValueError('EGO_SOURCE_SNAPSHOT_CHANGED')
 
 
 def selected_option(snapshot, text):
@@ -66,18 +81,21 @@ class EgoDeepSeekGenerator:
                 raise ValueError('EGO_CURRENT_QUESTION_CHANGED')
             chat = store.one('SELECT session_url FROM deepseek_chats WHERE session_id=?', (snapshot['session_id'],))
             if not chat:
-                raise ValueError('EGO_BOUND_SESSION_REQUIRED')
+                if snapshot.get('ego_request_url') != 'https://chat.deepseek.com/':
+                    raise ValueError('EGO_BOUND_SESSION_REQUIRED')
+                return 'https://chat.deepseek.com/'
             return chat['session_url']
 
     def generate(self, snapshot):
         manifest = verify_frozen_teaching(snapshot)
         url = self._current(snapshot)
-        # Never bypass the original version/mapping verification to simplify the UI.
-        frozen_receipt(snapshot, session_url=url)
+        validate_direct_source(snapshot)
         if manifest.get('format_version') == 3:
             from .lesson_checks import validate_source_check
             validate_source_check(snapshot, manifest=manifest)
-        claim_deepseek_chat(snapshot, url)
+        new_session = snapshot['ego_request_url'] == 'https://chat.deepseek.com/'
+        claim_deepseek_chat(snapshot, None if url == 'https://chat.deepseek.com/' else url,
+                            reserve=url != 'https://chat.deepseek.com/')
         skills = snapshot['teaching_skills']
         files = [Path(item['path']).resolve(strict=True) for item in skills]
         for item in snapshot['attachments']:
@@ -86,7 +104,7 @@ class EgoDeepSeekGenerator:
                 raise ValueError('EGO_STUDENT_ATTACHMENT_CHANGED')
             files.append(path)
         words = snapshot.get('student_words') or ''
-        prompt = words.strip() or '第' + str(snapshot['student_question']['number']) + '题'
+        prompt = words if words.strip() else '第' + str(snapshot['student_question']['number']) + '题'
         if not snapshot['attachments']:
             q = snapshot['student_question']
             prompt = '\n'.join([snapshot.get('student_material') or '', q['verified_stem'],
@@ -105,7 +123,8 @@ class EgoDeepSeekGenerator:
             raise ValueError('EGO_CALL_HISTORY_REQUIRES_REVIEW')
         call_id = calls[0]['call_id'] if calls else meter.start('DEEPSEEK_TEACH', self.identity, request_id, request_id)
         try:
-            captured = browser.submit(request_id, url, prompt, attachments=files, capture_only=self.capture_only)
+            captured = browser.submit(request_id, snapshot['ego_request_url'], prompt, attachments=files,
+                                      capture_only=self.capture_only, **({'new_session':True} if new_session else {}))
         except Exception:
             meter.finish(call_id, 'UNKNOWN', 'EGO_CAPTURE_NOT_CONFIRMED')
             raise
@@ -113,15 +132,26 @@ class EgoDeepSeekGenerator:
         evidence = 'sha256:' + sha256(proof.read_bytes()).hexdigest()
         meter.finish(call_id, 'CONFIRMED', evidence)
         meter.close('DEEPSEEK_TEACH', evidence)
+        # The approved direct policy makes no search or MATCH model calls.
+        meter.close('DEEPSEEK_MATCH', 'direct-original-policy')
+        meter.close('SEARCH', 'direct-original-policy')
         # Recheck while the browser was generating; the old answer must never pass.
         verify_frozen_teaching(snapshot)
-        self._current(snapshot)
-        frozen_receipt(snapshot, session_url=url)
+        current_url = self._current(snapshot)
+        validate_direct_source(snapshot)
+        resolved_url = captured.get('session_url')
+        if new_session and current_url == 'https://chat.deepseek.com/':
+            if not isinstance(resolved_url,str) or not re.fullmatch(r'https://chat\.deepseek\.com/a/chat/s/[A-Za-z0-9-]+',resolved_url):
+                raise ValueError('EGO_CREATED_SESSION_UNCONFIRMED')
+        elif resolved_url != current_url:
+            raise ValueError('EGO_CAPTURE_SESSION_CHANGED')
+        url = resolved_url
         if (captured.get('adapter') != 'EGO_LITE' or captured.get('complete') is not True
                 or captured.get('session_url') != url or not isinstance(captured.get('text'), str)
                 or captured.get('upload_manifest') != [
                     {'path':str(p),'name':p.name,'sha256':sha256(p.read_bytes()).hexdigest()} for p in files]):
             raise ValueError('EGO_CAPTURE_BINDING_CHANGED')
+        claim_deepseek_chat(snapshot, url)
         text = captured['text']
         option = selected_option(snapshot, text)
         details = {'input_fingerprint':input_fingerprint(snapshot), 'session_url':url,
@@ -156,7 +186,7 @@ def validate_ego_capture(store, snapshot, body, option_id=None):
             or captured.get('text') != body or selected_option(snapshot,body) != record['correct_option_id']
             or (option_id is not None and option_id != record['correct_option_id'])):
         raise ValueError('EGO_CAPTURE_EVIDENCE_CHANGED')
-    frozen_receipt(snapshot, session_url=chat[0])
+    validate_direct_source(snapshot, allow_completed=True)
     return record
 
 

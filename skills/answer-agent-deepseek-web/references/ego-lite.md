@@ -10,12 +10,16 @@
 
 每次脚本是新 UTF-8 `.mjs` 文件，仍复用同一 TaskSpace/Page。未知提交只用原参数加 `--capture-only` 读取，不重传、重提或改编号。已 CAPTURED 时直接验证哈希并返回原文件，零浏览器调用。
 
-回复与 CLI 输出保存在私有目录；正常只向模型返回状态、检查结论和证据路径。原生 ego 证据标 `EGO_LITE`，不能伪装成 Windows-MCP 原始 record。此入口仅获取草稿，原业务层仍负责题目版本、教学质量、实际交付和绩效；尚未接入后台自动队列。
+回复与 CLI 输出保存在私有目录；正常只向模型返回状态、检查结论和证据路径。原生 ego 证据标 `EGO_LITE`，不能伪装成 Windows-MCP 原始 record。此入口仅获取草稿，原业务层仍负责题目版本、教学质量、实际交付和绩效；现有后台队列已支持显式选择 ego_lite，真实联调仍未验收。
 
 旧标记协议仅能读取已有结果或恢复已提交请求，禁止用它建立新请求。正常任务不再额外执行旧 Windows-MCP 的准备、上下文 JSON 上传和第二套生成命令。
 
 同一 TaskSpace/Page 由程序跨进程串行；上一请求未核验时新请求报 EGO_PAGE_HAS_UNRESOLVED_REQUEST。只恢复原请求，不删除占用文件、不换 TaskSpace 绕过。准备中断需人工核验，不自动解除。
 
-已有 ego 冻结 run、原第一阶段核验及会话绑定齐全时，可用 `python -m tools.run_ego_answer --help` 回流原 Workflow/Outbox。不得把旧 MCP run 改名为 ego；该入口不负责冻结新任务、第一阶段和追问复用，现有后台默认入口仍未切换。原始捕获与 ANSWER 检查不通过时停下，不把草稿计作实际交付。
+已有 ego 冻结 run、原消息清晰度确认及本机版本校验齐全时，可用 `python -m tools.run_ego_answer --help` 回流原 Workflow/Outbox。不得把旧 MCP run 改名为 ego；新任务在首次生成后绑定真实会话链接；后台须显式选择 ego_lite，生产默认配置本轮未更改。原始捕获与 ANSWER 检查不通过时停下，不把草稿计作实际交付。
 
-本地已审核任务可经 `tools.operator_task freeze --ego-space <编号> --ego-page p1` 冻结为 ego run；空间、页面和结果目录之后不可换，旧 MCP run 不可改名。冻结不打开网页；工作台自动排队和第一阶段尚未切换，不把“冻结成功”当作网页完成。
+本地已审核任务可经 `tools.operator_task freeze --ego-space <编号> --ego-page p1` 冻结为 ego run；空间、页面和结果目录之后不可换，旧 MCP run 不可改名。冻结不打开网页；原队列可直接上传和生成，不再等待旧 MATCH/PREPARATION；不把“冻结成功”当作网页完成。
+
+2026-10-19 用户确认：默认原图＋ANSWER原文、题号/学生原话，一次自然语言取答。新 ego run 固定 DIRECT_ORIGINAL；取消旧网页 MATCH、上下文 JSON 上传和标记协议依赖，保留本机原消息审核、版本、选项、教学检查和原 Outbox。不要为了符合旧两阶段文档恢复多一次模型调用。
+
+新会话 Enter 后先记录真实 URL，再等待正文；若首次 Enter 未确认且没有 URL 记录，停在 NEW_SESSION_IDENTITY_REQUIRES_MANUAL_CHECK，不从当前页面猜学生归属。已记录 URL 的原请求可只读恢复，禁止回首页重发。

@@ -25,7 +25,7 @@ def _digest(path):
     return sha256(Path(path).read_bytes()).hexdigest()
 
 
-def _source_review(store, task_id):
+def _source_review(store, task_id, *, allow_ego=False, allow_completed=False):
     """Read and cross-check the original task, immutable revision and frozen run."""
     task = store.one('SELECT * FROM operator_tasks WHERE id=?', (task_id,))
     _require(task is not None and task['label'] in ('OPERATOR_TEST', 'SOURCE_MESSAGE'), 'REVIEWED_OPERATOR_TASK_REQUIRED')
@@ -44,7 +44,7 @@ def _source_review(store, task_id):
              'REVIEWED_SOURCE_REVISION_CHANGED')
     payload = json.loads(revision['payload'])
     run = store.one('SELECT * FROM runs WHERE id=?', (task['run_id'],))
-    _require(run is not None and run['state'] == 'RUNNING', 'RUNNING_FROZEN_RUN_REQUIRED')
+    _require(run is not None and run['state'] in (('RUNNING', 'GENERATED') if allow_completed else ('RUNNING',)), 'RUNNING_FROZEN_RUN_REQUIRED')
     snapshot = json.loads(run['input_json'])
     marker = snapshot.get('source_clarity_review' if source else 'operator_test', {})
     _require(all(isinstance(task[k], str) and task[k].strip()
@@ -83,7 +83,9 @@ def _source_review(store, task_id):
              and snapshot.get('question_id') == task['question_id']
              and snapshot.get('question_version') == task['question_version']
              and snapshot.get('context_revision') == task['context_revision']
-             and snapshot.get('generation_adapter') == PreparedDeepSeekGenerator.identity
+             and (snapshot.get('generation_adapter') == PreparedDeepSeekGenerator.identity
+                  or (allow_ego and snapshot.get('generation_adapter') == 'EGO_LITE_DEEPSEEK'
+                      and snapshot.get('ego_policy') == 'DIRECT_ORIGINAL'))
              and snapshot.get('simulated') is False
              and Path(snapshot.get('session_store_path', '')).resolve() == Path(store.path).resolve(),
              'FROZEN_RUN_TASK_MISMATCH')
@@ -99,6 +101,12 @@ def _source_review(store, task_id):
                  and binding['verified'] == 1 and binding['group_key'].startswith('local-operator-test:')
                  and binding['student_key'].startswith('local-fixture:'), 'OPERATOR_SOURCE_BINDING_CHANGED')
     context = Helpdesk(store).context(task['turn_id'])
+    if allow_completed:
+        own = {r[0] for r in store.all("SELECT id FROM outbox WHERE run_id=? AND state='SENT_UI_CONFIRMED'", (task['run_id'],))}
+        if own:
+            previous = [h for h in context['sent_history'] if h['outbox_id'] not in own]
+            context = {**context, 'sent_history':previous, 'previous_sent_answer':previous[-1]['body'] if previous else None,
+                       'previous_delivery_simulated':previous[-1]['simulated'] if previous else None}
     _require(input_fingerprint(snapshot) == task['input_fingerprint'] == input_fingerprint(context),
              'REVIEWED_INPUT_CHANGED')
     expected = {key: payload[key] for key in ('passage', 'stem', 'number', 'options')}

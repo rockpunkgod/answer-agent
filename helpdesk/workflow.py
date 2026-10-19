@@ -306,6 +306,9 @@ class Workflow:
                 if not isinstance(adapter, EgoDeepSeekGenerator):
                     raise ValueError('Trusted ego generation adapter required')
                 snapshot['ego_browser'] = adapter.browser_binding()
+                snapshot['ego_policy'] = 'DIRECT_ORIGINAL'
+                owned_chat = self.db.one('SELECT session_url FROM deepseek_chats WHERE session_id=?', (sid,))
+                snapshot['ego_request_url'] = owned_chat[0] if owned_chat else 'https://chat.deepseek.com/'
             snapshot["generation_adapter"] = adapter.identity
             snapshot["simulated"] = adapter.simulated
             snapshot["simulation"] = adapter.simulated
@@ -411,6 +414,7 @@ class Workflow:
             if simulated and correction and not stale and not error:
                 text = "更正/复核说明：以下按本轮题目重新核验，之前回答仅作历史记录。\n" + text
             if (not stale and not error and not simulated
+                    and adapter_identity != 'EGO_LITE_DEEPSEEK'
                     and any(s.get('required_task_checks') for s in snapshot.get('teaching_skills', []))):
                 from .question_matching import validate_receipt
                 try:

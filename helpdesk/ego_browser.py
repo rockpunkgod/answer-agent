@@ -39,10 +39,12 @@ class EgoDeepSeek:
         self.executable = Path(executable).resolve() if executable else ego_executable()
 
     def submit(self, request_id, session_url, prompt, *, attachments=(), response_token=None,
-               capture_only=False, timeout_ms=180_000):
+               capture_only=False, timeout_ms=180_000, new_session=False):
         if (not isinstance(request_id, str) or not re.fullmatch(r'[A-Za-z0-9_-]{1,100}', request_id)
                 or not isinstance(session_url, str)
-                or not re.fullmatch(r'https://chat\.deepseek\.com/a/chat/s/[A-Za-z0-9-]+', session_url)
+                or type(new_session) is not bool
+                or not (session_url == 'https://chat.deepseek.com/' if new_session else
+                        re.fullmatch(r'https://chat\.deepseek\.com/a/chat/s/[A-Za-z0-9-]+', session_url))
                 or response_token is not None and (not isinstance(response_token, str)
                     or not re.fullmatch(r'[A-Za-z0-9_-]{1,120}', response_token))
                 or not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 100_000
@@ -58,6 +60,8 @@ class EgoDeepSeek:
             raise BrowserPaused('ATTACHMENT_NAME_COLLISION')
         request = {'space_id': self.space_id, 'page': self.page, 'session_url': session_url,
                    'prompt': prompt, 'files': files, 'response_token': response_token}
+        if new_session:
+            request['new_session'] = True
         fingerprint = sha256(json.dumps(request, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
         self.directory.mkdir(parents=True, exist_ok=True)
         state_path = self.directory / (request_id + '.state.json')

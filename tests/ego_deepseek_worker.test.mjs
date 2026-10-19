@@ -23,6 +23,7 @@ async function fixture(options={}) {
     querySelectorAll(selector){return selector.startsWith('textarea')?[{value:state.value}]:[...(options.oldAnswer?[old]:[]),...(state.answer?[node]:[])]},
     querySelector(selector){return selector==='.aaff8b8f'?{innerText:options.uploadFailure?'approved.md 上传失败':'approved.md'}:{value:state.value}}
   };
+  globalThis.location={get href(){return state.url}};
   const page={
     async url(){return state.url},
     async goto(url){state.url=options.redirectLogin?'https://chat.deepseek.com/sign_in':url},
@@ -30,7 +31,7 @@ async function fixture(options={}) {
     async setInputFiles(){state.uploads++},
     async waitForFunction(fn,arg){if(!fn(arg))throw new Error('WAIT_CONDITION_FAILED')},
     async fill(selector,text){state.value=options.stagedMismatch?'wrong':text;if(options.moveAfterFill)state.url='https://example.org/'},
-    async press(){state.presses++;state.answer=options.plain?'第34题：这是自然语言答复。':'BEGIN_fixture\n{"text":"fixture"}\nEND_fixture';if(options.pressError)throw new Error('UNKNOWN_PRESS_OUTCOME')}
+    async press(){state.presses++;if(options.newChat)state.url='https://chat.deepseek.com/a/chat/s/created';state.answer=options.plain?'第34题：这是自然语言答复。':'BEGIN_fixture\n{"text":"fixture"}\nEND_fixture';if(options.pressError)throw new Error('UNKNOWN_PRESS_OUTCOME')}
   };
   globalThis.taskSpace=async()=>({page(){return page}});
   return {request,state,file,cleanup:()=>fs.rm(directory,{recursive:true,force:true})};
@@ -93,5 +94,53 @@ test('plain question and natural answer require no JSON or boundary markers',asy
     assert.equal(result.text,'第34题：这是自然语言答复。');
     assert.equal(result.completion_evidence,'NEW_ASSISTANT_AND_READ_ALOUD_CONTROL');
     assert.equal(f.state.presses,1);
+  }finally{await f.cleanup()}
+});
+
+
+test('one plain request creates and captures a new real chat URL',async()=>{
+  const f=await fixture({plain:true,newChat:true});try{
+    f.request.new_session=true;f.request.response_token=null;
+    f.request.session_url='https://chat.deepseek.com/';f.state.url=f.request.session_url;
+    await run(f.request);
+    const result=JSON.parse(await fs.readFile(f.request.output_path));
+    assert.equal(result.session_url,'https://chat.deepseek.com/a/chat/s/created');
+    assert.equal(f.state.presses,1);
+  }finally{await f.cleanup()}
+});
+
+test('unknown first Enter without a bound URL stops for manual identity verification',async()=>{
+  const f=await fixture({plain:true,newChat:true,pressError:true});try{
+    f.request.new_session=true;f.request.response_token=null;
+    f.request.session_url='https://chat.deepseek.com/';f.state.url=f.request.session_url;
+    await assert.rejects(run(f.request),/UNKNOWN_PRESS_OUTCOME/);
+    f.request.capture_only=true;
+    await assert.rejects(run(f.request),/NEW_SESSION_IDENTITY_REQUIRES_MANUAL_CHECK/);
+    assert.equal(f.state.url,'https://chat.deepseek.com/a/chat/s/created');
+    assert.equal(f.state.presses,1);
+  }finally{await f.cleanup()}
+});
+
+
+test('new request refuses a nonempty homepage instead of reusing another question',async()=>{
+  const f=await fixture({plain:true,oldAnswer:true,newChat:true});try{
+    f.request.new_session=true;f.request.response_token=null;
+    f.request.session_url='https://chat.deepseek.com/';f.state.url=f.request.session_url;
+    await assert.rejects(run(f.request),/NEW_CHAT_NOT_EMPTY/);
+    assert.equal(f.state.presses,0);assert.equal(f.state.uploads,0);
+  }finally{await f.cleanup()}
+});
+
+
+test('a new chat with a recorded URL resumes capture without another Enter',async()=>{
+  const options={plain:true,newChat:true,noFooter:true};
+  const f=await fixture(options);try{
+    f.request.new_session=true;f.request.response_token=null;
+    f.request.session_url='https://chat.deepseek.com/';f.state.url=f.request.session_url;
+    await assert.rejects(run(f.request),/WAIT_CONDITION_FAILED/);
+    assert.equal(JSON.parse(await fs.readFile(f.request.state_path)).resolved_session_url,
+                 'https://chat.deepseek.com/a/chat/s/created');
+    options.noFooter=false;f.request.capture_only=true;
+    await run(f.request);assert.equal(f.state.presses,1);
   }finally{await f.cleanup()}
 });

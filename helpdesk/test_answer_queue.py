@@ -47,7 +47,7 @@ def validate_source_answer(store, row, *, approval=True):
                 or any(s.get('required_task_checks') for s in frozen.get('teaching_skills', []))):
             from .lesson_checks import validate_task_checks
             validate_task_checks(store, frozen, row['body'])
-            if frozen.get('simulated') is False:
+            if frozen.get('simulated') is False and frozen.get('generation_adapter') != 'EGO_LITE_DEEPSEEK':
                 from .question_matching import validate_receipt
                 validate_receipt(store, frozen)
         if (row['state'] == 'PENDING' and frozen.get('simulated') is False

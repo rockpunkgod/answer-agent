@@ -268,8 +268,8 @@ function configureMode(data){
  }else if(realMode){
   document.title="英语答疑 · 真实已准备任务";
   document.getElementById("mode-label").textContent=questionAutoContinue?"题面确认后排队":"REAL · 已准备教学会话";
-  document.getElementById("mode-description").textContent=questionAutoContinue?"核对一次完整题面后交给后台队列，等待 Luna 操作真实 DeepSeek 网页。生成的完整讲解由你最后按发送。这里录入的本机测试题不计绩效。":"使用已核验的真实 DeepSeek 会话。答案审核后仅交付企业微信苇中鹤测试副本；界面发送确认不代表学生已收到，不计为学生绩效。";
-  document.getElementById("mode-footer").textContent=questionAutoContinue?"题面确认一次 · 等待 Luna 执行 · 讲解人工发送":"固定真实任务 · 限定测试联系人 · 群监听和全量历史尚未接入";
+  document.getElementById("mode-description").textContent=questionAutoContinue?"核对一次完整题面后交给后台队列，由后台执行已配置的 DeepSeek 网页流程。生成的完整讲解由你最后按发送。这里录入的本机测试题不计绩效。":"使用已核验的真实 DeepSeek 会话。答案审核后仅交付企业微信苇中鹤测试副本；界面发送确认不代表学生已收到，不计为学生绩效。";
+  document.getElementById("mode-footer").textContent=questionAutoContinue?"题面确认一次 · 后台生成讲解 · 讲解人工发送":"固定真实任务 · 限定测试联系人 · 群监听和全量历史尚未接入";
   document.getElementById("real-delivery-note").textContent=testDeliveryAvailable?"测试交付凭据已配置，执行时继续核验有效期和联系人。":"尚未配置已核验测试副本与联系人凭据，发送不可用。";
   const target=document.getElementById("real-jobs");target.replaceChildren();
   for(const job of Object.values(jobs))target.append(el("p","",`${actionNames[job.action]||job.action} · ${display(job.state,"state")} ${job.error||job.result?.reason||(job.result?.state?display(job.result.state,"state"):"")}`));
@@ -278,7 +278,7 @@ function configureMode(data){
  if(teachingBlocked)document.getElementById('operator-flow-note').textContent=teachingNote+'自动生成暂停，已有任务和人工交付登记保留。';
  updateButtons();
 }
-const queueNames={WAITING_ACK:'题面已确认，等待收到确认',STOPPED:'已暂停，保留题面确认',READY_FOR_ENQUEUE:'题面已确认，正在排队',WAITING_DESKTOP_EXECUTOR:'已排队，等待 Luna 操作',READY_FOR_PREPARATION:'独立会话已就绪，等待上传材料',ATTACHMENTS_READY:'材料已上传，等待生成',GENERATED:'已生成，等你按发送',SESSION_CREATION_STARTED:'正在新建独立会话',PREPARATION_STARTED:'正在上传材料',GENERATION_STARTED:'正在生成讲解',EXECUTION_UNCERTAIN:'操作结果需核实，已暂停重试',NEEDS_ATTENTION:'题面已确认，准备条件需检查'};
+const queueNames={WAITING_ACK:'题面已确认，等待收到确认',STOPPED:'已暂停，保留题面确认',READY_FOR_ENQUEUE:'题面已确认，正在排队',WAITING_DESKTOP_EXECUTOR:'已排队，等待 Luna 操作',READY_FOR_PREPARATION:'独立会话已就绪，等待上传材料',READY_FOR_GENERATION:'已排队，等待上传原图并生成',ATTACHMENTS_READY:'材料已上传，等待生成',GENERATED:'已生成，等你按发送',SESSION_CREATION_STARTED:'正在新建独立会话',PREPARATION_STARTED:'正在上传材料',GENERATION_STARTED:'正在生成讲解',EXECUTION_UNCERTAIN:'操作结果需核实，已暂停重试',NEEDS_ATTENTION:'题面已确认，准备条件需检查'};
 let operatorRenderedState='';
 async function refreshOperatorTasks(){
  const response=await fetch('/api/operator-tasks',{cache:'no-store'});

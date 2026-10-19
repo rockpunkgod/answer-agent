@@ -35,18 +35,21 @@ class EgoGenerationTests(unittest.TestCase):
         self.snapshot=json.loads(self.store.one('SELECT input_json FROM runs WHERE id=?',(self.run_id,))[0])
         self.url='https://chat.deepseek.com/a/chat/s/anonymous'
         claim_deepseek_chat(self.snapshot,self.url)
+        # This fixture starts with an independently bound, existing conversation.
+        self.snapshot['ego_request_url']=self.url
+        self.store.execute('UPDATE runs SET input_json=? WHERE id=?',(encode(self.snapshot),self.run_id))
         self.calls=[]
         self.body='第12题选D，因为应根据学生版本判断。'
         self.action=None
         self.patches=[patch('helpdesk.ego_generation.verify_frozen_teaching',return_value={}),
-            patch('helpdesk.ego_generation.frozen_receipt',return_value={}),
+            patch('helpdesk.ego_generation.validate_direct_source',return_value=None),
             patch('helpdesk.ego_generation.EgoDeepSeek',side_effect=lambda *a,**k:self)]
         for p in self.patches:p.start();self.addCleanup(p.stop)
 
-    def submit(self, request_id, url, prompt, *, attachments, capture_only):
+    def submit(self, request_id, url, prompt, *, attachments, capture_only, new_session=False):
         self.calls.append((request_id,url,prompt,attachments,capture_only))
         if self.action:self.action()
-        result={'adapter':'EGO_LITE','complete':True,'session_url':url,'text':self.body,
+        result={'adapter':'EGO_LITE','complete':True,'session_url':self.url if new_session else url,'text':self.body,
             'upload_manifest':[{'path':str(p),'name':p.name,'sha256':sha256(p.read_bytes()).hexdigest()} for p in attachments]}
         directory=self.root/'evidence';directory.mkdir(exist_ok=True)
         (directory/(request_id+'.answer.json')).write_text(json.dumps(result),encoding='utf-8')
@@ -91,7 +94,7 @@ class EgoGenerationTests(unittest.TestCase):
         self.assertEqual(self.store.one("SELECT COUNT(*) FROM outbox WHERE purpose='ANSWER'")[0],0)
 
     def test_unverified_match_or_changed_teaching_stops_before_browser(self):
-        for target in ['frozen_receipt','verify_frozen_teaching']:
+        for target in ['validate_direct_source','verify_frozen_teaching']:
             with patch('helpdesk.ego_generation.'+target,side_effect=ValueError('unverified')):
                 with self.assertRaisesRegex(ValueError,'unverified'):self.generator.generate(self.snapshot)
         self.assertEqual(self.calls,[])

@@ -639,3 +639,17 @@ OperatorTasks.freeze 增加 ego_space/ego_page；SourceQuestionTasks 继承原�
 `python -X utf8 -B -m unittest -q tests.test_operator_tasks tests.test_ego_generation tests.test_ego_browser tests.test_ego_worker tests.test_source_question_tasks tests.test_automatic_preparation tests.test_reviewed_question_queue`：80项 Python 测试通过（包含6项 JS 模拟用例），无跳过、失败。新增覆盖 ego 冻结重启、拒绝旧后端改名、换空间/页面/目录前停止。教学内容和网页依赖仍按各 fixture 标注为模拟，不代表真实 ANSWER/DeepSeek 验收。
 
 边界：工作台自动排队和第一阶段网页核验尚未切换；旧自动准备仍只接受原 MCP 身份，避免错误通道执行 ego 任务。本轮未真实外发、未修改生产库。最新用户“直接上传说明题号”与旧验收“两阶段结构化核验”存在流程冲突，已请求用户选定网页口径；在答案到达前不擅自实施冲突的第一阶段协议。整体 NOT_READY。
+
+## 用户确认一次取答，接入原后台队列（2026-10-19）
+
+最新明确选择：“直接上传原图和教学原文，题号/原话一次取答；保留本机版本检查”。该选择覆盖旧验收中两次网页调用和第一阶段结构化输出的冲突部分，历史规则保留，不伪造旧阶段完成。
+
+新 ego run 固定 DIRECT_ORIGINAL。原清晰度审核/学生身份/时间/版本/题目和教学文件核验继续执行；取消新任务对旧 MATCH 回执和上下文 JSON 的依赖，ANSWER 原检查仍保留。现有 admission/queue/runtime 支持 backend=ego_lite，直接进入 GENERATION，不再执行旧 SESSION_CREATION/PREPARATION 三次排队。后端选择保存在原 admission audit，等待 ACK、暂停及重启都沿用，不能换后端绕过冻结。没有数据库迁移。
+
+首次请求可从已管理 ego 页面空白首页开始，一次上传/提交后捕获真实会话 URL 并绑定原任务；未知 Enter 不回主页重新发；已有记录的真实 URL 可只读恢复，首次 Enter 未记录 URL 时要求人工核验身份，不猜测当前页面归属。原图与教学原文按明确允许文件上传，网页只发送学生原话和自然语言正文。新会话拒绝残留回复。已 CAPTURED 而尚未回流的 run 可从本地原结果恢复，UNKNOWN 不自动重放。原调用台账记录实际一次 TEACH；SEARCH/MATCH 按已确认直接模式标记未调用，不冒充实际检索或核验调用。
+
+匿名源库+真实 SQLite/业务校验+Mock ego已验证：审核→排队→一次生成→真实会话绑定→原 Outbox；等待 ACK 后按原后端恢复；缺少审核被拦截；提交未知停止；捕获后中断可复用原调用恢复，不再次提交。Native worker另增模拟新会话、未知首次 Enter 只读恢复和非空首页停止案例。真实上游 ANSWER/DeepSeek 仍未在新直接模式下联合验收；本轮不操作生产库、不外发。
+
+旧“网页口径待选择”“ego 队列尚未接线”是历史状态，本节取代；当前仍缺真实新直接模式联调、普通追问材料复用和完整 Level 3 稳定性/成本/交付验收，整体 NOT_READY。文件导入状态检查尚未修改，未将其称为持续监听。
+
+本轮回归：旧 reviewed_queue / automatic_answer_runtime / automatic_preparation / operator_tasks / ego_generation 共84项通过（541.333秒，包含原通道有界等待）；直接模式与采集工作台、原 Workflow、调用台账的相关回归另129项通过。用例集合有重叠，不累计宣传测试数。Native worker现为10项 JS 模拟用例；原图场景验证只上传教学原文与原图，原话逐字保留，包括首尾空白；另验证同一网页 URL 不可绑定另一个独立题目。新流程的真实网页与生产队列未验证，未把此前旧协议网页成功算作新流程通过。
