@@ -17,4 +17,4 @@ windows-test = ["Pillow==12.2.0"]
 include = ["helpdesk*"]
 
 [tool.setuptools.package-data]
-helpdesk = ["migrations/*.sql", "teaching/*.md", "static/*"]
+helpdesk = ["migrations/*.sql", "teaching/*.md", "static/*", "*.mjs"]

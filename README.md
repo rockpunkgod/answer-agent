@@ -48,6 +48,10 @@ Edge对应入口为`ActivateEdgeOnDisplay`，只接受当前物理坐标`loc`和
 
 也可用官方 [ChatGPT 浏览器扩展](https://learn.chatgpt.com/docs/chrome-extension) 在 Codex 中操作已登录的 Edge 网页：在桌面应用“设置 → Computer Use”启用 Edge，确认显示 Manage，再在会话里选择 `@Edge`。本机已检测到扩展文件；本会话连接、题图上传和 Python demo 独立调用尚未验证，暂作网页联调入口候选，不增加启动依赖。企业微信客户端仍使用现有 Windows-MCP。
 
+ego-lite 网页入口：`python -m tools.run_ego_deepseek --help`。使用已登录的 TaskSpace/Page，通过 DOM 上传原图、冻结 ANSWER 原文，直接发送题号和学生原话（如 `--question "第34题"`），直接获取自然语言讲解，无需截图定位。不上传内部上下文 JSON，不要求 DeepSeek 输出 JSON 或编号边界。调用的 `--space`、`--session-url`、`--request-id`（原 run + 阶段）、`--evidence-dir`由本机执行端固定，附件逐个用 `--attachment` 明确批准；也可用 `--prompt-file`直接读取学生原话。
+
+重复执行同一已捕获请求直接读取本地结果；提交不确定时仅使用原参数加 `--capture-only` 读取原会话，不能换请求编号重提。登录、人工接管、附件失败和题面更正应暂停。该入口是网页采集/生成 CLI，输出仍需原题目版本、ANSWER 和交付核验；当前没有把后台自动答疑队列切到 ego-lite，也不会因捕获草稿增加绩效。操作细节见 [ego-lite Skill 参考](skills/answer-agent-deepseek-web/references/ego-lite.md)。
+
 ## 收到与答案独立发送
 
 `AckTask`直接消费原消息的ACK Outbox，不等待OCR、题面审核或DeepSeek；`AnswerTask`消费原有答案/更正Outbox。二者复用同一发送台账和已有阶段策略，没有新增数据库或迁移。后台每秒调度一条到期任务，收到优先；生成等待不会占用该发送循环，UI操作期间不持有业务数据库写锁。审核是否必需仍由`stage.answer_review_required`控制：需要审核时批准后自动发，不需要时按原题面确认流程继续。MANUAL/DISABLED目的保持原义，开启发送循环不会改成AUTO。
