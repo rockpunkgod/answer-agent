@@ -1,5 +1,15 @@
 # 当前能力与缺口
 
+## ego 进程硬退出恢复与只读发送观察（2026-10-19）
+
+新增 `tests/test_ego_process_restart.py`，实际启动独立Python子进程，分别在PREPARING、SUBMISSION_INTENT、SUBMITTED、CAPTURED后直接os._exit，未走finally释放锁。父进程用同一证据目录和新的适配器恢复：未决任务不能普通重提或被其他请求占页；准备未完成转人工；提交后只允许capture_only；完整捕获直接读取、不调用网页，核验后释放页面占用。没有改生产逻辑、数据库或ANSWER。
+
+UNIT/MOCK：`python -X utf8 -B -m unittest -q tests.test_ego_process_restart tests.test_ego_browser tests.test_ego_worker tests.test_ego_generation tests.test_ego_direct_queue tests.test_call_costs`，64项通过，0失败、0跳过，12.130秒。子进程退出和文件锁是真实操作，ego网页工作器为Mock；不算真实浏览器中断或稳定性试运行通过。
+
+REAL只读观察：用户完成手机安全验证后，当前企业微信“苇中鹤”会话出现一条右侧“收到”，显示22:06。原生窗口句柄改变；当前目标标题区域摘要仍匹配原针脚，但账号头像区域摘要不同，原守卫停止。没有弱化全局检查，没有点击消息、复制、再次输入或发送；未取得原文回读或平台回执。原Outbox仍SEND_UNKNOWN、实际提交意图仍仅1次、绩效0。不能把视觉出现消息替代完整交付核验。私有观察证据保留本机，不进Git。
+
+整体NOT_READY：真实消息入口时延、测试群完整交付、真实绩效、费用及20任务稳定性仍未验收。后续继续原闭环，不增加生产通道或重构核心保护。
+
 ## 一次授权“收到”真实发送尝试与账号安全暂停（2026-10-19）
 
 用户明确授权仅向企业微信“苇中鹤”发送一次“收到”，不向学生群发、不计绩效。使用独立测试PROGRESS Outbox和原Workflow发送台账，不伪造学生消息、首次应答SLA或正式Ack完成。最初受控切窗入口因最大化边界不一致停止；随后用既有App切换，切换后独立读目标进程/会话。显示器拓扑在核验期间改变，旧索引0已指向另一屏，Luna返回STOP；未输入。新尝试按当前前台原生窗口中心匹配唯一显示器1，废弃旧位置；未降低原前台、几何或目标守卫。
