@@ -19,6 +19,10 @@ def main():
     create.add_argument('--intent', choices=['NEW', 'FOLLOWUP', 'CORRECTION'], default='NEW')
     create.add_argument('--parent-task')
     create.add_argument('--request-id', help='Stable client request ID for duplicate-safe creation')
+    followup = commands.add_parser('followup', help='Reuse an explicit test task with a plain UTF-8 message file; draft only')
+    followup.add_argument('--parent-task', required=True)
+    followup.add_argument('--message-file', required=True)
+    followup.add_argument('--request-id', required=True)
     revise = commands.add_parser('revise')
     revise.add_argument('--draft', required=True)
     revise.add_argument('--payload', required=True)
@@ -43,6 +47,9 @@ def main():
             result = intake.create_draft(json.loads(Path(args.payload).read_text(encoding='utf-8-sig')),
                                          intent=args.intent, parent_task_id=args.parent_task,
                                          request_id=args.request_id)
+        elif args.command == 'followup':
+            result = intake.create_followup_draft(args.parent_task,
+                Path(args.message_file).read_text(encoding='utf-8-sig'), request_id=args.request_id)
         elif args.command == 'revise':
             result = intake.revise(args.draft, json.loads(Path(args.payload).read_text(encoding='utf-8-sig')),
                                    expected_revision=args.revision)

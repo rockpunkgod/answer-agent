@@ -3,6 +3,8 @@ from hashlib import sha256
 import json
 from pathlib import Path
 import tempfile
+import subprocess
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -146,6 +148,49 @@ class OperatorTaskTests(unittest.TestCase):
         self.assertEqual(Helpdesk(self.db).context(independent['turn_id'])['student_material'], self.payload['passage'])
         with self.assertRaises(ValueError):
             self.intake.create_draft(self.payload, intent='FOLLOWUP')
+
+    def test_plain_followup_reuses_question_verbatim_without_ingest_until_review(self):
+        parent=self.review(self.intake.create_draft(self.payload))
+        before={t:self.db.one('SELECT count(*) FROM '+t)[0] for t in ('messages','outbox','turns','performance_units')}
+        words='  Why not A?\nPlease explain this sentence.  '
+        draft=self.intake.create_followup_draft(parent['id'],words,request_id='plain-followup')
+        original=self.intake.get_draft(parent['draft_id'])['payload']
+        self.assertEqual(draft['payload'],original | {'request_text':words})
+        self.assertEqual(draft['parent_task_id'],parent['id'])
+        self.assertEqual(before,{t:self.db.one('SELECT count(*) FROM '+t)[0] for t in before})
+        again=self.intake.create_followup_draft(parent['id'],words,request_id='plain-followup')
+        self.assertEqual(again['id'],draft['id'])
+        with self.assertRaisesRegex(ValueError,'content conflict'):
+            self.intake.create_followup_draft(parent['id'],'different words',request_id='plain-followup')
+        task=self.review(draft)
+        self.assertEqual(task['question_id'],parent['question_id'])
+        self.assertEqual(task['binding_id'],parent['binding_id'])
+        self.assertEqual(self.intake.create_followup_draft(parent['id'],words,request_id='plain-followup')['id'],draft['id'])
+        with self.assertRaises(ValueError):
+            self.intake.create_followup_draft(parent['id'],'new request',request_id='stale-parent')
+
+    def test_plain_followup_requires_nonempty_message_and_request_id(self):
+        parent=self.review(self.intake.create_draft(self.payload))
+        before=self.db.one('SELECT count(*) FROM operator_drafts')[0]
+        for words,key in [('  \n','empty'),('Why?','')]:
+            with self.assertRaises(ValueError):
+                self.intake.create_followup_draft(parent['id'],words,request_id=key)
+        self.assertEqual(self.db.one('SELECT count(*) FROM operator_drafts')[0],before)
+
+    def test_followup_cli_reads_utf8_words_without_starting_generation(self):
+        parent=self.review(self.intake.create_draft(self.payload))
+        words='  为什么不选A？\n这一句怎么理解？  '
+        path=self.base/'received.txt';path.write_bytes(words.encode('utf-8-sig'))
+        before={t:self.db.one('SELECT count(*) FROM '+t)[0] for t in ('messages','outbox','runs','performance_units')}
+        result=subprocess.run([sys.executable,'-X','utf8','-B','-m','tools.operator_task',
+            '--database',str(self.db.path),'followup','--parent-task',parent['id'],
+            '--message-file',str(path),'--request-id','cli-anonymous-followup'],
+            cwd=Path(__file__).resolve().parents[1],capture_output=True,text=True,encoding='utf-8',timeout=20)
+        self.assertEqual(result.returncode,0,result.stderr)
+        draft=json.loads(result.stdout)
+        self.assertEqual(draft['payload']['request_text'],words)
+        self.assertEqual(draft['status'],'DRAFT')
+        self.assertEqual(before,{t:self.db.one('SELECT count(*) FROM '+t)[0] for t in before})
 
     def test_pending_followup_draft_cannot_review_after_other_context_change(self):
         original = self.review(self.intake.create_draft(self.payload))

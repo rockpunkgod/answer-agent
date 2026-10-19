@@ -214,6 +214,18 @@ class OperatorTasks:
                                 (request_id, request_hash, draft_id))
         return self.get_draft(draft_id)
 
+    def create_followup_draft(self, parent_task_id, message, *, request_id):
+        """Copy an explicitly chosen test question; never classify or send."""
+        _text(message, 'request_text', required=True)
+        _text(request_id, 'request_id', required=True)
+        parent = self.get_task(parent_task_id)
+        if parent['label'] != 'OPERATOR_TEST':
+            raise ValueError('Explicit operator test parent required')
+        payload = dict(self.get_draft(parent['draft_id'])['payload'])
+        payload['request_text'] = message
+        return self.create_draft(payload, parent_task_id=parent_task_id,
+                                 intent='FOLLOWUP', request_id=request_id)
+
     def revise(self, draft_id, payload, *, expected_revision):
         payload = _payload(payload)
         with self.db.transaction():

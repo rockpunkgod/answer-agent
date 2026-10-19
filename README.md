@@ -59,6 +59,14 @@ ego-lite 网页入口：`python -m tools.run_ego_deepseek --help`。使用已登
 
 联系人联调沿用 `python -m tools.dispatch_test_answer --database <原库> --outbox <原TEST_ANSWER编号> --pin <当前有效针脚文件>`。明确未提交而输入框保留完整草稿时，可显式增加 `--resume-draft`，无需手改数据库；脚本核验失败证据、原题/版本/目标和完整草稿，跳过重贴正文再发送。最多3次显式恢复，历史UNKNOWN或成功回执禁止恢复；未知结果继续使用 `--inspect` 只读核验。已完成记录重复运行只读返回，不连接桌面。该入口只适用于已授权的“苇中鹤”测试副本，不提升为学生正式交付或绩效。
 
+普通追问的纯文本准备入口（仅隔离的 OPERATOR_TEST 联系人练习）：
+
+```powershell
+python -m tools.operator_task --database <原测试库> followup --parent-task <上一有效任务编号> --message-file <已保存的UTF-8原话文件> --request-id <本条唯一请求编号>
+```
+
+这一步只复用明确指定任务的题面、选项和附件，保留本轮原话，创建待核对草稿；不把它当成持续收题，不自动判断新题/更正，不生成或发送。重复编号内容相同返回原草稿，内容冲突或旧任务失效时停止。后续核对、冻结及生成仍使用原入口；无需再手写一份题目JSON。
+
 ## 收到与答案独立发送
 
 `AckTask`直接消费原消息的ACK Outbox，不等待OCR、题面审核或DeepSeek；`AnswerTask`消费原有答案/更正Outbox。二者复用同一发送台账和已有阶段策略，没有新增数据库或迁移。后台每秒调度一条到期任务，收到优先；生成等待不会占用该发送循环，UI操作期间不持有业务数据库写锁。审核是否必需仍由`stage.answer_review_required`控制：需要审核时批准后自动发，不需要时按原题面确认流程继续。MANUAL/DISABLED目的保持原义，开启发送循环不会改成AUTO。
