@@ -1,5 +1,11 @@
 # 当前能力与缺口
 
+## 真实联系人Pilot台账的日报重复生成检查（2026-10-19）
+
+遵照“暂未发送，先准备脚本”，未读取新桌面消息、调用模型或外发。在原Pilot SQLite以mode=ro打开后备份到隔离临时库，用现有PerformanceLedger/PerformanceReports连续生成2026-10-19日报两次。REAL仅指使用已保存的真实联系人交付记录：两次payload一致、version均1、第二次changed=false；一个已核验TEST_ANSWER未转成正式绩效，白天综合/语法听力/夜间三个已核验本地小计均0，performance_units仍0。coverage_complete=false，不把这些测试零值当作全群正式日报。私有预览和验证结果保留原Pilot目录，没有提交日报或写原库。
+
+第一次检查的业务断言已过，但临时库清理因sqlite3连接上下文未实际close而报Windows文件占用；在验证脚本使用closing明确关闭源/副本连接后重新完整检查通过，隔离副本已清理，未修改生产代码或删除原数据。本轮无代码修改，未重复模拟回归。真实验收仍1/20；下一条消息尚未提供，整体NOT_READY。
+
 ## 下一条普通追问的纯脚本准备（2026-10-19）
 
 用户暂未发送下一条消息，明确要求先准备脚本。本轮没有操作桌面/浏览器、补造消息或外发，累计真实完成仍1/20。原operator_task新增followup子命令：显式parent-task、UTF-8 message-file、稳定request-id，沿用原题面/选项/附件，仅替换本轮原话，复用已有create_draft幂等与过期检查。只支持隔离OPERATOR_TEST准备，不自动分类/核对/冻结/生成或正式入库，不代替生产采集；真实归属/更正判断保持原业务边界。此前私有prepare_followup中手拼payload的动作无需再由Agent重复完成。
