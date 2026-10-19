@@ -33,14 +33,18 @@ def validate_direct_source(snapshot, *, allow_completed=False):
             raise ValueError('EGO_SOURCE_SNAPSHOT_CHANGED')
 
 
-def selected_option(snapshot, text):
+def selected_option(snapshot, text, inherited_option_id=None):
     # Read explicit answer claims only; do not solve or infer from explanations.
     affirmative = re.sub(r'(?:不(?:能|要|应(?:该)?|是|会)?|未|别|避免)选(?:择)?\s*[A-D]\b', '', text)
     claims = re.findall(r"(?<![不未])选(?:择)?\s*([A-D])\b|答案(?:是|为)?\s*[:：]?\s*([A-D])\b", affirmative)
     letters = {a or b for a, b in claims}
     matches = [o['id'] for o in snapshot['student_question']['options'] if o['label'] in letters]
-    if len(letters) != 1 or len(matches) != 1:
+    if not letters and inherited_option_id in {o['id'] for o in snapshot['student_question']['options']}:
+        matches = [inherited_option_id]
+    elif len(letters) != 1 or len(matches) != 1:
         raise ValueError('EGO_ANSWER_OPTION_REQUIRES_REVIEW')
+    if inherited_option_id is not None and matches[0] != inherited_option_id:
+        raise ValueError('EGO_FOLLOWUP_SELECTION_CHANGED_REVIEW')
     numbers = re.findall(r'第\s*(\d+)\s*题', text)
     if any(n != str(snapshot['student_question']['number']) for n in numbers):
         raise ValueError('EGO_ANSWER_QUESTION_REQUIRES_REVIEW')
@@ -97,20 +101,27 @@ class EgoDeepSeekGenerator:
         claim_deepseek_chat(snapshot, None if url == 'https://chat.deepseek.com/' else url,
                             reserve=url != 'https://chat.deepseek.com/')
         skills = snapshot['teaching_skills']
-        files = [Path(item['path']).resolve(strict=True) for item in skills]
+        origin = None
+        if snapshot.get('ego_material_reuse'):
+            with closing(Store(snapshot['session_store_path'])) as store:
+                origin = material_origin(store, snapshot)
+        files = [] if origin else [Path(item['path']).resolve(strict=True) for item in skills]
         for item in snapshot['attachments']:
             path = Path(item['path']).resolve(strict=True)
             if sha256(path.read_bytes()).hexdigest() != item['sha256']:
                 raise ValueError('EGO_STUDENT_ATTACHMENT_CHANGED')
-            files.append(path)
+            if not origin or item['sha256'] not in {a['sha256'] for a in origin['attachments']}:
+                files.append(path)
         words = snapshot.get('student_words') or ''
         prompt = words if words.strip() else '第' + str(snapshot['student_question']['number']) + '题'
-        if not snapshot['attachments']:
+        if not snapshot['attachments'] and not origin:
             q = snapshot['student_question']
             prompt = '\n'.join([snapshot.get('student_material') or '', q['verified_stem'],
                 *[o['label'] + '. ' + o['verified_text'] for o in q['options']], prompt])
         delivered = delivery_context(snapshot)
         if delivered:
+            if any(item.get('attachments') for item in delivered['sent_history']):
+                raise ValueError('EGO_DELIVERY_ATTACHMENT_CONTEXT_REQUIRES_REVIEW')
             prompt += '\n此前实际回复：\n' + '\n'.join(row['body'] for row in delivered['sent_history'])
         request_id = snapshot['run_id'] + '-teach'
         browser = EgoDeepSeek(self.space_id, self.directory, page=self.page, allowed_files=files)
@@ -139,6 +150,9 @@ class EgoDeepSeekGenerator:
         verify_frozen_teaching(snapshot)
         current_url = self._current(snapshot)
         validate_direct_source(snapshot)
+        if origin:
+            with closing(Store(snapshot['session_store_path'])) as store:
+                material_origin(store,snapshot)
         resolved_url = captured.get('session_url')
         if new_session and current_url == 'https://chat.deepseek.com/':
             if not isinstance(resolved_url,str) or not re.fullmatch(r'https://chat\.deepseek\.com/a/chat/s/[A-Za-z0-9-]+',resolved_url):
@@ -153,9 +167,10 @@ class EgoDeepSeekGenerator:
             raise ValueError('EGO_CAPTURE_BINDING_CHANGED')
         claim_deepseek_chat(snapshot, url)
         text = captured['text']
-        option = selected_option(snapshot, text)
+        option = selected_option(snapshot, text, snapshot['ego_material_reuse']['correct_option_id'] if origin else None)
         details = {'input_fingerprint':input_fingerprint(snapshot), 'session_url':url,
-                   'evidence_path':str(proof), 'sha256':evidence[7:], 'correct_option_id':option}
+                   'evidence_path':str(proof), 'sha256':evidence[7:], 'correct_option_id':option,
+                   **({'reused_materials':snapshot['ego_material_reuse']} if origin else {})}
         with closing(Store(snapshot['session_store_path'])) as store, store.transaction():
             previous = store.all("SELECT details FROM audit WHERE run_id=? AND event='EGO_TEACH_CAPTURED'", (snapshot['run_id'],))
             if previous and [json.loads(r[0]) for r in previous] != [details]:
@@ -166,11 +181,13 @@ class EgoDeepSeekGenerator:
         return dict(adapter=self.identity, simulated=False, run_id=snapshot['run_id'],
             session_id=snapshot['session_id'], complete=True, uploads_confirmed=True,
             uploaded_teaching_hashes={s['path']:s['sha256'] for s in skills},
-            web_session_evidence=str(proof), correct_option_id=option, text=text)
+            web_session_evidence=str(proof), correct_option_id=option, text=text,
+            **({'reused_teaching_hashes':{s['path']:s['sha256'] for s in skills},
+                'material_origin_run_id':origin['run_id']} if origin else {}))
 
 
-def validate_ego_capture(store, snapshot, body, option_id=None):
-    """Recheck original ego evidence at Workflow finish and before delivery."""
+def _capture_record(store, snapshot, body, option_id=None):
+    """Read immutable capture evidence; this never approves a current source."""
     verify_frozen_teaching(snapshot)
     rows = store.all("SELECT details FROM audit WHERE run_id=? AND event='EGO_TEACH_CAPTURED'", (snapshot['run_id'],))
     if len(rows) != 1:
@@ -183,11 +200,76 @@ def validate_ego_capture(store, snapshot, body, option_id=None):
             or record['session_url'] != chat[0] or captured.get('session_url') != chat[0]
             or record['input_fingerprint'] != input_fingerprint(snapshot)
             or captured.get('adapter') != 'EGO_LITE' or captured.get('complete') is not True
-            or captured.get('text') != body or selected_option(snapshot,body) != record['correct_option_id']
+            or captured.get('text') != body
+            or record.get('reused_materials') != snapshot.get('ego_material_reuse')
+            or selected_option(snapshot,body,(snapshot.get('ego_material_reuse') or {}).get('correct_option_id')) != record['correct_option_id']
             or (option_id is not None and option_id != record['correct_option_id'])):
         raise ValueError('EGO_CAPTURE_EVIDENCE_CHANGED')
-    validate_direct_source(snapshot, allow_completed=True)
     return record
+
+
+def validate_ego_capture(store, snapshot, body, option_id=None):
+    """Recheck original ego evidence at Workflow finish and before delivery."""
+    record = _capture_record(store, snapshot, body, option_id)
+    validate_direct_source(snapshot, allow_completed=True)
+    if snapshot.get('ego_material_reuse'):
+        material_origin(store, snapshot)
+    return record
+
+
+def material_origin(store, snapshot):
+    """Validate one frozen original upload, never an unsent-draft delivery claim."""
+    link = snapshot['ego_material_reuse']
+    if snapshot.get('intent') != 'FOLLOWUP' or not isinstance(link,dict):
+        raise ValueError('EGO_REUSE_REQUIRES_ORDINARY_FOLLOWUP')
+    row = store.one("SELECT input_json FROM runs WHERE id=? AND state='GENERATED'", (link.get('origin_run_id'),))
+    if not row:
+        raise ValueError('EGO_ORIGINAL_MATERIALS_UNCONFIRMED')
+    origin = json.loads(row[0])
+    keys = ('case_id','binding_id','question_id','question_version','session_id',
+            'student_question','student_material','teaching_skills','generation_adapter','ego_policy')
+    if (origin.get('ego_material_reuse') or origin.get('run_id') == snapshot['run_id']
+            or any(encode(origin.get(k)) != encode(snapshot.get(k)) for k in keys)
+            or origin.get('references',[]) != snapshot.get('references',[])):
+        raise ValueError('EGO_REUSE_QUESTION_OR_TEACHING_CHANGED')
+    answer = store.one('SELECT text FROM answers a JOIN answer_evidence e ON e.answer_id=a.id WHERE e.run_id=?',
+                       (origin['run_id'],))
+    if not answer:
+        raise ValueError('EGO_ORIGINAL_MATERIALS_UNCONFIRMED')
+    proof = _capture_record(store,origin,answer[0])
+    if (proof['sha256'] != link.get('evidence_sha256') or proof['session_url'] != snapshot['ego_request_url']
+            or proof['correct_option_id'] != link.get('correct_option_id')):
+        raise ValueError('EGO_REUSE_UPLOAD_EVIDENCE_CHANGED')
+    delivered=delivery_context(snapshot)
+    if delivered:
+        for item in delivered['sent_history']:
+            if item.get('attachments'):
+                raise ValueError('EGO_DELIVERY_ATTACHMENT_CONTEXT_REQUIRES_REVIEW')
+            if item['question_version'] == snapshot['question_version']:
+                # A teacher correction must not inherit a contradictory old selection.
+                selected_option(snapshot,item['body'],link['correct_option_id'])
+    return origin
+
+
+def freeze_material_reuse(store, snapshot):
+    """Called inside the original Workflow.start transaction; no webpage action."""
+    if snapshot.get('intent') != 'FOLLOWUP' or snapshot['ego_request_url'] == 'https://chat.deepseek.com/':
+        return
+    rows = store.all("SELECT id,input_json FROM runs WHERE session_id=? AND question_version=? AND state='GENERATED' ORDER BY rowid",
+                     (snapshot['session_id'],snapshot['question_version']))
+    for row in rows:
+        origin=json.loads(row['input_json'])
+        if origin.get('ego_material_reuse'):
+            continue
+        proofs=store.all("SELECT details FROM audit WHERE run_id=? AND event='EGO_TEACH_CAPTURED'", (row['id'],))
+        if len(proofs) != 1:
+            continue
+        snapshot['ego_material_reuse']={'origin_run_id':row['id'],
+            'evidence_sha256':json.loads(proofs[0][0])['sha256'],
+            'correct_option_id':json.loads(proofs[0][0])['correct_option_id']}
+        material_origin(store,snapshot)
+        return
+    raise ValueError('EGO_FOLLOWUP_MATERIALS_UNVERIFIED')
 
 
 def run_existing(store, run_id, space_id, evidence_dir, *, page='p1', capture_only=False):

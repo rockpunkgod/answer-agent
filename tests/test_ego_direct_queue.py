@@ -33,7 +33,7 @@ class DirectQueueTests(unittest.TestCase):
         self.calls.append((request_id,url,prompt,attachments,new_session))
         if self.failure:raise TimeoutError('anonymous fixture')
         result={'adapter':'EGO_LITE','complete':True,'session_url':'https://chat.deepseek.com/a/chat/s/anonymous',
-                'text':'第12题选C，因为要照顾母亲。','upload_manifest':[
+                'text':getattr(self,'reply_text','第12题选C，因为要照顾母亲。'),'upload_manifest':[
                     {'path':str(p),'name':p.name,'sha256':sha256(p.read_bytes()).hexdigest()} for p in attachments]}
         task=self.fx.tasks.get_task(self.task['id'])
         directory=Path(task['evidence_dir']);directory.mkdir(parents=True,exist_ok=True)
@@ -125,3 +125,121 @@ class DirectQueueTests(unittest.TestCase):
         self.assertEqual(result['state'],'EXECUTION_UNCERTAIN',result)
         self.assertEqual(self.db.one('SELECT COUNT(*) FROM answers')[0],1)
         self.assertEqual(self.db.one('SELECT COUNT(*) FROM deepseek_chats')[0],1)
+
+    def followup(self):
+        from helpdesk.domain import Intent
+        self.follow_index=getattr(self,'follow_index',0)+1
+        _,receipt,outcome=self.fx.receive('follow-direct-'+str(self.follow_index),intent=Intent.FOLLOWUP,
+                                         question_id=self.task['question_id'])
+        self.task=self.fx.review(self.fx.create(receipt));self.fx.confirm_fixture_ack(outcome.message_id)
+        return self.admit()
+
+    def test_followup_reuses_session_and_uploads_no_old_files_or_unsent_draft(self):
+        self.admit();self.assertEqual(self.runtime.tick()['state'],'GENERATED')
+        first=self.fx.tasks.get_task(self.task['id'])
+        admission=self.followup();self.assertTrue(admission['enqueued'],admission)
+        task=self.fx.tasks.get_task(self.task['id'])
+        snapshot=json.loads(self.db.one('SELECT input_json FROM runs WHERE id=?',(task['run_id'],))[0])
+        self.assertEqual(snapshot['ego_material_reuse']['origin_run_id'],first['run_id'])
+        result=self.runtime.tick();self.assertEqual(result['state'],'GENERATED',result)
+        self.assertEqual(self.calls[-1][3],[])
+        self.assertFalse(self.calls[-1][-1])
+        self.assertEqual(self.calls[-1][2],snapshot['student_words'])
+        self.assertNotIn('此前实际回复',self.calls[-1][2])
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM deepseek_chats')[0],1)
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM performance_units')[0],0)
+
+    def test_changed_origin_capture_stops_followup_before_another_call(self):
+        self.admit();self.assertEqual(self.runtime.tick()['state'],'GENERATED')
+        original=self.fx.tasks.get_task(self.task['id'])
+        proof=Path(original['evidence_dir'])/(original['run_id']+'-teach.answer.json')
+        proof.write_text('{}',encoding='utf-8')
+        admission=self.followup()
+        self.assertEqual(admission['admission_phase'],'NEEDS_ATTENTION',admission)
+        self.assertEqual(len(self.calls),1)
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM runs')[0],1)
+
+    def test_followup_context_uses_registered_actual_reply_instead_of_old_draft(self):
+        from helpdesk.manual_delivery import ManualDeliveries
+        self.admit();self.assertEqual(self.runtime.tick()['state'],'GENERATED')
+        row=self.db.one("SELECT * FROM outbox WHERE purpose='ANSWER'")
+        actual='第12题选C。这是人工实际交付的补充说明。'
+        ManualDeliveries(self.db).register(row['id'],question_version=row['question_version'],
+            context_revision=row['context_revision'],reviewer='anonymous verifier',
+            verification_evidence='Synthetic human attestation, not a real platform receipt',
+            delivered_at='2026-10-01T10:00:00+08:00',content=actual)
+        admission=self.followup();self.assertTrue(admission['enqueued'],admission)
+        result=self.runtime.tick();self.assertEqual(result['state'],'GENERATED',result)
+        self.assertIn(actual,self.calls[-1][2])
+        self.assertNotIn('因为要照顾母亲。',self.calls[-1][2])
+        self.assertEqual(self.calls[-1][3],[])
+
+    def test_followup_can_explain_without_repeating_original_answer_letter(self):
+        self.admit();self.assertEqual(self.runtime.tick()['state'],'GENERATED')
+        self.followup();self.reply_text='B 说的是度假，原文说的是照顾母亲，目的不一致。'
+        result=self.runtime.tick();self.assertEqual(result['state'],'GENERATED',result)
+        self.assertEqual(self.calls[-1][3],[])
+        self.assertEqual(self.db.one('SELECT correct_option_id FROM answer_evidence ORDER BY rowid DESC LIMIT 1')[0],
+                         self.db.one('SELECT correct_option_id FROM answer_evidence ORDER BY rowid LIMIT 1')[0])
+
+    def test_followup_cannot_silently_change_the_original_selection(self):
+        self.admit();self.assertEqual(self.runtime.tick()['state'],'GENERATED')
+        self.followup();self.reply_text='第12题选D。'
+        result=self.runtime.tick();self.assertEqual(result['state'],'EXECUTION_UNCERTAIN',result)
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM answers')[0],1)
+
+    def test_followup_keeps_original_photo_in_session_without_reupload(self):
+        from PIL import Image
+        photo=self.base/'original-for-follow.png';Image.new('RGB',(20,20),'white').save(photo)
+        _,receipt,outcome=self.fx.receive('photo-before-follow',photo=photo)
+        self.task=self.fx.review(self.fx.create(receipt));self.fx.confirm_fixture_ack(outcome.message_id)
+        self.admit();self.assertEqual(self.runtime.tick()['state'],'GENERATED')
+        self.assertEqual(self.calls[0][3],[self.fx.course,photo])
+        self.followup();result=self.runtime.tick();self.assertEqual(result['state'],'GENERATED',result)
+        self.assertEqual(self.calls[-1][3],[])
+
+    def test_origin_changed_after_followup_freeze_stops_before_browser(self):
+        self.admit();self.assertEqual(self.runtime.tick()['state'],'GENERATED')
+        original=self.fx.tasks.get_task(self.task['id'])
+        self.followup()
+        (Path(original['evidence_dir'])/(original['run_id']+'-teach.answer.json')).write_text('{}',encoding='utf-8')
+        result=self.runtime.tick();self.assertEqual(result['state'],'EXECUTION_UNCERTAIN',result)
+        self.assertEqual(len(self.calls),1)
+
+    def test_multiple_followups_point_to_original_upload_without_a_reuse_chain(self):
+        self.admit();self.assertEqual(self.runtime.tick()['state'],'GENERATED')
+        original=self.fx.tasks.get_task(self.task['id'])
+        for _ in range(2):
+            self.followup();result=self.runtime.tick();self.assertEqual(result['state'],'GENERATED',result)
+            task=self.fx.tasks.get_task(self.task['id'])
+            snapshot=json.loads(self.db.one('SELECT input_json FROM runs WHERE id=?',(task['run_id'],))[0])
+            self.assertEqual(snapshot['ego_material_reuse']['origin_run_id'],original['run_id'])
+            self.assertEqual(self.calls[-1][3],[])
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM deepseek_chats')[0],1)
+
+    def test_actual_teacher_choice_conflict_cannot_inherit_old_generated_selection(self):
+        from helpdesk.manual_delivery import ManualDeliveries
+        self.admit();self.assertEqual(self.runtime.tick()['state'],'GENERATED')
+        row=self.db.one("SELECT * FROM outbox WHERE purpose='ANSWER'")
+        ManualDeliveries(self.db).register(row['id'],question_version=row['question_version'],
+            context_revision=row['context_revision'],reviewer='anonymous verifier',
+            verification_evidence='Synthetic corrected teacher response; no actual platform delivery',
+            delivered_at='2026-10-01T10:00:00+08:00',content='第12题选D，这是老师实际交付的不同结论。')
+        admission=self.followup()
+        self.assertEqual(admission['admission_phase'],'NEEDS_ATTENTION',admission)
+        self.assertEqual(len(self.calls),1)
+
+    def test_actual_delivery_image_is_not_silently_omitted_from_followup_context(self):
+        from PIL import Image
+        from helpdesk.manual_delivery import ManualDeliveries
+        self.admit();self.assertEqual(self.runtime.tick()['state'],'GENERATED')
+        row=self.db.one("SELECT * FROM outbox WHERE purpose='ANSWER'")
+        root=self.base/'approved-delivery';root.mkdir()
+        image=root/'teacher.png';Image.new('RGB',(20,20),'white').save(image)
+        ManualDeliveries(self.db,attachment_root=root).register(row['id'],question_version=row['question_version'],
+            context_revision=row['context_revision'],reviewer='anonymous verifier',
+            verification_evidence='Synthetic human attestation of an image reply',
+            delivered_at='2026-10-01T10:00:00+08:00',content='',attachments=[image.name])
+        admission=self.followup()
+        self.assertEqual(admission['admission_phase'],'NEEDS_ATTENTION',admission)
+        self.assertEqual(len(self.calls),1)

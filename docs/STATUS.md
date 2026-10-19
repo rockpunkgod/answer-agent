@@ -653,3 +653,15 @@ OperatorTasks.freeze 增加 ego_space/ego_page；SourceQuestionTasks 继承原�
 旧“网页口径待选择”“ego 队列尚未接线”是历史状态，本节取代；当前仍缺真实新直接模式联调、普通追问材料复用和完整 Level 3 稳定性/成本/交付验收，整体 NOT_READY。文件导入状态检查尚未修改，未将其称为持续监听。
 
 本轮回归：旧 reviewed_queue / automatic_answer_runtime / automatic_preparation / operator_tasks / ego_generation 共84项通过（541.333秒，包含原通道有界等待）；直接模式与采集工作台、原 Workflow、调用台账的相关回归另129项通过。用例集合有重叠，不累计宣传测试数。Native worker现为10项 JS 模拟用例；原图场景验证只上传教学原文与原图，原话逐字保留，包括首尾空白；另验证同一网页 URL 不可绑定另一个独立题目。新流程的真实网页与生产队列未验证，未把此前旧协议网页成功算作新流程通过。
+
+## ego 普通追问材料复用（2026-10-19）
+
+原 Workflow.start 在首次冻结追问时保存 ego_material_reuse：同一学生绑定、Case、Question、Version、会话、学生题面及冻结教学一致才可复用。链接直接指向首次成功上传的原 run、捕获摘要和选项 ID；连续追问不形成链。不新增表、不重写旧 snapshot。冻结、生成及交付校验都检查原捕获文件和绑定；旧任务当前已过期不影响其静态上传证据，但这不使旧稿重新获得发送或绩效资格。
+
+普通追问不重传相同教学文件或原图；新增且已经审核的本轮附件仍按真实哈希上传。没有新图时只发送学生本轮原话和必要的实际交付正文，不重复题干，不把未发草稿写成已交付。自然语言解释没有重述答案字母时，仅在普通追问的相同版本下沿用原已核验选项；明确改选、出现其他题号或老师实际交付选择与原生成冲突时转人工复核。原 ANSWER 检查继续执行，不因复用而放行质量标记。
+
+当前实际历史附件（例如老师交付的图片）还不能送入完整追问上下文，显式停止转人工，不能只忽略附件继续。新学生原题图片与同题旧图片复用已通过匿名用例；本条未宣称老师交付图片流程已接通。
+
+UNIT/MOCK：`python -X utf8 -B -m unittest -q tests.test_ego_direct_queue tests.test_ego_generation tests.test_ego_browser tests.test_ego_worker tests.test_operator_tasks tests.test_source_question_tasks tests.test_reviewed_question_queue tests.test_automatic_preparation tests.test_workflow tests.test_call_costs tests.test_manual_delivery_registration tests.test_saved_teacher_delivery`，169项 Python 测试通过（含10项 JS 模拟用例），无失败、跳过。新增覆盖连续追问同会话无重复上传、只补实际老师正文、未交付草稿不冒充历史、原捕获冻结前/后变动阻断、无需重复答案字母、改选冲突以及实际图片交付不能静默省略。修复冻结前 tuple/list 序列化差异，使用规范 JSON 对比，保留真实字段与 ID 全部校验。
+
+REAL：本轮未调用真实 DeepSeek、未外发、未修改生产数据库；实际成本与时效没有新增证明。真实直接模式队列、完整实际交付与绩效、重启稳定性仍需验收，整体 NOT_READY。此前“普通追问材料复用尚未实施”由本节取代，真实验证仍未完成。

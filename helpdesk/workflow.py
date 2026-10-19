@@ -313,6 +313,9 @@ class Workflow:
             snapshot["simulated"] = adapter.simulated
             snapshot["simulation"] = adapter.simulated
             snapshot["run_id"] = rid = new_id()
+            if adapter.identity == 'EGO_LITE_DEEPSEEK':
+                from .ego_generation import freeze_material_reuse
+                freeze_material_reuse(self.db, snapshot)
             if any(s.get('required_task_checks') for s in skills):
                 from .lesson_checks import check_lesson
                 snapshot['teaching_source_check'] = check_lesson(snapshot)
