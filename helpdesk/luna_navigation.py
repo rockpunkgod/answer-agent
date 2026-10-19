@@ -21,7 +21,8 @@ MODEL = 'gpt-6-luna'
 EFFORT = 'medium'
 ACTIONS = frozenset({'ACTIVATE_WECOM', 'OPEN_ORIGINAL_IMAGE', 'SAVE_ICON',
                      'FILENAME_FIELD', 'SAVE_BUTTON', 'DEEPSEEK_NEW_CHAT',
-                     'DEEPSEEK_COMPOSER', 'STOP'})
+                     'DEEPSEEK_COMPOSER', 'WECOM_COMPOSER', 'WECOM_SEND',
+                     'WECOM_RECEIPT', 'WECOM_COPY_MENU', 'STOP'})
 _DISABLED = ('shell_tool', 'apps', 'plugins', 'browser_use', 'browser_use_external',
              'computer_use', 'multi_agent', 'hooks', 'skill_search', 'image_generation', 'view_image')
 

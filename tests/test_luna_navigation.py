@@ -145,6 +145,19 @@ class LunaNavigationTests(unittest.TestCase):
     def test_stop_has_no_action_coordinates(self):
         self.assertIsNone(self.suggest(self.runner('{"action":"STOP","image_x":0,"image_y":0}'))['loc'])
 
+    def test_wecom_probe_controls_remain_scoped_coordinate_suggestions(self):
+        for action in ('WECOM_COMPOSER','WECOM_SEND','WECOM_RECEIPT','WECOM_COPY_MENU'):
+            with self.subTest(action=action):
+                runner=self.runner(json.dumps({'action':action,'image_x':900,'image_y':600}))
+                result=navigation.suggest(self.record,'Locate one approved test-contact control only.',
+                    [action,'STOP'],runner=runner,display_index=1)
+                self.assertEqual(result['loc'],[1200,-640])
+                self.assertEqual(result['action'],action)
+                self.assertEqual(set(result),{'action','loc','source_record','display_index','display_region'})
+        with self.assertRaises(RuntimeError):
+            navigation.suggest(self.record,'Composer only.', ['WECOM_COMPOSER','STOP'],
+                runner=self.runner('{"action":"WECOM_SEND","image_x":10,"image_y":10}'),display_index=1)
+
     def test_extra_authority_duplicate_keys_and_bad_coordinates_are_rejected(self):
         invalid = (
             '{"action":"ACTIVATE_WECOM","image_x":true,"image_y":1}',
