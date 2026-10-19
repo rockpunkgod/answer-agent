@@ -17,6 +17,8 @@ class EgoBridgeTests(unittest.TestCase):
         self.temp=tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root=Path(self.temp.name)
+        controls=patch('helpdesk.ego_browser.page_control_directory',return_value=self.root/'controls')
+        controls.start();self.addCleanup(controls.stop)
         self.file=self.root/'approved.md'
         self.file.write_text('anonymous fixture',encoding='utf-8')
         self.adapter=EgoDeepSeek(1,self.root/'receipts',allowed_files=[self.file],executable=self.root/'ego.exe')
@@ -104,3 +106,32 @@ class EgoBridgeTests(unittest.TestCase):
             result=self.adapter.submit(*self.args,response_token='old_marker')
             self.assertEqual(result['text'],'historical reply')
             run.assert_not_called()
+
+    def test_uncertain_page_blocks_other_requests_across_evidence_directories(self):
+        def timeout(*args, **kwargs):
+            path=self.root/'receipts/run-teach.state.json'
+            state=json.loads(path.read_text());state['phase']='SUBMISSION_INTENT'
+            path.write_text(json.dumps(state))
+            raise subprocess.TimeoutExpired('fixture',1)
+        other=EgoDeepSeek(1,self.root/'other-receipts',executable=self.root/'ego.exe')
+        with patch('helpdesk.ego_browser.subprocess.run',side_effect=timeout) as run:
+            with self.assertRaisesRegex(BrowserPaused,'OUTCOME_UNKNOWN'):
+                self.adapter.submit(*self.args,**self.kwargs)
+            with self.assertRaisesRegex(BrowserPaused,'PAGE_HAS_UNRESOLVED_REQUEST'):
+                other.submit('other-run',self.args[1],'different question')
+            self.assertEqual(run.call_count,1)
+        self.assertFalse((self.root/'other-receipts/other-run.state.json').exists())
+        with patch('helpdesk.ego_browser.subprocess.run',side_effect=self.complete):
+            self.adapter.submit(*self.args,**self.kwargs,capture_only=True)
+        self.assertFalse((self.root/'controls/space-1-p1.owner').exists())
+
+    def test_busy_page_lock_stops_before_creating_request_or_browser_action(self):
+        from helpdesk.locking import resource_lock
+        control=self.root/'controls/space-1-p1.lock'
+        with resource_lock(control), patch('helpdesk.ego_browser.resource_lock',
+                side_effect=lambda path,timeout:resource_lock(path,timeout=.02)), \
+                patch('helpdesk.ego_browser.subprocess.run') as run:
+            with self.assertRaises(TimeoutError):
+                self.adapter.submit(*self.args,**self.kwargs)
+            run.assert_not_called()
+        self.assertFalse((self.root/'receipts/run-teach.state.json').exists())

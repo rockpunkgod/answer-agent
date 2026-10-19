@@ -19,6 +19,11 @@ def ego_executable():
     return candidate.resolve()
 
 
+def page_control_directory():
+    # Shared by different request/evidence directories in this local installation.
+    return Path.home() / '.local/share/answer-agent/ego-controls'
+
+
 class EgoDeepSeek:
     """Use one existing managed space/page; no account, profile or WeCom access.
 
@@ -57,7 +62,10 @@ class EgoDeepSeek:
         self.directory.mkdir(parents=True, exist_ok=True)
         state_path = self.directory / (request_id + '.state.json')
         output_path = self.directory / (request_id + '.answer.json')
-        with resource_lock(self.directory / (request_id + '.lock'), timeout=5):
+        control = page_control_directory() / f'space-{self.space_id}-{self.page}'
+        owner_path = control.with_suffix('.owner')
+        with resource_lock(control.with_suffix('.lock'), timeout=5), \
+                resource_lock(self.directory / (request_id + '.lock'), timeout=5):
             # Old marker protocol is recovery-only; never create a new marked request.
             if response_token is not None and not state_path.exists():
                 raise BrowserPaused('LEGACY_PROTOCOL_RECOVERY_ONLY')
@@ -69,6 +77,8 @@ class EgoDeepSeek:
                     raw = output_path.read_bytes()
                     if sha256(raw).hexdigest() != state.get('output_sha256'):
                         raise BrowserPaused('CAPTURE_CHANGED')
+                    if owner_path.exists() and owner_path.read_text(encoding='utf-8') == str(state_path):
+                        owner_path.unlink()
                     return json.loads(raw)
                 if not capture_only:
                     raise BrowserPaused('PRIOR_ATTEMPT_REQUIRES_READONLY_CAPTURE')
@@ -77,7 +87,12 @@ class EgoDeepSeek:
             elif capture_only:
                 raise BrowserPaused('NO_PRIOR_ATTEMPT')
             else:
+                if owner_path.exists() and owner_path.read_text(encoding='utf-8') != str(state_path):
+                    raise BrowserPaused('EGO_PAGE_HAS_UNRESOLVED_REQUEST')
                 state_path.write_text(json.dumps({'fingerprint': fingerprint, 'phase': 'PREPARING'}), encoding='utf-8')
+            if owner_path.exists() and owner_path.read_text(encoding='utf-8') != str(state_path):
+                raise BrowserPaused('EGO_PAGE_HAS_UNRESOLVED_REQUEST')
+            owner_path.write_text(str(state_path), encoding='utf-8')
             request.update(fingerprint=fingerprint, state_path=str(state_path), output_path=str(output_path),
                            capture_only=capture_only, timeout_ms=timeout_ms)
             worker = Path(__file__).with_name('ego_deepseek.mjs').resolve()
@@ -99,4 +114,5 @@ class EgoDeepSeek:
             raw = output_path.read_bytes()
             if sha256(raw).hexdigest() != state.get('output_sha256'):
                 raise BrowserPaused('CAPTURE_CHANGED')
+            owner_path.unlink(missing_ok=True)
             return json.loads(raw)
