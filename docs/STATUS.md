@@ -7,6 +7,16 @@
 
 # 当前能力与缺口
 
+## 绩效三栏入口与正式数量边界（2026-10-20）
+
+最小增量：tools.performance_report新增totals起止日期命令，复用原generate/catch_up及核验台账，直接显示日期/白天综合/语法听力/夜间答题数字；可导出UTF-8-BOM CSV，不依赖Office、额外模型或Node。完整原日报/待核对明细仍保留，输出明确为已核验本地小计，缺历史覆盖不冒充全群总数。现有每日调度默认同时输出三栏CSV、缺文件时补齐同一版本；export_csv=false可关闭。不改XLSX、调度安装或现有生产配置。
+
+修复：history coverage完整但持久化07:00归属规则冲突时，原formal_totals可能输出0；现在正式数量为null并列明REPORT_DATE_POLICY_CONFLICT。正常规则/完整覆盖仍输出确认数量，小计与待核对明细保留；正式可用性变化进入原修订差异，不静默覆盖已提交报表。未改语义归并、单价、交付门槛或计量规则；未改数据库结构。
+
+UNIT/MOCK：python -X utf8 -B -m unittest -q tests.test_performance_reports tests.test_performance_rules tests.test_performance_delivery_eligibility tests.test_operator_performance_exclusion tests.test_performance_review tests.test_performance tests.test_performance_report_schedule tests.test_shared_source_delivery_integration tests.test_shared_semantic_consumers：93项通过，无失败/跳过。新增三栏跨日/23:00/06:59/07:00、白天语法5题与夜间听力1篇、重复导出不增版本、已提交重算仅预览、丢失CSV补齐、规则冲突不伪造正式零及修订差异检查。
+
+REAL DATA/LOCAL CLI：只读备份现有受控测试库到data/private/performance-export-20261020/check.sqlite，再运行真实totals/CSV导出。三栏0/0/0，符合测试隔离；原数据库未改、无外发或提交。该结果不是9.17以来正式群历史绩效，正式群历史覆盖/语义核对仍需现有真实记录与交付证据。整体生产结论保持NOT_READY。
+
 ## 最新消息受控真实交付成功（2026-10-20）
 
 REAL：仅企业微信苇中鹤。原生poll取得新原话“老师讲讲第二题C错在哪，binge-watching是主旨我就选C了”（复制证据01082a6dd400437b9250affa085fa314），新增观察1；三张新原图经原生预览/另存为保存、可解码及哈希核验。固定收到Outbox 2a991e9ca27a445da17f636405551463于北京时间13:59:24核验送达。界面分钟标签13:50没有完整原日期/秒证据，不填造source_sent_at，不据此宣称正式SLA通过。

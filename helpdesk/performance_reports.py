@@ -454,6 +454,11 @@ class PerformanceReports:
             "reason_counts": dict(sorted(Counter(item["reason"] for item in pending).items())),
             "history_complete": coverage.get("complete") is True,
         }
+        formal_blockers = []
+        if coverage.get("complete") is not True:
+            formal_blockers.append("HISTORY_COVERAGE_INCOMPLETE")
+        if self.attribution == "question_day_07" and not self.policy_snapshot["aligned_with_question_day_07"]:
+            formal_blockers.append("REPORT_DATE_POLICY_CONFLICT")
         return {
             "report_date": day, "teacher": self.teacher, "timezone": self.timezone_name,
             "rule_version": self.rule_version, "attribution": self.attribution,
@@ -466,7 +471,8 @@ class PerformanceReports:
             "template": "自拟日报草稿；非机构原始填报模板", "source": "本地绩效台账",
             "summary": dict(sorted(summary.items())),
             "verified_subtotals": verified_subtotals,
-            "formal_totals": {key: summary[key] if coverage.get("complete") is True else None for key in fields},
+            "formal_totals": {key: summary[key] if not formal_blockers else None for key in fields},
+            "formal_totals_ready": not formal_blockers, "formal_totals_blockers": formal_blockers,
             "missing_data": missing_data,
             "monthly_cumulative": dict(sorted(month.items())),
             "groups": {key: dict(sorted(value.items())) for key, value in sorted(groups.items())},
@@ -515,6 +521,9 @@ class PerformanceReports:
                     for key in sorted(left.keys() | right.keys()) if left.get(key) != right.get(key)}
             if item:
                 change[section] = item
+        for key in ("formal_totals_ready", "formal_totals_blockers"):
+            if before.get(key) != after.get(key):
+                change[key] = {"before": before.get(key), "after": after.get(key)}
         old = {x["counting_unit_id"]: x for x in before.get("details", [])}
         new = {x["counting_unit_id"]: x for x in after.get("details", [])}
         changed = {key: {"before": old.get(key), "after": new.get(key)}

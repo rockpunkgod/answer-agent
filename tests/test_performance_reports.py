@@ -124,6 +124,71 @@ class ReportTests(unittest.TestCase):
                                       generated_at_local=time(8), start_date="2026-09-29")
         self.assertEqual(missing, ["2026-09-29", "2026-09-30"])
 
+    def test_complete_coverage_cannot_publish_formal_zero_when_date_policy_conflicts(self):
+        valid = FakeLedger([unit("confirmed", "2026-09-29T23:10:00+08:00",
+                                 "2026-09-30T10:00:00+08:00", "NIGHT")])
+        with patch('helpdesk.history_coverage.coverage_summary', return_value={"complete": True, "groups": []}):
+            confirmed = PerformanceReports(self.store, valid).build("2026-09-29")
+        self.assertTrue(confirmed['formal_totals_ready'])
+        self.assertEqual(confirmed['formal_totals']['night_articles'], 1)
+        self.store.execute("UPDATE performance_rules SET value='conflicting-rule' WHERE key='night_date_attribution'")
+        ledger = FakeLedger([unit("night", "2026-09-29T23:10:00+08:00",
+                                  "2026-09-30T10:00:00+08:00", "NIGHT")])
+        with patch('helpdesk.history_coverage.coverage_summary', return_value={"complete": True, "groups": []}):
+            report = PerformanceReports(self.store, ledger).build("2026-09-29")
+        self.assertTrue(report['coverage']['complete'])
+        self.assertFalse(report['formal_totals_ready'])
+        self.assertIn('REPORT_DATE_POLICY_CONFLICT', report['formal_totals_blockers'])
+        self.assertTrue(all(value is None for value in report['formal_totals'].values()))
+        self.assertEqual(report['verified_subtotals']['totals']['night_articles'], 0)
+        self.assertTrue(report['pending'])
+        diff = PerformanceReports._diff(confirmed, report)
+        self.assertEqual(diff['formal_totals_ready'], {'before': True, 'after': False})
+        self.assertIn('REPORT_DATE_POLICY_CONFLICT', diff['formal_totals_blockers']['after'])
+
+    def test_totals_cli_exports_three_columns_and_keeps_original_submitted_report(self):
+        import csv
+        from contextlib import redirect_stdout
+        from io import StringIO
+        from tools.performance_report import main
+        grammar = unit("grammar", "2026-09-29T10:00:00+08:00", "2026-09-30T12:00:00+08:00",
+                       "REGULAR", "语法填空", "题", 5)
+        grammar['actual_question_count'] = 5
+        ledger = FakeLedger([
+            unit("reading", "2026-09-29T08:00:00+08:00", "2026-09-30T12:00:00+08:00", "REGULAR"),
+            grammar,
+            unit("night", "2026-09-29T23:00:00+08:00", "2026-09-30T12:00:00+08:00", "NIGHT", "听力"),
+            unit("early", "2026-09-30T06:59:00+08:00", "2026-09-30T12:00:00+08:00", "NIGHT"),
+            unit("seven", "2026-09-30T07:00:00+08:00", "2026-09-30T12:00:00+08:00", "REGULAR"),
+        ])
+        output = Path(self.temp.name) / 'three-columns'
+        args = ['--db', str(self.store.path), '--output-dir', str(output), 'totals',
+                '2026-09-29', '2026-09-30', '--csv']
+        with patch('tools.performance_report.PerformanceLedger', return_value=ledger), redirect_stdout(StringIO()) as stdout:
+            main(args)
+            main(args)
+        self.assertIn('已核验本地台账小计', stdout.getvalue())
+        with (output / '每日三栏已核验小计-2026-09-29至2026-09-30.csv').open(encoding='utf-8-sig', newline='') as stream:
+            rows = list(csv.DictReader(stream))
+        self.assertEqual(rows, [
+            {'日期': '2026-09-29', '白天综合': '1', '语法听力': '5', '夜间答题': '2'},
+            {'日期': '2026-09-30', '白天综合': '1', '语法听力': '0', '夜间答题': '0'},
+        ])
+        reports = PerformanceReports(self.store, ledger)
+        versions = reports.list_versions('2026-09-29')
+        self.assertEqual(len(versions), 1)
+        reports.mark_submitted('2026-09-29', 1, actor='anonymous-test', evidence='synthetic submission only')
+        ledger.units.append(unit("added", "2026-09-29T12:00:00+08:00", "2026-09-30T12:00:00+08:00", "REGULAR"))
+        with patch('tools.performance_report.PerformanceLedger', return_value=ledger), redirect_stdout(StringIO()) as stdout:
+            main(args)
+        self.assertIn('重算预览', stdout.getvalue())
+        self.assertEqual(len(reports.list_versions('2026-09-29')), 1)
+        preview = json.loads((output / '每日答题统计-2026-09-29-v2-重算预览.json').read_text(encoding='utf-8'))
+        self.assertTrue(preview['preview_only'])
+        original = json.loads((output / '每日答题统计-2026-09-29-v1.json').read_text(encoding='utf-8'))
+        self.assertEqual(original['payload']['verified_subtotals']['totals']['day_composite_articles'], 1)
+        self.assertEqual(preview['payload']['verified_subtotals']['totals']['day_composite_articles'], 2)
+
     def test_partial_coverage_has_verified_subtotals_and_unknown_formal_totals(self):
         verified = unit("verified", "2026-09-30T08:00:00+08:00", "2026-09-30T12:00:00+08:00", "REGULAR")
         missing = unit("missing", None, "2026-09-30T12:00:00+08:00", "NIGHT")
@@ -157,6 +222,25 @@ class ReportTests(unittest.TestCase):
                           'teacher = "测试老师"\ncatch_up_start = "2026-09-30"\n'
                           'generate_at = "08:00"\nexport_xlsx = false\n' + extra, encoding="utf-8")
         return config, output
+
+    def test_scheduler_repairs_missing_three_column_export_without_new_report_version(self):
+        import csv
+        config, output = self._schedule_config()
+        clock = datetime.fromisoformat("2026-10-01T08:30:00+08:00")
+        ledger = FakeLedger([unit("first", "2026-09-30T08:00:00+08:00",
+                                  "2026-09-30T12:00:00+08:00", "REGULAR")])
+        with patch('tools.performance_report_schedule.PerformanceLedger', return_value=ledger):
+            run_schedule(str(config), now=clock)
+            path = output / '每日答题统计-2026-09-30-v1-三栏已核验小计.csv'
+            with path.open(encoding='utf-8-sig', newline='') as stream:
+                self.assertEqual(list(csv.DictReader(stream))[0]['白天综合'], '1')
+            original = path.read_bytes()
+            self.assertEqual(run_schedule(str(config), now=clock), [])
+            path.unlink()
+            repaired = run_schedule(str(config), now=clock)
+            self.assertEqual(repaired[0]['version'], 1)
+            self.assertEqual(path.read_bytes(), original)
+            self.assertEqual(len(PerformanceReports(self.store, ledger, teacher='测试老师').list_versions('2026-09-30')), 1)
 
     def test_scheduler_recalculates_existing_files_when_verified_ledger_changes(self):
         config, output = self._schedule_config()

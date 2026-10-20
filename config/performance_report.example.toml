@@ -8,6 +8,8 @@ generate_at = "08:00"
 catch_up_start = "2026-09-17"
 scope_start_date = "2026-09-17"
 export_xlsx = true
+# Excel-compatible daily three-column subtotals; Python standard library only.
+export_csv = true
 # For real records, export and verify acquired original text before statistics.
 # Leave the archive path unset only for an isolated demo/test ledger.
 require_native_export = false

@@ -12,7 +12,7 @@ from uuid import uuid4
 from helpdesk.performance import PerformanceLedger
 from helpdesk.performance_reports import PerformanceReports, scheduled_due_dates
 from helpdesk.storage import Store
-from tools.performance_report import export_xlsx
+from tools.performance_report import export_xlsx, daily_totals, export_totals_csv
 from helpdesk.native_export import export_native_records
 
 
@@ -72,9 +72,11 @@ def run(config_path: str, *, now: datetime | None = None, exporter=export_xlsx,
             if result.get("preview_only"):
                 stem += "-重算预览"
             json_path, xlsx_path = output / f"{stem}.json", output / f"{stem}.xlsx"
+            csv_path = output / f"{stem}-三栏已核验小计.csv"
             if native_export:
                 result["native_export"] = native_export
-            if json_path.exists() and (not config.get("export_xlsx", True) or xlsx_path.exists()):
+            if (json_path.exists() and (not config.get("export_xlsx", True) or xlsx_path.exists())
+                    and (not config.get("export_csv", True) or csv_path.exists())):
                 # Preview changes do not persist versions; compare the saved
                 # content so repeated previews also avoid duplicate exports.
                 saved = json.loads(json_path.read_text(encoding="utf-8"))
@@ -86,6 +88,8 @@ def run(config_path: str, *, now: datetime | None = None, exporter=export_xlsx,
                 if current_payload == saved_payload and (current_source == saved_source or result.get("submitted")):
                     continue
             json_path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+            if config.get("export_csv", True):
+                export_totals_csv(daily_totals([result]), csv_path)
             if config.get("export_xlsx", True):
                 exporter(result["payload"], output / f"{stem}.xlsx")
             results.append({"date": day, "version": result["version"], "preview_only": result.get("preview_only", False)})

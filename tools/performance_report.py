@@ -1,6 +1,7 @@
 """Local daily performance report commands; no network or message sending."""
 
 import argparse
+import csv
 from datetime import datetime, time
 import json
 import os
@@ -37,6 +38,30 @@ def export_xlsx(payload: dict, output: Path, *, previews: Path | None = None):
         subprocess.run(args, check=True, **subprocess_options)
 
 
+TOTAL_COLUMNS = (("白天综合", "day_composite_articles"),
+                 ("语法听力", "grammar_listening_actual_questions"),
+                 ("夜间答题", "night_articles"))
+
+
+def daily_totals(results):
+    """Project confirmed ledger quantities only; never count messages or drafts."""
+    rows = []
+    for result in results:
+        payload = result["payload"]
+        totals = payload["verified_subtotals"]["totals"]
+        rows.append({"日期": payload["report_date"],
+                     **{label: totals[key] for label, key in TOTAL_COLUMNS}})
+    return rows
+
+
+def export_totals_csv(rows, path):
+    # Fixed headers and program-owned dates/quantities; no user text/formulas.
+    with Path(path).open("w", encoding="utf-8-sig", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=["日期", *[label for label, _ in TOTAL_COLUMNS]])
+        writer.writeheader()
+        writer.writerows(rows)
+
+
 def main(argv=None):
     p = argparse.ArgumentParser(description="本地每日答题统计草稿")
     p.add_argument("--db", required=True, help="本地 SQLite 台账路径")
@@ -57,6 +82,10 @@ def main(argv=None):
     catch.add_argument("end")
     catch.add_argument("--retroactive", action="store_true")
     catch.add_argument("--xlsx", action="store_true")
+    totals = sub.add_parser("totals", help="按天显示三栏已核验小计，保留完整日报与待核对明细")
+    totals.add_argument("start")
+    totals.add_argument("end", nargs="?")
+    totals.add_argument("--csv", action="store_true", help="同时导出Excel可打开的三栏CSV，无额外依赖")
     due = sub.add_parser("due", help="列出达到生成时刻的缺失日期")
     due.add_argument("--start", required=True)
     due.add_argument("--time", default="08:00")
@@ -99,6 +128,27 @@ def main(argv=None):
                     export_xlsx(result["payload"], output_dir / f"{stem}.xlsx")
             print(json.dumps([{"date": r["payload"]["report_date"], "version": r["version"],
                                "changed": r["changed"], "preview_only": r.get("preview_only", False)} for r in results], ensure_ascii=False))
+        elif args.command == "totals":
+            results = reports.catch_up(args.start, args.end or args.start)
+            rows = daily_totals(results)
+            output_dir.mkdir(parents=True, exist_ok=True)
+            for result in results:
+                day = result["payload"]["report_date"]
+                suffix = "-重算预览" if result.get("preview_only") else ""
+                path = output_dir / f"每日答题统计-{day}-v{result['version']}{suffix}.json"
+                path.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
+            print("日期\t白天综合\t语法听力\t夜间答题")
+            for row in rows:
+                print("\t".join(str(row[key]) for key in ("日期", *[label for label, _ in TOTAL_COLUMNS])))
+            print("口径：已核验本地台账小计；单位依次为篇、题、篇。未核验覆盖不代表全部群聊总数。")
+            pending = sum(result["payload"]["summary"]["pending_records"] for result in results)
+            print(f"待核对条目：{pending}（跨日可能重复列示）；完整明细见同目录日报。")
+            if any(result.get("preview_only") for result in results):
+                print("含已提交日报的重算预览；原提交版未覆盖。")
+            if args.csv:
+                path = output_dir / f"每日三栏已核验小计-{args.start}至{args.end or args.start}.csv"
+                export_totals_csv(rows, path)
+                print(f"CSV：{path}")
         elif args.command == "due":
             print(json.dumps(scheduled_due_dates(reports, now=datetime.now().astimezone(),
                                                   generated_at_local=time.fromisoformat(args.time),
