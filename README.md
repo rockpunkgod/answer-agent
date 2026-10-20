@@ -426,3 +426,7 @@ python tools/wecom_cli.py --database "<业务库>" --delivery-config "<原生ACK
 配置需填写审核者、证据路径、实际原图 image_size 和窗口相对 indicator_box，参考 collector.example.toml 中默认关闭的配置。主窗口不唯一、最小化、尺寸变化、黑/白空白帧或超时会显示“提示读取暂不可用”，而非“群内无消息”。工作台显示等待/提示状态。
 
 提示只唤醒原消息入口，不产生学生消息、身份、发送时间或绩效，也不授予发送权限。后台截图可能陈旧，状态保持 freshness_verified=false；可靠刷新与实时原消息读取尚待验收。即使角标已识别，未建立可信原消息的 ACK 仍由原校验拦截。Windows PowerShell 捕获脚本保留 UTF-8 BOM；已有真实只读采样验证，不代表持续监听和三个群自动收到已上线。
+
+可选可见消息边界：在已审核会话中设置 `arrival_tracking={"enabled":true,"reviewed":true,"reviewer":"本人","max_gap_seconds":300}`（默认关闭）。第一次 `poll` 将当前可见文字建立为历史基线；后续进程从现有数据库恢复边界，唯一连续重叠后的新增文字只标为候选。窗口范围改变、重复内容、时间倒退、超出间隔或连续性丢失时返回 `VISIBLE_BOUNDARY_REQUIRES_REVIEW`，`watch` 停止。人工核验后运行 `python tools/wecom_cli.py --database <已有数据库> --session <审核会话文件> --enable-input baseline <绑定chat_id>`，将当前全部记录重新视为历史，并保留重置事件。
+
+该边界仅覆盖已复制、已按名称分类的可见文字；不证明处于聊天底部、学生身份、原始时间或真正的新消息到达。`new_message_verified`、`automatic_ack_eligible` 始终为 false，不创建 Ack、答疑或绩效。未取得候选不等于群里没有新消息，不能据此承诺15分钟应答。

@@ -34,6 +34,19 @@ class GroupAckCliTests(unittest.TestCase):
             code = main(args)
         return code, json.loads(output.getvalue())
 
+    def test_baseline_is_explicit_history_reset_and_review_is_failure(self):
+        with patch('tools.wecom_cli.WeComTools') as tools:
+            tools.return_value.call.return_value={'status':'NO_NEW_OBSERVATIONS',
+                'visible_boundary':{'status':'BASELINE_ESTABLISHED','candidate_count':0}}
+            code,result=self.run_cli(['--database',str(self.database),'baseline','bound-chat'])
+            self.assertEqual(code,0)
+            tools.return_value.call.assert_called_once_with('poll_messages',chat_id='bound-chat',reset_baseline=True)
+        with patch('tools.wecom_cli.WeComTools') as tools:
+            tools.return_value.call.return_value={'status':'VISIBLE_BOUNDARY_REQUIRES_REVIEW'}
+            code,_=self.run_cli(['--database',str(self.database),'watch','bound-chat','--iterations','3','--interval','1'])
+            self.assertEqual(code,2)
+            self.assertEqual(tools.return_value.call.call_count,1)
+
     def test_redirected_windows_encoding_preserves_emoji_result_without_retry(self):
         buffer=BytesIO()
         output=TextIOWrapper(buffer,encoding='gbk')

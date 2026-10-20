@@ -53,3 +53,58 @@ class IncomingCandidates(unittest.TestCase):
         for index in range(21):self.bubble((20,10+40*index,220,40+40*index))
         with self.assertRaisesRegex(ValueError,'TOO_MANY_VISIBLE_CANDIDATES'):
             incoming_bubbles(self.image,self.config)
+
+
+class VisibleBoundary(unittest.TestCase):
+    def step(self, old, values, second=2, **options):
+        from helpdesk.wecom_visible import advance_visible_view
+        from hashlib import sha256
+        return advance_visible_view(old,[sha256(v.encode()).hexdigest() for v in values],
+            scope_key=options.pop('scope_key','group'),
+            started_at=f'2026-10-20T12:00:{second:02d}+08:00',
+            completed_at=f'2026-10-20T12:00:{second+1:02d}+08:00',**options)
+
+    def test_history_restart_and_unique_append_are_candidate_only(self):
+        import json
+        state,result=self.step(None,['a','b'])
+        self.assertEqual(result['status'],'BASELINE_ESTABLISHED')
+        self.assertEqual(result['candidate_indices'],[])
+        state,result=self.step(json.loads(json.dumps(state)),['a','b'],4)
+        self.assertEqual(result['status'],'VIEW_UNCHANGED')
+        state,result=self.step(state,['b','c'],6)
+        self.assertEqual(result['candidate_indices'],[1])
+        self.assertFalse(result['new_message_verified'])
+        self.assertFalse(result['automatic_ack_eligible'])
+        self.assertNotIn('source_sent_at',result)
+
+    def test_lost_boundary_latches_until_explicit_history_reset(self):
+        state,_=self.step(None,['a','b'])
+        held,result=self.step(state,['x','y'],4)
+        self.assertEqual(result['status'],'VIEW_REQUIRES_REVIEW')
+        held,result=self.step(held,['b','c'],6)
+        self.assertEqual(result['candidate_indices'],[])
+        self.assertTrue(held['review_required'])
+        reset,result=self.step(held,['b','c'],8,reset=True)
+        self.assertEqual(result['status'],'BASELINE_ESTABLISHED')
+        self.assertFalse(reset['review_required'])
+        self.assertEqual(result['candidate_indices'],[])
+
+    def test_scope_clock_gap_truncation_and_repetition_stop(self):
+        state,_=self.step(None,['a','b'])
+        cases=[(['a','b'],4,{'scope_key':'other'}),
+               (['b','c'],1,{}),(['b','c'],8,{'max_gap_seconds':3}),
+               (['b'],4,{}),(['b','a'],4,{}),(['b','c','c'],4,{})]
+        for values,second,options in cases:
+            with self.subTest(values=values,options=options):
+                held,result=self.step(state,values,second,**options)
+                self.assertTrue(held['review_required'])
+                self.assertEqual(result['candidate_indices'],[])
+        repeated,_=self.step(None,['a','a'])
+        _,result=self.step(repeated,['a','a','b'],4)
+        self.assertEqual(result['reason'],'VIEW_CONTINUITY_AMBIGUOUS_OR_LOST')
+
+    def test_corrupt_state_is_not_silently_replaced(self):
+        state,result=self.step({'version':0},['a'])
+        self.assertIsNone(state)
+        self.assertEqual(result['reason'],'BASELINE_CORRUPT')
+        with self.assertRaises(ValueError):self.step(None,[])

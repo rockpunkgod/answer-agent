@@ -58,6 +58,71 @@ class WeComToolTests(unittest.TestCase):
             transport_factory=lambda:self.transport,allow_input=True,
             probe=lambda root:{'status':'OK','controls':[{'control_type':'Window'},{'control_type':'Pane'}],'truncated':False,'window':{'client_version':'anonymous'}})
 
+    def test_visible_boundary_persists_and_requires_explicit_reset(self):
+        self.session['arrival_tracking']={'enabled':True,'reviewed':True,
+            'reviewer':'anonymous fixture','max_gap_seconds':300}
+        def read(text):
+            return {'status':'OK','scope':'REVIEWED_VISIBLE_RECORDS_ONLY','messages':[
+                {'id':text,'text':text,'source_sent_at':None,
+                 'name_classification':classify_names('English A','Alice')}]}
+        with patch.object(self.service,'get_messages',return_value=read('history')):
+            first=self.service.poll_messages(self.target)
+        self.assertEqual(first['visible_boundary']['status'],'BASELINE_ESTABLISHED')
+        restarted=WeComTools(self.db_path,session=self.session,root=self.root,
+            transport_factory=lambda:self.transport,allow_input=True)
+        with patch.object(restarted,'get_messages',return_value=read('history')):
+            again=restarted.poll_messages(self.target)
+        self.assertEqual(again['new_observation_count'],0)
+        self.assertEqual(again['visible_boundary']['status'],'VIEW_UNCHANGED')
+        with patch.object(restarted,'get_messages',return_value=read('unrelated')):
+            held=restarted.poll_messages(self.target)
+            self.assertEqual(held['status'],'VISIBLE_BOUNDARY_REQUIRES_REVIEW')
+            reset=restarted.poll_messages(self.target,reset_baseline=True)
+        self.assertEqual(reset['visible_boundary']['status'],'BASELINE_ESTABLISHED')
+        self.assertFalse(reset['visible_boundary']['automatic_ack_eligible'])
+        with closing(Store(self.db_path)) as db:
+            self.assertEqual(db.one('SELECT COUNT(*) FROM messages')[0],1)
+            self.assertEqual(db.one('SELECT COUNT(*) FROM outbox')[0],1)
+            self.assertEqual(db.one('SELECT COUNT(*) FROM performance_units')[0],0)
+            self.assertEqual(db.one("SELECT COUNT(*) FROM audit WHERE event='WECOM_VISIBLE_BASELINE_RESET'")[0],1)
+        self.assertEqual(self.transport.calls,[])
+
+    def test_visible_append_and_unclassified_name_never_enqueue_ack(self):
+        self.session['arrival_tracking']={'enabled':True,'reviewed':True,
+            'reviewer':'anonymous fixture','max_gap_seconds':300}
+        def item(text):
+            return {'id':text,'text':text,'source_sent_at':None,
+                    'name_classification':classify_names('English A','Alice')}
+        original=item('history')
+        def read(messages):return {'status':'OK','messages':messages}
+        with patch.object(self.service,'get_messages',return_value=read([original])):
+            self.service.poll_messages(self.target)
+        with patch.object(self.service,'get_messages',return_value=read([original,item('candidate')])):
+            result=self.service.poll_messages(self.target)
+        self.assertEqual(result['visible_boundary']['candidate_indices'],[1])
+        self.assertEqual(result['visible_boundary']['candidate_count'],1)
+        self.assertFalse(result['visible_boundary']['new_message_verified'])
+        unknown={'id':'unknown','text':'whose question?','source_sent_at':None}
+        with patch.object(self.service,'get_messages',return_value=read([unknown])):
+            result=self.service.poll_messages(self.target)
+        self.assertEqual(result['visible_boundary']['reason'],'NAME_CLASSIFICATION_REQUIRED')
+        self.assertEqual(result['new_observation_count'],1)
+        with patch.object(self.service,'get_messages',return_value=read([original,item('candidate')])):
+            result=self.service.poll_messages(self.target)
+        self.assertEqual(result['visible_boundary']['status'],'VIEW_REQUIRES_REVIEW')
+        with closing(Store(self.db_path)) as db:
+            self.assertEqual(db.one('SELECT COUNT(*) FROM messages')[0],1)
+            self.assertEqual(db.one('SELECT COUNT(*) FROM outbox')[0],1)
+            self.assertEqual(db.one('SELECT COUNT(*) FROM performance_units')[0],0)
+
+    def test_visible_boundary_configuration_fails_before_desktop(self):
+        with self.assertRaisesRegex(ValueError,'VISIBLE_TRACKING_NOT_ENABLED'):
+            self.service.poll_messages(self.target,reset_baseline=True)
+        self.session['arrival_tracking']={'enabled':True,'reviewed':False}
+        with self.assertRaisesRegex(ValueError,'VISIBLE_TRACKING_CONFIG_INVALID'):
+            self.service.poll_messages(self.target)
+        self.assertEqual(self.transport.calls,[])
+
     def test_name_classification_scopes_students_by_group_and_preserves_raw_names(self):
         alice=classify_names('English A','Alice')
         self.assertEqual(alice['status'],'CLASSIFIED_BY_NAME')

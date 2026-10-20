@@ -8,6 +8,64 @@ from datetime import datetime
 import re
 
 
+def advance_visible_view(previous, fingerprints, *, scope_key, started_at, completed_at,
+                         max_gap_seconds=300, reset=False):
+    """A durable visible-text boundary, never proof of original send time.
+
+    First views establish history. Only unique suffix/prefix continuity yields
+    appended candidates. A lost boundary stays paused until explicit rebaseline.
+    """
+    def stamp(value):
+        result=datetime.fromisoformat(value)
+        if result.utcoffset() is None:raise ValueError('VISIBLE_VIEW_CLOCK_INVALID')
+        return result
+    if (not isinstance(scope_key,str) or not scope_key
+            or not isinstance(fingerprints,list) or not 1<=len(fingerprints)<=100
+            or any(not isinstance(v,str) or not re.fullmatch('[0-9a-f]{64}',v) for v in fingerprints)
+            or type(reset) is not bool
+            or type(max_gap_seconds) is not int or not 1<=max_gap_seconds<=900):
+        raise ValueError('VISIBLE_VIEW_INPUT_INVALID')
+    start,end=stamp(started_at),stamp(completed_at)
+    if end<start:raise ValueError('VISIBLE_VIEW_CLOCK_INVALID')
+    result={'status':'VIEW_REQUIRES_REVIEW','candidate_indices':[],
+            'new_message_verified':False,'automatic_ack_eligible':False}
+    if previous is None or reset:
+        state={'version':1,'scope_key':scope_key,'fingerprints':list(fingerprints),
+               'started_at':started_at,'completed_at':completed_at,'review_required':False}
+        return state,{**result,'status':'BASELINE_ESTABLISHED'}
+    if (not isinstance(previous,dict) or type(previous.get('version')) is not int or previous.get('version')!=1
+            or not isinstance(previous.get('fingerprints'),list)
+            or not 1<=len(previous['fingerprints'])<=100
+            or any(not isinstance(v,str) or not re.fullmatch('[0-9a-f]{64}',v) for v in previous['fingerprints'])
+            or type(previous.get('review_required')) is not bool):
+        return None,{**result,'reason':'BASELINE_CORRUPT'}
+    reason=None
+    try:
+        old_start,old_end=stamp(previous['started_at']),stamp(previous['completed_at'])
+        if old_end<old_start or start<old_end:reason='CLOCK_MOVED_BACKWARD'
+        elif (end-old_start).total_seconds()>max_gap_seconds:reason='VIEW_GAP_EXCEEDED'
+    except (ValueError,KeyError,TypeError):
+        reason='BASELINE_CLOCK_INVALID'
+    if previous.get('scope_key')!=scope_key:reason='VIEW_SCOPE_CHANGED'
+    if previous['review_required']:reason=previous.get('reason','BOUNDARY_REVIEW_REQUIRED')
+    old=previous['fingerprints']
+    matches=[size for size in range(1,min(len(old),len(fingerprints))+1)
+             if old[-size:]==fingerprints[:size]]
+    if reason is None and fingerprints!=old:
+        if len(matches)!=1:reason='VIEW_CONTINUITY_AMBIGUOUS_OR_LOST'
+        elif matches[0]==len(fingerprints):reason='VIEW_MOVED_BACKWARD_OR_TRUNCATED'
+        elif (any(v in old for v in fingerprints[matches[0]:])
+              or len(set(fingerprints[matches[0]:]))!=len(fingerprints[matches[0]:])):
+            reason='REPEATED_CONTENT_REQUIRES_REVIEW'
+    if reason:
+        return {**previous,'review_required':True,'reason':reason},{**result,'reason':reason}
+    state={**previous,'fingerprints':list(fingerprints),'started_at':started_at,
+           'completed_at':completed_at}
+    return state,{**result,'status':'VIEW_UNCHANGED' if fingerprints==old else 'APPENDED_VISIBLE_CANDIDATES',
+                  'candidate_indices':[] if fingerprints==old else list(range(matches[0],len(fingerprints))),
+                  'observed_after':previous['started_at'],'observed_by':completed_at}
+
+
 def time_label_identity(label):
     """Auxiliary occurrence hint only; missing year stays missing."""
     if not isinstance(label,str):return None

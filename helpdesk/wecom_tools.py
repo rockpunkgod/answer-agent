@@ -569,12 +569,61 @@ class WeComTools:
         return {**result,'scope':'DISCOVERED_VISIBLE_INCOMING_TEXT_ONLY',
                 'platform_identity_verified':False,'automatic_ack_eligible':False}
 
-    def poll_messages(self, chat_id):
+    def _track_visible_view(self,db,chat_id,result,policy,started_at,reset):
+        from .wecom_visible import advance_visible_view
+        key='wecom_visible_boundary:'+sha256(encode([self.session['platform'],chat_id]).encode()).hexdigest()
+        old=db.one('SELECT value FROM settings WHERE key=?',(key,))
+        try:previous=json.loads(old[0]) if old else None
+        except (ValueError,TypeError):previous={'version':0}
+        scope=sha256(encode([chat_id,self.session['display_name'],result.get('scope'),
+            self.session['pin']['window_geometry_handle'],self.session['pin']['image_size'],
+            self.session.get('incoming_discovery',{}).get('viewport'),
+            [m.get('id') for m in self.session.get('messages',[])]
+                if result.get('scope')=='REVIEWED_VISIBLE_RECORDS_ONLY' else [],
+            policy['max_gap_seconds']]).encode()).hexdigest()
+        fingerprints=[]
+        for message in result['messages']:
+            classified=message.get('name_classification') or {}
+            if classified.get('status')!='CLASSIFIED_BY_NAME' or not classified.get('student_key'):
+                if isinstance(previous,dict) and previous.get('version')==1:
+                    db.execute('UPDATE settings SET value=? WHERE key=?',
+                        (encode({**previous,'review_required':True,'reason':'NAME_CLASSIFICATION_REQUIRED'}),key))
+                return {'status':'VIEW_REQUIRES_REVIEW','reason':'NAME_CLASSIFICATION_REQUIRED',
+                        'candidate_indices':[],'new_message_verified':False,'automatic_ack_eligible':False}
+            fingerprints.append(sha256(encode([classified['group_key'],classified['student_key'],message['text'],
+                (message.get('source_time_evidence') or {}).get('normalized_original_time_label')]).encode()).hexdigest())
+        if not fingerprints:
+            return {'status':'VIEW_REQUIRES_REVIEW','reason':'NO_VISIBLE_ANCHOR',
+                    'candidate_indices':[],'new_message_verified':False,'automatic_ack_eligible':False}
+        state,boundary=advance_visible_view(previous,fingerprints,scope_key=scope,
+            started_at=started_at,completed_at=now(),max_gap_seconds=policy['max_gap_seconds'],reset=reset)
+        if state is not None:
+            db.execute('INSERT INTO settings(key,value) VALUES(?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                       (key,encode(state)))
+        if reset:
+            Workflow(db)._event('WECOM_VISIBLE_BASELINE_RESET',details={'chat_id':chat_id,
+                'previous_state_sha256':sha256(old[0].encode()).hexdigest() if old else None,
+                'current_records_are_history':True,'automatic_ack_eligible':False})
+        return {**boundary,'candidate_count':len(boundary['candidate_indices'])}
+
+    def poll_messages(self, chat_id, *, reset_baseline=False):
         """Persist reviewed observations, not verified new platform messages.
 
         Distinct displayed time labels keep distinct text observations.
         This remains auxiliary identity and must never trigger automatic ACKs.
         """
+        policy=self.session.get('arrival_tracking') or {}
+        if not isinstance(policy,dict):raise ValueError('VISIBLE_TRACKING_CONFIG_INVALID')
+        enabled=policy.get('enabled') is True
+        if enabled:
+            gap=policy.get('max_gap_seconds',300)
+            if (policy.get('reviewed') is not True or not isinstance(policy.get('reviewer'),str)
+                    or not policy['reviewer'].strip() or type(gap) is not int or not 1<=gap<=900):
+                raise ValueError('VISIBLE_TRACKING_CONFIG_INVALID')
+            policy={**policy,'max_gap_seconds':gap}
+        if type(reset_baseline) is not bool:raise ValueError('VISIBLE_TRACKING_CONFIG_INVALID')
+        if reset_baseline and not enabled:raise ValueError('VISIBLE_TRACKING_NOT_ENABLED')
+        started_at=now()
         result=(self.scan_messages(chat_id) if self.session.get('incoming_discovery',{}).get('reviewed') is True
                 else self.get_messages(chat_id))
         if result.get('status')!='OK':
@@ -625,11 +674,15 @@ class WeComTools:
                     'observation_key':key,'text_observation_key':base,'chat_id':chat_id,'message':message,
                     'platform_identity_verified':False,'automatic_ack_eligible':False})
                 fresh.append(message)
-        return {**result,'status':'OBSERVATIONS_SAVED' if fresh else 'NO_NEW_OBSERVATIONS',
+            boundary=self._track_visible_view(db,chat_id,result,policy,started_at,reset_baseline) if enabled else None
+        status='OBSERVATIONS_SAVED' if fresh else 'NO_NEW_OBSERVATIONS'
+        if boundary and boundary['status']=='VIEW_REQUIRES_REVIEW':status='VISIBLE_BOUNDARY_REQUIRES_REVIEW'
+        return {**result,'status':status,
                 'messages':fresh,'new_observation_count':len(fresh),
                 'new_time_evidence_count':new_time_evidence,
                 'confirmed_observation_times':confirmed_times,
-                'automatic_ack_eligible':False,'platform_identity_verified':False}
+                'automatic_ack_eligible':False,'platform_identity_verified':False,
+                **({'visible_boundary':boundary} if boundary else {})}
 
     @staticmethod
     def _confirmed_observation_time(db,key,chat_id,message):
