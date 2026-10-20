@@ -71,6 +71,19 @@ class NativeGuardTests(unittest.TestCase):
         self.native.user.SetCursorPos.assert_not_called()
         self.native.user.mouse_event.assert_not_called()
 
+    def test_history_scroll_is_one_upward_gesture_and_rechecks_focus(self):
+        result=self.native.call('Scroll',{'loc':[150,150],'direction':'up'})
+        self.assertEqual(result['backend'],'WECOM_NATIVE')
+        self.native.user.mouse_event.assert_called_once_with(0x0800,0,0,360,0)
+        self.assertEqual(self.native.foreground.call_count,2)
+
+    def test_scroll_rejects_arbitrary_direction_and_extra_steps(self):
+        for args in ({'loc':[150,150],'direction':'down'},
+                     {'loc':[150,150],'direction':'up','steps':100}):
+            with self.assertRaisesRegex(ValueError,'HISTORY_SCROLL_OUTSIDE_ALLOWLIST'):
+                self.native.call('Scroll',args)
+        self.native.user.mouse_event.assert_not_called()
+
     def test_verified_click_records_native_backend_not_windows_mcp(self):
         result=self.native.call('Click',{'loc':[150,150]})
         self.assertEqual(result['backend'],'WECOM_NATIVE')

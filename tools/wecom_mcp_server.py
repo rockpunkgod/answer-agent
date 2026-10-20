@@ -36,6 +36,16 @@ def build_server(service):
         return service.call('get_messages',chat_id=chat_id)
 
     @mcp.tool()
+    def wecom_history_page(chat_id: str) -> dict:
+        """One reviewed native history scroll, not message import or proof of exhausted history."""
+        return service.call('history_page',chat_id=chat_id)
+
+    @mcp.tool()
+    def wecom_poll_messages(chat_id: str) -> dict:
+        """Persist/deduplicate reviewed visible observations; not live discovery or automatic ACK eligibility."""
+        return service.call('poll_messages',chat_id=chat_id)
+
+    @mcp.tool()
     def wecom_open_image(message_id: str) -> dict:
         """Open one locally reviewed incoming image after current layout verification."""
         return service.call('open_image',message_id=message_id)

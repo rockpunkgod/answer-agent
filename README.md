@@ -6,7 +6,7 @@
 
 ## 企业微信业务 MCP（原生后端试用）
 
-`tools/wecom_mcp_server.py` 提供控件检查、当前会话、读取、打开图片、准备回复、发送与附件核验及历史回复回读共10个受限工具。默认使用 Win32 原生后端，不启动 Windows-MCP；只允许已审核的“苇中鹤”测试会话，默认禁止输入和发送。工具不接受任意坐标、收件人、命令或文件路径。操作引用原 Outbox，发送不确定不重试，不另建完成或绩效台账。
+`tools/wecom_mcp_server.py` 提供控件检查、当前会话、读取、打开图片、准备回复、发送与附件核验及历史回复回读共12个受限工具。默认使用 Win32 原生后端，不启动 Windows-MCP；只允许已审核的“苇中鹤”测试会话，默认禁止输入和发送。工具不接受任意坐标、收件人、命令或文件路径。操作引用原 Outbox，发送不确定不重试，不另建完成或绩效台账。
 
 使用已安装 MCP 2.2.0 的解释器运行（下例复用其依赖环境，不运行 Windows-MCP 服务）：
 
@@ -21,6 +21,23 @@ E:\作业帮\.venv-windows-mcp\Scripts\python.exe tools/wecom_mcp_server.py --da
 原生消息复制菜单可在本机审核的 `messages[].copy_menu.ocr_search_box` 中启用本地 Windows OCR 兜底（截图像素的左上右下，最大512×256）。正常仍先用原控件哈希；不一致时仅在该区域放大识别唯一“复制”标签，再核验窗口和菜单区域未变化。无匹配、歧义、超时、截图过期即停止，不转调用模型。OCR不确定收件人、原始时间或答案，也不能定位发送按钮；若上次读取中断留下该已审核复制菜单挡住消息，只确认后关闭一次，再重新核验消息；未确认菜单或消息仍变化时停止，不循环按Escape。不配置时行为不变。依赖本机已有Windows OCR语言包，不新增服务或模型。
 
 已有真实来源测试“收到”命令 `python -m helpdesk.collector_test_ack_cli` 支持 `--backend native`，其 `prepare-pin/dispatch/inspect` 复用原CollectorTestAckWorkflow和已审核目标，不创建第二套Ack。原生模式需有效原生显示器与完整发送/回读控件配方，仍验证实际来源证据；FIXTURE不能使用真实传输。旧命令默认Windows-MCP保持兼容。此接线仅用于已授权苇中鹤测试，日常学生群的AutomaticDeliveryRuntime仍是原群适配器，尚未迁移或通过原生群发送验收。
+
+### 单次历史翻页（待真实验证）
+
+`history <绑定chat_id>` 使用原生向上滚动一次，不需要Windows-MCP。需显式 `--enable-input`，并在本机会话文件中提供已审核 `history` 配方：`reviewed=true`、当前消息区域 `region_box/region_hash` 和该区域内的原生屏幕 `point`。CLI/MCP不能传入坐标或任意滚动次数。配方必须由实际界面核验产生，不提供虚构通用坐标。
+
+翻页前核对会话、窗口、当前消息区域和滚动点，翻页后再次核对会话并保存原生操作证据。返回 `HISTORY_VIEW_CHANGED` 或 `HISTORY_VIEW_UNCHANGED`，不代表读取消息、到达历史开头或完成导入。内容变化后原配方失效，应核验新的可见记录，不能盲目循环翻页。该入口仅模拟验证，当前真实配方尚未建立；图片另存也尚未实现。
+
+### 可见消息增量观察（不发送）
+
+`poll` 保存本次已审核可见消息的原文、采集时间和证据引用到现有数据库；`watch` 有限轮询并逐行输出结果，不调用模型或 Windows-MCP。原生复制需要 `--enable-input`，但这两个操作均不发送：
+
+```powershell
+python tools/wecom_cli.py --database <已有数据库> --session <审核会话文件> --enable-input poll <绑定chat_id>
+python tools/wecom_cli.py --database <已有数据库> --session <审核会话文件> --enable-input watch <绑定chat_id> --iterations 10 --interval 5
+```
+
+结果区分 `OBSERVATIONS_SAVED`、`NO_NEW_OBSERVATIONS` 和 `UNAVAILABLE`。失败或未知状态即停止，Ctrl+C可退出（退出码130）。命令按操作检查明确成功状态，其他状态退出码2；发送只有 `SENT_UI_CONFIRMED` 返回0，`SEND_UNKNOWN`/`SENDING`/取消均不能作为成功继续后续脚本。`image` 返回0只证明打开动作被调用，不证明图片内容已核验。已保存观察按会话、审核记录ID及原文哈希去重，重启仍有效；原文变化保留新观察。这是原生可见记录观察，不是平台消息唯一ID或连续收题：相同原文的不同消息无法区分，未配置的新气泡也不会自动发现。不会据此创建Ack/答疑任务或绩效；原始发送时间缺失仍待核验。窗口布局变化、会话配方过期需重新核验，不能盲目续期。MCP `wecom_poll_messages` 复用同一方法。
 
 ### 同一功能也可直接使用 CLI
 

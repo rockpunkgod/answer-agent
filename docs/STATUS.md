@@ -1,5 +1,29 @@
 # 当前能力与缺口
 
+## 新入口实际MCP传输验证（2026-10-20）
+
+使用本机已有MCP 2.2.0解释器，通过ClientSession + stdio_client真实启动tools/wecom_mcp_server.py，initialize/list_tools列出12个工具，含wecom_history_page和wecom_poll_messages。两者使用白名单外匿名目标实际call_tool均返回UNAVAILABLE/CHAT_OUTSIDE_ALLOWLIST，未调用桌面。使用临时SQLite，退出后清理；没有访问正式库或发送。属于真实本机MCP进程/协议验证，不是企业微信业务动作REAL通过。历史翻页/图片保存仍需桌面交接后适配；不据此宣称完成持续收题或上线。NOT_READY。
+
+
+## 受限历史翻页CLI/MCP（2026-10-20）
+
+新增history/wecom_history_page，使用NativeWeComTransport的一次固定向上滚动；没有Windows-MCP、模型或任意键鼠参数。要求本机会话history区域/哈希/点已审核，点经显示器缩放换算后须落入该区域，操作前后核验现有会话窗口。画面变化不等于消息入库，未变化不等于历史耗尽，不生成Ack或绩效。滚动后不匹配旧配方则停止，没有自动重标定/盲目循环。
+
+UNIT/MOCK：原生/CLI/业务工具/测试Ack相关60项通过、0失败/跳过。新增一次滚动与焦点重验、拒绝方向/次数扩展、缺审核和跨目标停止、区域外滚动点停止、未变化不声称读完历史。REAL未翻页：桌面交接问题尚待用户回复；当前历史配方未建立，图片另存未实现。上一轮为PROGRESS（代码与差异清理），当前也为PROGRESS；未将等待用户当作已运行进程。整体NOT_READY。
+
+
+## CLI脚本返回码与当前控件实测（2026-10-20）
+
+上一轮为PROGRESS：已修改CLI/MCP及持久化观察去重。本轮继续修复命令返回码：按操作成功状态白名单判断，发送UNKNOWN/SENDING/FAILED/CANCELLED/PENDING和未知状态退出2；watch遇任何非预期状态立即停，不睡眠重试；人工Ctrl+C退出130。image动作返回仍只表示INVOKED_UNVERIFIED，不是图片核验通过。未修改Outbox状态机或新增自动重试。
+
+UNIT/MOCK：原生/业务CLI/测试Ack回归56项通过、0失败/跳过，git diff --check通过。REAL READONLY：2026-10-20原生Win32列出4个子窗口，MSAA child_count=1；UIA仍只有3个顶层节点，无内部消息/发送可用控件。没有激活/输入/发送，没有读取DeepSeek或重放原请求。新消息发现、历史翻页和另存为仍需实际布局适配，尚未完成；不把可见观察轮询算作完整持续入口。NOT_READY。
+
+## 可见消息增量观察 CLI（2026-10-20）
+
+新增poll/watch和MCP wecom_poll_messages，复用原生读取及现有audit事务保存观察原文/时间/证据，跨重启去重；有限轮询，失败或人工中断停止，不启用发送。不新增数据库或生产消息源。明确区分新增观察、无新增观察、读取失败；观察不等于已验证平台新消息，相同内容的不同平台消息无法区分，不自动创建Ack/题目/绩效。
+
+UNIT/MOCK：python -X utf8 -B -m unittest -q tests.test_wecom_tools tests.test_wecom_cli tests.test_wecom_native tests.test_collector_ack_native tests.test_collector_test_ack，52项通过、0失败/跳过。覆盖跨实例去重、原文保存/变化、失败不消费、轮询失败停止及参数限制。REAL未操作桌面/发送，持续新气泡发现、历史翻页、另存附件、原生学生群自动Ack仍未验证/完成。NOT_READY。
+
 ## 第6题原图网页练习及发送按钮修正（2026-10-20）
 
 后续REAL：用户明确确认第6题未提交、允许发送一次。接回同一空间8/p2，原附件/提示词/文件哈希及发送控件重新核验，写入独占确认意图后仅点击一次发送，无重传。取得独立会话15922f7e-9d15-4628-9706-0415ca2a10de，实际捕获自然答复；答复扩展多个题号及多个答案字母，原selected_option检查返回EGO_ANSWER_OPTION_REQUIRES_REVIEW，未放行。

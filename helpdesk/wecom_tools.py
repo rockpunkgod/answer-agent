@@ -299,6 +299,69 @@ class WeComTools:
         return {'status':'OK','messages':messages,'scope':'REVIEWED_VISIBLE_RECORDS_ONLY',
                 'continuous_listener':False,'complete_history':False}
 
+    def history_page(self, chat_id):
+        """One reviewed native upward scroll; never claims a history import."""
+        if chat_id!=self.session.get('target_key'):
+            raise ValueError('CHAT_OUTSIDE_ALLOWLIST')
+        if self.backend!='NATIVE':
+            raise ValueError('HISTORY_NATIVE_BACKEND_REQUIRED')
+        recipe=self.session.get('history') or {}
+        if recipe.get('reviewed') is not True:
+            raise ValueError('HISTORY_CONTROLS_NOT_REVIEWED')
+        self._require_input()
+        with self._desktop() as (desktop,pin):
+            bounds=pin.get('display_bounds');point=recipe.get('point');box=recipe.get('region_box')
+            if (not isinstance(bounds,list) or len(bounds)!=4 or not isinstance(point,list) or len(point)!=2
+                    or not isinstance(box,list) or len(box)!=4 or bounds[2]<=bounds[0] or bounds[3]<=bounds[1]):
+                raise ValueError('HISTORY_VIEWPORT_REQUIRED')
+            x=(point[0]-bounds[0])*pin['image_size'][0]/(bounds[2]-bounds[0])
+            y=(point[1]-bounds[1])*pin['image_size'][1]/(bounds[3]-bounds[1])
+            if not (box[0]<=x<box[2] and box[1]<=y<box[3]):
+                raise ValueError('HISTORY_POINT_OUTSIDE_VIEWPORT')
+            before,_=self._frame(desktop,pin)
+            # A reviewed viewport snapshot anchors the initial action. A second
+            # page needs a fresh review if the material changed; no blind loop.
+            self._checked_region(before,recipe)
+            result=desktop._call('Scroll',loc=recipe['point'],direction='up')
+            time.sleep(.3)
+            after,_=self._frame(desktop,pin)
+            from PIL import Image
+            def viewport(record):
+                path=next(c['path'] for c in record['content'] if c.get('type')=='image')
+                with Image.open(path) as image:return pixel_hash(image,recipe['region_box'])
+            changed=viewport(before)!=viewport(after)
+        status='HISTORY_VIEW_CHANGED' if changed else 'HISTORY_VIEW_UNCHANGED'
+        self._audit('history_page',status,controls=['message_list'],evidence={
+            'attempt_id':result.get('attempt_id'),'before_attempt':before.get('attempt_id'),
+            'after_attempt':after.get('attempt_id'),'messages_imported':0})
+        return {'status':status,'messages_imported':0,'complete_history':False,
+                'history_exhausted':False,'automatic_retry':False}
+
+    def poll_messages(self, chat_id):
+        """Persist reviewed observations, not verified new platform messages.
+
+        Identity includes recipe ID and text. Identical platform messages cannot
+        be distinguished by this fallback and must never trigger automatic ACKs.
+        """
+        result=self.get_messages(chat_id)
+        if result.get('status')!='OK':
+            return result
+        fresh=[]
+        with closing(Store(self.database)) as db, db.transaction():
+            for message in result['messages']:
+                key=sha256(encode([chat_id,message['id'],message['text']]).encode()).hexdigest()
+                exists=db.one("SELECT 1 FROM audit WHERE event='WECOM_VISIBLE_OBSERVATION' "
+                              "AND json_extract(details,'$.observation_key')=? LIMIT 1",(key,))
+                if exists:
+                    continue
+                Workflow(db)._event('WECOM_VISIBLE_OBSERVATION',details={
+                    'observation_key':key,'chat_id':chat_id,'message':message,
+                    'platform_identity_verified':False,'automatic_ack_eligible':False})
+                fresh.append(message)
+        return {**result,'status':'OBSERVATIONS_SAVED' if fresh else 'NO_NEW_OBSERVATIONS',
+                'messages':fresh,'new_observation_count':len(fresh),
+                'automatic_ack_eligible':False,'platform_identity_verified':False}
+
     def open_image(self,message_id):
         recipe=self._message(message_id)
         if recipe.get('kind')!='image':
@@ -422,7 +485,7 @@ class WeComTools:
     def call(self,operation,**arguments):
         try:
             if operation not in {'inspect_controls','get_chat_state','list_chats','open_chat','get_messages',
-                                 'open_image','prepare_reply','send_reply','verify_reply','download_attachment'}:
+                                 'open_image','prepare_reply','send_reply','verify_reply','download_attachment','poll_messages','history_page'}:
                 raise ValueError('OPERATION_OUTSIDE_ALLOWLIST')
             return getattr(self,operation)(**arguments)
         except Exception as exc:

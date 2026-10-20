@@ -58,6 +58,65 @@ class WeComToolTests(unittest.TestCase):
             transport_factory=lambda:self.transport,allow_input=True,
             probe=lambda root:{'status':'OK','controls':[{'control_type':'Window'},{'control_type':'Pane'}],'truncated':False,'window':{'client_version':'anonymous'}})
 
+    def test_poll_persists_raw_observation_and_deduplicates_after_restart(self):
+        message={'id':'reviewed-1','text':'anonymous question','source_sent_at':None,'observed_at':now()}
+        result={'status':'OK','messages':[message],'continuous_listener':False}
+        with patch.object(self.service,'get_messages',return_value=result):
+            first=self.service.poll_messages(self.target)
+        restarted=WeComTools(self.db_path,session=self.session,root=self.root)
+        with patch.object(restarted,'get_messages',return_value=result):
+            second=restarted.poll_messages(self.target)
+        self.assertEqual(first['status'],'OBSERVATIONS_SAVED')
+        self.assertEqual(second['status'],'NO_NEW_OBSERVATIONS')
+        self.assertFalse(first['automatic_ack_eligible'])
+        with closing(Store(self.db_path)) as db:
+            rows=db.all("SELECT details FROM audit WHERE event='WECOM_VISIBLE_OBSERVATION'")
+            self.assertEqual(len(rows),1)
+            self.assertEqual(json.loads(rows[0][0])['message']['text'],message['text'])
+            self.assertIsNone(json.loads(rows[0][0])['message']['source_sent_at'])
+            self.assertEqual(db.one('SELECT count(*) FROM outbox')[0],1)
+
+    def test_changed_text_is_new_observation_not_a_new_platform_question(self):
+        for text in ('first wording','corrected wording','corrected wording'):
+            with patch.object(self.service,'get_messages',return_value={'status':'OK','messages':[
+                    {'id':'same-recipe','text':text,'source_sent_at':None,'observed_at':now()}]}):
+                result=self.service.poll_messages(self.target)
+            self.assertFalse(result['automatic_ack_eligible'])
+        self.assertEqual(result['new_observation_count'],0)
+        with closing(Store(self.db_path)) as db:
+            self.assertEqual(db.one("SELECT count(*) FROM audit WHERE event='WECOM_VISIBLE_OBSERVATION'")[0],2)
+
+    def test_history_requires_review_and_correct_chat_without_input(self):
+        self.assertEqual(self.service.call('history_page',chat_id='other')['reason'],'CHAT_OUTSIDE_ALLOWLIST')
+        self.assertEqual(self.service.call('history_page',chat_id=self.target)['reason'],'HISTORY_CONTROLS_NOT_REVIEWED')
+        self.assertEqual(self.transport.calls,[])
+
+    def test_history_stable_view_is_not_proof_history_exhausted(self):
+        self.pin['display_bounds']=[0,0,200,100]
+        self.session['history']={'reviewed':True,'region_box':[20,20,180,70],
+            'region_hash':self.pin['header_hash'],'point':[100,50]}
+        from PIL import Image
+        with Image.open(self.image) as image:
+            self.session['history']['region_hash']=pixel_hash(image,[20,20,180,70])
+        with patch('helpdesk.wecom_tools.time.sleep'):
+            result=self.service.call('history_page',chat_id=self.target)
+        self.assertEqual(result['status'],'HISTORY_VIEW_UNCHANGED')
+        self.assertFalse(result['history_exhausted'])
+        self.assertEqual(result['messages_imported'],0)
+        gestures=[a for t,a in self.transport.calls if t=='Scroll']
+        self.assertEqual(gestures,[{'loc':[100,50],'direction':'up'}])
+        self.transport.calls.clear()
+        self.session['history']['point']=[100,85]
+        self.assertEqual(self.service.call('history_page',chat_id=self.target)['reason'],'HISTORY_POINT_OUTSIDE_VIEWPORT')
+        self.assertFalse(any(t=='Scroll' for t,a in self.transport.calls))
+
+    def test_failed_poll_never_consumes_observations(self):
+        with patch.object(self.service,'get_messages',side_effect=ValueError('WINDOW_CHANGED')):
+            result=self.service.call('poll_messages',chat_id=self.target)
+        self.assertEqual(result['status'],'UNAVAILABLE')
+        with closing(Store(self.db_path)) as db:
+            self.assertEqual(db.one("SELECT count(*) FROM audit WHERE event='WECOM_VISIBLE_OBSERVATION'")[0],0)
+
     def test_default_backend_never_constructs_windows_mcp(self):
         with patch('helpdesk.wecom_native.NativeWeComTransport',return_value=self.transport) as native, \
                 patch('helpdesk.mcp_transport.MCPProcess',side_effect=AssertionError('Unexpected Windows-MCP')):

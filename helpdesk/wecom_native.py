@@ -208,9 +208,16 @@ class NativeWeComTransport:
             bounds=','.join(map(str,region));index=self.pin['display_index']
             text=f'Selected Displays: {index}\nScreenshot Region: ({bounds})\nVisible Displays: {index}:{info.device} ({bounds})\nCapture Backend: WECOM_NATIVE'
             content=[{'type':'text','text':text},{'type':'image','path':str(output)}]
-        elif tool in ('Click','Clipboard','Shortcut','Type'):
+        elif tool in ('Click','Clipboard','Shortcut','Type','Scroll'):
             self._check_input(arguments.get('loc'))
-            if tool=='Click':
+            if tool=='Scroll':
+                if set(arguments)!={'loc','direction'} or arguments['direction']!='up':
+                    raise ValueError('HISTORY_SCROLL_OUTSIDE_ALLOWLIST')
+                if not self.user.SetCursorPos(*arguments['loc']):raise ValueError('POINTER_MOVE_FAILED')
+                self._check_input(arguments['loc'])
+                self.user.mouse_event(0x0800,0,0,360,0)
+                content=[]
+            elif tool=='Click':
                 button=arguments.get('button','left');clicks=arguments.get('clicks',1)
                 if button not in ('left','right') or type(clicks) is not int or clicks not in (1,2):raise ValueError('INVALID_CLICK')
                 if not self.user.SetCursorPos(*arguments['loc']):raise ValueError('POINTER_MOVE_FAILED')
