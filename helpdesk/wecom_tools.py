@@ -385,6 +385,19 @@ class WeComTools:
     def _hover_time(self,desktop,pin,record,recipe):
         from PIL import Image
         config=recipe['time_hover'];blank=config['blank'];bounds=pin['display_bounds']
+        body=recipe['region_box']
+        anchor=config.get('message_box')
+        crop=config.get('label_box',[body[0]-6,body[1]-23,body[0]+344,body[1]+9])
+        if 'label_box' in config and (not isinstance(anchor,list) or len(anchor)!=4
+                or any(type(v) is not int for v in anchor) or anchor!=body
+                or not isinstance(crop,list) or len(crop)!=4
+                or any(type(v) is not int for v in crop)
+                or not 0<=crop[0]<crop[2]<=pin['image_size'][0]
+                or not 0<=crop[1]<crop[3]<=pin['image_size'][1]
+                or crop[2]-crop[0]>512 or crop[3]-crop[1]>128
+                or crop[0]<body[0]-128 or crop[2]>body[2]+128
+                or crop[1]<body[1]-128 or crop[3]>body[1]+9):
+            raise ValueError('TIME_LABEL_REGION_INVALID')
         x=(blank['point'][0]-bounds[0])*pin['image_size'][0]/(bounds[2]-bounds[0])
         y=(blank['point'][1]-bounds[1])*pin['image_size'][1]/(bounds[3]-bounds[1])
         box=blank['region_box']
@@ -395,7 +408,6 @@ class WeComTools:
         path=next(c['path'] for c in record['content'] if c.get('type')=='image')
         with Image.open(path) as image:
             recipe={**recipe,'region_hash':pixel_hash(image,recipe['region_box'])}
-        body=recipe['region_box']
         point=[bounds[0]+int((body[0]+5)*(bounds[2]-bounds[0])/pin['image_size'][0]),
                bounds[1]+int((body[1]+body[3])*(bounds[3]-bounds[1])/(2*pin['image_size'][1]))]
         desktop._call('Move',loc=point);time.sleep(1.2)
@@ -410,13 +422,14 @@ class WeComTools:
             if boxes.count(body)!=1:raise ValueError('TIME_MESSAGE_GEOMETRY_CHANGED')
             recipe={**recipe,'region_hash':pixel_hash(image,body)}
         from .wecom_control_ocr import read_time_label
-        crop=[body[0]-6,body[1]-23,body[0]+344,body[1]+9]
         try:
             evidence=read_time_label(self.root/'data/private/wecom-native'/(record['attempt_id']+'.json'),
                                      crop,display_index=pin['display_index'])
         except ValueError as exc:
             evidence={'time_status':'REQUIRES_ORIGINAL_TIME_EVIDENCE','reason':str(exc),
-                      'source_sent_at':None,'formal_statistics_eligible':False}
+                      'source_sent_at':None,'formal_statistics_eligible':False,
+                      'source_record':str(self.root/'data/private/wecom-native'/(record['attempt_id']+'.json')),
+                      'label_box':crop}
         current,_=self._frame(desktop,pin);self._checked_region(current,recipe)
         return current,recipe,evidence
 

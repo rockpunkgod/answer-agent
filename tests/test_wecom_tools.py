@@ -349,6 +349,44 @@ class WeComToolTests(unittest.TestCase):
         self.assertIsNone(evidence['source_sent_at'])
         self.assertEqual(evidence['time_status'],'REQUIRES_ORIGINAL_TIME_EVIDENCE')
         self.assertFalse(evidence['formal_statistics_eligible'])
+        self.assertEqual(evidence['source_record'],str(self.root/'data/private/wecom-native/anonymous.json'))
+        self.assertEqual(evidence['label_box'],[14,-3,364,29])
+
+    def test_reviewed_time_crop_is_passed_without_inventing_original_date(self):
+        from unittest.mock import Mock
+        self.pin['display_bounds']=[0,0,200,100]
+        record={'attempt_id':'anonymous','content':[{'type':'image','path':str(self.image)}]}
+        box=[30,5,80,19]
+        recipe={'region_box':[20,20,80,50],'time_hover':{'label_box':box,'message_box':[20,20,80,50],'blank':{
+            'region_box':[0,0,10,10],'region_hash':self.pin['avatar_hash'],'point':[5,5]}}}
+        evidence={'time_status':'REQUIRES_YEAR_EVIDENCE','source_sent_at':None,
+                  'formal_statistics_eligible':False}
+        with patch.object(self.service,'_frame',return_value=(record,{})), \
+                patch('helpdesk.wecom_visible.incoming_bubbles',return_value=[[20,20,80,50]]), \
+                patch('helpdesk.wecom_control_ocr.read_time_label',return_value=evidence) as read, \
+                patch('helpdesk.wecom_tools.time.sleep'):
+            _,_,result=self.service._hover_time(Mock(),self.pin,record,recipe)
+        self.assertEqual(read.call_args.args[1],box)
+        self.assertIsNone(result['source_sent_at'])
+        self.assertFalse(result['formal_statistics_eligible'])
+
+    def test_invalid_reviewed_time_crop_stops_before_desktop_actions(self):
+        from unittest.mock import Mock
+        self.pin['display_bounds']=[0,0,200,100]
+        recipe={'region_box':[20,20,80,50],'time_hover':{'message_box':[20,20,80,50],'blank':{}}}
+        for box in (None,[],[True,0,20,10],[-1,0,20,10],[30,40,80,60],
+                    [0,0,201,10],[100,80,150,90]):
+            desktop=Mock()
+            recipe['time_hover']['label_box']=box
+            with self.subTest(box=box), self.assertRaisesRegex(ValueError,'TIME_LABEL_REGION_INVALID'):
+                self.service._hover_time(desktop,self.pin,{},recipe)
+            desktop._call.assert_not_called()
+        for anchor in (None,[20,21,80,51],[20.0,20,80,50]):
+            desktop=Mock()
+            recipe['time_hover'].update(label_box=[30,5,80,19],message_box=anchor)
+            with self.assertRaisesRegex(ValueError,'TIME_LABEL_REGION_INVALID'):
+                self.service._hover_time(desktop,self.pin,{},recipe)
+            desktop._call.assert_not_called()
 
     def test_same_text_at_distinct_original_times_is_not_lost_on_restart(self):
         message={'id':'same-text-class','text':'same wording','source_sent_at':None}
