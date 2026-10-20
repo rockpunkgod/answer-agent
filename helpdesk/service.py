@@ -46,9 +46,22 @@ class Helpdesk:
     def __init__(self, store: Store):
         self.db = store
 
+    def bind_names(self, group_name: str, student_name: str, *, ambiguous_names=(), verified: bool = False) -> str:
+        """Reuse native display-name grouping as a local business binding.
+
+        This does not verify a platform account, authorize sending, or merge
+        renamed students. Existing bindings keep their verification state.
+        """
+        from .wecom_tools import classify_names
+        classification = classify_names(group_name, student_name, ambiguous_names=ambiguous_names)
+        if classification['status'] != 'CLASSIFIED_BY_NAME':
+            raise ValueError('NAME_REQUIRES_REVIEW')
+        return self.bind(classification['group_key'], classification['student_key'],
+                         student_name.strip(), verified=verified)
+
     def bind(self, group_key: str, student_key: str, display_name: str, *, verified: bool = False) -> str:
         if not group_key or not student_key:
-            raise ValueError("Stable adapter identity required; nickname is not an identity")
+            raise ValueError("Explicit local or platform binding keys required")
         with self.db.transaction():
             existing = self.db.one("SELECT * FROM bindings WHERE group_key=? AND student_key=?", (group_key, student_key))
             if existing:
