@@ -176,6 +176,31 @@ class WeComToolTests(unittest.TestCase):
             self.service.get_messages(self.target)
         self.assertFalse(any(tool in ('Clipboard','Click') for tool,args in self.transport.calls))
 
+    def test_read_only_renewal_checks_real_frame_contract_without_input(self):
+        from types import SimpleNamespace
+        from tools.wecom_cli import renew_read_only_session
+        from PIL import Image
+        session={**self.session,'scope':'REVIEWED_GROUP_READ_ONLY','allow_send':False,
+                 'reviewed':True,'reviewer':'anonymous operator','backend':'NATIVE',
+                 'display_name':'anonymous English group','allowed_group_names':['anonymous English group'],
+                 'pin':{**self.pin,'display_name':'anonymous English group','expires_at':1}}
+        path=self.root/'read-only.json';path.write_text(json.dumps(session),encoding='utf-8')
+        args=SimpleNamespace(database=self.db_path,session=path,enable_input=False,enable_send=False)
+        def build(database,**options):
+            return WeComTools(database,root=self.root,transport_factory=lambda:self.transport,**options)
+        with patch('tools.wecom_cli.WeComTools',side_effect=build):
+            result=renew_read_only_session(args)
+        self.assertEqual(result['status'],'READ_ONLY_SESSION_RENEWED')
+        self.assertGreater(json.loads(path.read_text())['pin']['expires_at'],1)
+        self.assertEqual([op for op,_ in self.transport.calls],['PowerShell','Screenshot','PowerShell'])
+        before=path.read_bytes();self.transport.calls.clear()
+        Image.new('RGB',(200,100),'red').save(self.image)
+        with patch('tools.wecom_cli.WeComTools',side_effect=build):
+            with self.assertRaisesRegex(ValueError,'CURRENT_CHAT_NOT_VERIFIED'):
+                renew_read_only_session(args)
+        self.assertEqual(path.read_bytes(),before)
+        self.assertEqual([op for op,_ in self.transport.calls],['PowerShell','Screenshot','PowerShell'])
+
     def test_reviewed_group_reads_without_enabling_delivery(self):
         session={**self.session,'scope':'REVIEWED_GROUP_READ_ONLY',
                  'reviewed':True,'reviewer':'local operator',

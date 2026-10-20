@@ -430,3 +430,5 @@ python tools/wecom_cli.py --database "<业务库>" --delivery-config "<原生ACK
 可选可见消息边界：在已审核会话中设置 `arrival_tracking={"enabled":true,"reviewed":true,"reviewer":"本人","max_gap_seconds":300}`（默认关闭）。第一次 `poll` 将当前可见文字建立为历史基线；后续进程从现有数据库恢复边界，唯一连续重叠后的新增文字只标为候选。窗口范围改变、重复内容、时间倒退、超出间隔或连续性丢失时返回 `VISIBLE_BOUNDARY_REQUIRES_REVIEW`，`watch` 停止。人工核验后运行 `python tools/wecom_cli.py --database <已有数据库> --session <审核会话文件> --enable-input baseline <绑定chat_id>`，将当前全部记录重新视为历史，并保留重置事件。
 
 该边界仅覆盖已复制、已按名称分类的可见文字；不证明处于聊天底部、学生身份、原始时间或真正的新消息到达。`new_message_verified`、`automatic_ack_eligible` 始终为 false，不创建 Ack、答疑或绩效。未取得候选不等于群里没有新消息，不能据此承诺15分钟应答。
+
+原生群只读会话可在窗口和目标未变化时续验：`python tools/wecom_cli.py --database <已有数据库> --session <审核会话文件> renew`。不要添加 `--enable-input` 或 `--enable-send`。命令取得新鲜前台截图，仍按原模板核对 WXWork、HWND、窗口/显示器尺寸、群标题和头像区域的精确哈希；全部相同时才原子更新该配置的有效期（10分钟）。它不激活窗口、不重选群、不修改哈希或坐标，也不续期任何发送授权；窗口移动、标题/布局变化或文件被并发编辑时停止，保留原文件。仅支持明确 `allow_send=false` 的 `REVIEWED_GROUP_READ_ONLY` 原生会话。此命令不创建新消息、不重置历史基线，不代表持续采集已经接通。

@@ -34,6 +34,72 @@ class GroupAckCliTests(unittest.TestCase):
             code = main(args)
         return code, json.loads(output.getvalue())
 
+    def renewal_session(self):
+        value={'scope':'REVIEWED_GROUP_READ_ONLY','allow_send':False,'backend':'NATIVE',
+            'display_name':'Anonymous English','target_key':'bound-chat',
+            'pin':{'expires_at':1,'header_hash':'fixed-header','avatar_hash':'fixed-avatar'}}
+        path=self.root/'reviewed-session.json'
+        path.write_text(json.dumps(value),encoding='utf-8')
+        return path,value
+
+    def test_read_only_renewal_preserves_templates_and_requires_verified_same_chat(self):
+        path,original=self.renewal_session()
+        with patch('tools.wecom_cli.WeComTools') as tools,patch('tools.wecom_cli.time.time',return_value=1000):
+            tools.return_value.call.return_value={'status':'VERIFIED_CURRENT_CHAT',
+                'chat_id':'bound-chat','display_name':'Anonymous English'}
+            code,result=self.run_cli(['--database',str(self.database),'--session',str(path),'renew'])
+            self.assertEqual(code,0)
+            tools.return_value.call.assert_called_once_with('get_chat_state')
+            options=tools.call_args.kwargs
+            self.assertFalse(options['allow_input']);self.assertFalse(options['allow_send'])
+        updated=json.loads(path.read_text(encoding='utf-8'))
+        self.assertEqual(updated['pin'].pop('expires_at'),1600)
+        original['pin'].pop('expires_at')
+        self.assertEqual(updated,original)
+        self.assertFalse(result['template_changed'])
+        self.assertFalse(result['automatic_ack_eligible'])
+        self.assertEqual(list(path.parent.glob(path.name+'.*.tmp')),[])
+
+    def test_failed_renewal_never_overwrites_file_or_retries(self):
+        path,_=self.renewal_session();before=path.read_bytes()
+        for outcome in ({'status':'VERIFIED_CURRENT_CHAT','chat_id':'other','display_name':'Anonymous English'},
+                        {'status':'UNAVAILABLE'}):
+            with patch('tools.wecom_cli.WeComTools') as tools:
+                tools.return_value.call.return_value=outcome
+                code,_=self.run_cli(['--database',str(self.database),'--session',str(path),'renew'])
+                self.assertEqual(code,2)
+                self.assertEqual(path.read_bytes(),before)
+                self.assertEqual(tools.return_value.call.call_count,1)
+        with patch('tools.wecom_cli.WeComTools') as tools:
+            tools.return_value.call.side_effect=ValueError('WECOM_WINDOW_CHANGED')
+            code,_=self.run_cli(['--database',str(self.database),'--session',str(path),'renew'])
+            self.assertEqual(code,2);self.assertEqual(path.read_bytes(),before)
+
+    def test_renewal_preserves_concurrent_user_edits(self):
+        path,_=self.renewal_session()
+        def changed(*args,**kwargs):
+            path.write_text('user edit',encoding='utf-8')
+            return {'status':'VERIFIED_CURRENT_CHAT','chat_id':'bound-chat','display_name':'Anonymous English'}
+        with patch('tools.wecom_cli.WeComTools') as tools:
+            tools.return_value.call.side_effect=changed
+            code,_=self.run_cli(['--database',str(self.database),'--session',str(path),'renew'])
+        self.assertEqual(code,2)
+        self.assertEqual(path.read_text(encoding='utf-8'),'user edit')
+        self.assertEqual(list(path.parent.glob(path.name+'.*.tmp')),[])
+
+    def test_renewal_rejects_send_scope_input_and_invalid_expiry_before_desktop(self):
+        path,value=self.renewal_session()
+        for change in ({'allow_send':True},{'scope':None},{'backend':'WINDOWS_MCP'},
+                       {'pin':{'expires_at':float('nan')}}):
+            path.write_text(json.dumps({**value,**change}),encoding='utf-8')
+            with patch('tools.wecom_cli.WeComTools') as tools:
+                code,_=self.run_cli(['--database',str(self.database),'--session',str(path),'renew'])
+                self.assertEqual(code,2);tools.assert_not_called()
+        path.write_text(json.dumps(value),encoding='utf-8')
+        with patch('tools.wecom_cli.WeComTools') as tools:
+            code,_=self.run_cli(['--database',str(self.database),'--session',str(path),'--enable-input','renew'])
+            self.assertEqual(code,2);tools.assert_not_called()
+
     def test_baseline_is_explicit_history_reset_and_review_is_failure(self):
         with patch('tools.wecom_cli.WeComTools') as tools:
             tools.return_value.call.return_value={'status':'NO_NEW_OBSERVATIONS',

@@ -1,5 +1,10 @@
 """Restricted WeCom CLI sharing the business MCP implementation."""
 import argparse
+from copy import deepcopy
+from hashlib import sha256
+import math
+import os
+import tempfile
 import json
 from pathlib import Path
 import sys
@@ -11,6 +16,7 @@ from helpdesk.wecom_tools import WeComTools
 
 
 SUCCESS_STATUSES={
+    'renew':{'READ_ONLY_SESSION_RENEWED'},
     'state':{'VERIFIED_CURRENT_CHAT'},'controls':{'OK'},'chats':{'OK'},
     'open':{'ALREADY_OPEN'},'messages':{'OK'},'image':{'INVOKED_UNVERIFIED'},
     'attachment':{'EXISTING_ORIGINAL_VERIFIED'},'prepare':{'PREPARED_VERIFIED'},
@@ -81,6 +87,50 @@ def group_ack(args):
             'automatic_retry':False}
 
 
+def renew_read_only_session(args):
+    """Extend only an unchanged reviewed read target, never rehash or authorize input."""
+    if args.session is None or args.enable_input or args.enable_send:
+        raise ValueError('READ_ONLY_RENEWAL_REQUIRED')
+    path=args.session.resolve(strict=True)
+    original=path.read_bytes()
+    session=json.loads(original.decode('utf-8-sig'))
+    if (session.get('scope')!='REVIEWED_GROUP_READ_ONLY'
+            or session.get('allow_send') is not False
+            or session.get('backend','NATIVE')!='NATIVE'):
+        raise ValueError('READ_ONLY_NATIVE_GROUP_REQUIRED')
+    proposed=deepcopy(session)
+    pin=proposed.get('pin',{})
+    expires=pin.get('expires_at')
+    if type(expires) not in (int,float) or not math.isfinite(expires):
+        raise ValueError('SESSION_EXPIRY_INVALID')
+    pin['expires_at']=time.time()+600
+    # No activation, clicks, clipboard or changed hashes. All existing visual,
+    # process, geometry and exact group configuration checks still run.
+    service=WeComTools(args.database,session=proposed,allow_input=False,allow_send=False)
+    state=service.call('get_chat_state')
+    if (state.get('status')!='VERIFIED_CURRENT_CHAT'
+            or state.get('chat_id')!=session.get('target_key')
+            or state.get('display_name')!=session.get('display_name')):
+        raise ValueError('CURRENT_CHAT_NOT_VERIFIED')
+    temporary=None
+    try:
+        with tempfile.NamedTemporaryFile(mode='w',encoding='utf-8',dir=path.parent,
+                prefix=path.name+'.',suffix='.tmp',delete=False) as stream:
+            temporary=Path(stream.name)
+            json.dump(proposed,stream,ensure_ascii=False,indent=2)
+            stream.flush();os.fsync(stream.fileno())
+        if path.read_bytes()!=original:
+            raise ValueError('SESSION_CHANGED_DURING_VERIFICATION')
+        os.replace(temporary,path)
+    finally:
+        if temporary is not None and temporary.exists():temporary.unlink()
+    return {'status':'READ_ONLY_SESSION_RENEWED','chat_id':session['target_key'],
+            'previous_expires_at':expires,'expires_at':pin['expires_at'],
+            'previous_session_sha256':sha256(original).hexdigest(),
+            'template_changed':False,'input_performed':False,'send_enabled':False,
+            'automatic_ack_eligible':False}
+
+
 def main(argv=None):
     # JSON consumers use UTF-8 even when Windows redirects stdout as GBK.
     # A successful read/send must not become an apparent failure at printing.
@@ -99,6 +149,7 @@ def main(argv=None):
     for name,key in (('open','chat_id'),('messages','chat_id'),('image','message_id'),
                      ('attachment','message_id'),('prepare','outbox_id'),('send','outbox_id'),('receipt','outbox_id')):
         sub.add_parser(name).add_argument(key)
+    sub.add_parser('renew',help='Reverify unchanged native read-only group pin; no inputs')
     sub.add_parser('poll').add_argument('chat_id')
     sub.add_parser('baseline',help='Establish current visible text as history; never sends').add_argument('chat_id')
     sub.add_parser('history').add_argument('chat_id')
@@ -123,6 +174,14 @@ def main(argv=None):
             result={'status':'UNAVAILABLE','reason':'GROUP_ACK_CONFIGURATION_OR_DATABASE_UNAVAILABLE','automatic_retry':False}
         print(json.dumps(result,ensure_ascii=False))
         return 0 if result.get('status') in SUCCESS_STATUSES[args.operation] else 2
+    if args.operation=='renew':
+        try:
+            result=renew_read_only_session(args)
+        except Exception:
+            result={'status':'UNAVAILABLE','reason':'READ_ONLY_SESSION_RENEWAL_NOT_VERIFIED',
+                    'automatic_retry':False}
+        print(json.dumps(result,ensure_ascii=False))
+        return 0 if result['status']=='READ_ONLY_SESSION_RENEWED' else 2
     operation={'state':'get_chat_state','controls':'inspect_controls','chats':'list_chats',
         'open':'open_chat','messages':'get_messages','image':'open_image',
         'attachment':'download_attachment','prepare':'prepare_reply','send':'send_reply','receipt':'verify_reply',
