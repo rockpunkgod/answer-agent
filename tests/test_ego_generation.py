@@ -135,6 +135,29 @@ class EgoGenerationTests(unittest.TestCase):
         row=self.store.one("SELECT details FROM audit WHERE event='ANSWER_CALL_RESULT'")
         self.assertEqual(json.loads(row[0])['status'],'UNKNOWN')
 
+    def test_completed_multi_question_reply_is_saved_rejected_never_left_running(self):
+        from helpdesk.ego_generation import run_existing
+        self.body='第12题选D。第13题选B。'
+        result=run_existing(self.store,self.run_id,1,self.root/'evidence')
+        self.assertEqual(result['state'],'REJECTED')
+        self.assertEqual(result['reason'],'EGO_ANSWER_OPTION_REQUIRES_REVIEW')
+        self.assertIsNone(result['outbox_id'])
+        self.assertEqual(self.store.one('SELECT text FROM answers')[0],self.body)
+        self.assertEqual(self.store.one('SELECT state FROM runs')[0],'REJECTED')
+        self.assertEqual(self.store.one("SELECT count(*) FROM audit WHERE event='EGO_TEACH_CAPTURED'")[0],0)
+        self.assertEqual(self.store.one("SELECT count(*) FROM audit WHERE event='EGO_TEACH_CAPTURE_REJECTED'")[0],1)
+        again=run_existing(self.store,self.run_id,1,self.root/'evidence')
+        self.assertFalse(again['resubmitted']);self.assertEqual(len(self.calls),1)
+
+    def test_completed_wrong_question_preserves_raw_reply_and_specific_reason(self):
+        from helpdesk.ego_generation import run_existing
+        self.body='第13题选D。'
+        result=run_existing(self.store,self.run_id,1,self.root/'evidence')
+        self.assertEqual(result['state'],'REJECTED')
+        self.assertEqual(result['reason'],'EGO_ANSWER_QUESTION_REQUIRES_REVIEW')
+        self.assertEqual(self.store.one('SELECT text FROM answers')[0],self.body)
+        self.assertIsNone(result['outbox_id'])
+
     def test_changed_capture_is_rejected_by_workflow_before_outbox(self):
         result=self.generator.generate(self.snapshot)
         proof=Path(result['web_session_evidence'])

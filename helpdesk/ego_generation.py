@@ -215,21 +215,34 @@ class EgoDeepSeekGenerator:
             raise ValueError('EGO_CAPTURE_BINDING_CHANGED')
         claim_deepseek_chat(snapshot, url)
         text = captured['text']
-        option = selected_option(snapshot, text, snapshot['ego_material_reuse']['correct_option_id'] if origin else None)
+        validation_error=None
+        try:
+            option = selected_option(snapshot, text, snapshot['ego_material_reuse']['correct_option_id'] if origin else None)
+        except ValueError as exc:
+            if str(exc) not in ('EGO_ANSWER_OPTION_REQUIRES_REVIEW','EGO_ANSWER_QUESTION_REQUIRES_REVIEW',
+                                'EGO_FOLLOWUP_SELECTION_CHANGED_REVIEW'):
+                raise
+            # The webpage completed, but its answer is not deliverable. Preserve
+            # the exact text through Workflow.finish instead of leaving RUNNING.
+            option=''
+            validation_error=str(exc)
         details = {'input_fingerprint':input_fingerprint(snapshot), 'session_url':url,
                    'evidence_path':str(proof), 'sha256':evidence[7:], 'correct_option_id':option,
-                   **({'reused_materials':snapshot['ego_material_reuse']} if origin else {})}
+                   **({'reused_materials':snapshot['ego_material_reuse']} if origin else {}),
+                   **({'validation_error':validation_error} if validation_error else {})}
+        event='EGO_TEACH_CAPTURE_REJECTED' if validation_error else 'EGO_TEACH_CAPTURED'
         with closing(Store(snapshot['session_store_path'])) as store, store.transaction():
-            previous = store.all("SELECT details FROM audit WHERE run_id=? AND event='EGO_TEACH_CAPTURED'", (snapshot['run_id'],))
+            previous = store.all("SELECT details FROM audit WHERE run_id=? AND event=?", (snapshot['run_id'],event))
             if previous and [json.loads(r[0]) for r in previous] != [details]:
                 raise ValueError('EGO_CAPTURE_HISTORY_CHANGED')
             if not previous:
                 store.execute('INSERT INTO audit(run_id,event,details,created_at) VALUES(?,?,?,?)',
-                    (snapshot['run_id'], 'EGO_TEACH_CAPTURED', encode(details), now()))
+                    (snapshot['run_id'], event, encode(details), now()))
         return dict(adapter=self.identity, simulated=False, run_id=snapshot['run_id'],
             session_id=snapshot['session_id'], complete=True, uploads_confirmed=True,
             uploaded_teaching_hashes={s['path']:s['sha256'] for s in skills},
             web_session_evidence=str(proof), correct_option_id=option, text=text,
+            **({'error':validation_error} if validation_error else {}),
             **({'reused_teaching_hashes':{s['path']:s['sha256'] for s in skills},
                 'material_origin_run_id':origin['run_id']} if origin else {}))
 
