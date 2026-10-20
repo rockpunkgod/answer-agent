@@ -19,7 +19,7 @@ def revision_source(store,snapshot):
     if original.get('ego_revision'):
         raise ValueError('EGO_REVISION_BUDGET_EXHAUSTED')
     keys=('session_id','binding_id','case_id','question_id','question_version','context_revision',
-          'turn_id','student_question','student_material','student_words','attachments','teaching_skills')
+          'turn_id','student_question','student_material','student_words','attachments','teaching_skills','ego_policy')
     if any(encode(original.get(k))!=encode(snapshot.get(k)) for k in keys):
         raise ValueError('EGO_REVISION_SOURCE_CHANGED')
     answer=store.one('SELECT a.* FROM answers a JOIN answer_evidence e ON e.answer_id=a.id WHERE e.run_id=?',
@@ -81,7 +81,8 @@ def prepare_revision(store,parent_run_id,*,space_id=None,page=None):
         check=json.loads(checks[0][0]);prompt=revision_prompt(check)
         browser=original['ego_browser']
         generator=EgoDeepSeekGenerator(space_id if space_id is not None else browser['space_id'],
-            browser['evidence_dir'],page=page if page is not None else browser['page'])
+            browser['evidence_dir'],page=page if page is not None else browser['page'],
+            policy=original.get('ego_policy','DIRECT_ORIGINAL'))
         # Nested transaction support is already used by OperatorTasks.freeze.
         from .operator_tasks import _NestedStore
         workflow=Workflow(_NestedStore(store),generation_adapter=generator,teaching_manifest=task['manifest_path'])

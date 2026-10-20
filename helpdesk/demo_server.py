@@ -177,7 +177,8 @@ def perform_operator(store, payload, config):
             from .reviewed_question_queue import request_enqueue
             try:
                 queued = request_enqueue(store, task['id'], config['manifest'],
-                    **({'ego_space':config['ego_space'],'ego_page':config.get('ego_page','p1')} if config.get('ego_space') is not None else {}))
+                    **({'ego_space':config['ego_space'],'ego_page':config.get('ego_page','p1'),
+                        'ego_policy':config.get('ego_policy','DIRECT_ORIGINAL')} if config.get('ego_space') is not None else {}))
                 task = tasks.get_task(task['id'])
                 task['auto_queue'] = queued
             except (ValueError, OSError) as exc:
@@ -450,7 +451,8 @@ class DemoHTTPServer(ThreadingHTTPServer):
         if self.automatic_answer.enabled and self.automatic_answer.backend == 'ego_lite':
             if self.operator_config is not None:
                 self.operator_config.update(ego_space=self.automatic_answer.config['space_id'],
-                                            ego_page=self.automatic_answer.config.get('page','p1'))
+                                            ego_page=self.automatic_answer.config.get('page','p1'),
+                                            ego_policy=self.automatic_answer.config.get('ego_policy','DIRECT_ORIGINAL'))
         if self.automatic_answer.enabled and (not self.question_auto_continue or self.worker_boundary or self.real_config):
             raise ValueError('Local automatic answers require reviewed source tasks and the local desktop boundary')
         if self.worker_boundary and self.automatic_delivery.enabled:

@@ -306,7 +306,7 @@ class Workflow:
                 if not isinstance(adapter, EgoDeepSeekGenerator):
                     raise ValueError('Trusted ego generation adapter required')
                 snapshot['ego_browser'] = adapter.browser_binding()
-                snapshot['ego_policy'] = 'DIRECT_ORIGINAL'
+                snapshot['ego_policy'] = adapter.policy
                 owned_chat = self.db.one('SELECT session_url FROM deepseek_chats WHERE session_id=?', (sid,))
                 snapshot['ego_request_url'] = owned_chat[0] if owned_chat else 'https://chat.deepseek.com/'
             snapshot["generation_adapter"] = adapter.identity

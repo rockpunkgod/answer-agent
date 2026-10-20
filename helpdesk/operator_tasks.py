@@ -340,13 +340,13 @@ class OperatorTasks:
             'formal_statistics_eligible': False, 'original_sender_known': False, 'original_sent_at': None}
 
     def freeze(self, task_id, *, teaching_manifest, preparation_path, evidence_dir,
-               ego_space=None, ego_page='p1'):
+               ego_space=None, ego_page='p1', ego_policy='DIRECT_ORIGINAL'):
         """Persist a prepared-adapter run only; no generator/transport is invoked."""
         if ego_space is not None:
             from .ego_generation import EgoDeepSeekGenerator
-            generator = EgoDeepSeekGenerator(ego_space, evidence_dir, page=ego_page)
+            generator = EgoDeepSeekGenerator(ego_space, evidence_dir, page=ego_page, policy=ego_policy)
         else:
-            if ego_page != 'p1':
+            if ego_page != 'p1' or ego_policy != 'DIRECT_ORIGINAL':
                 raise ValueError('ego_page requires ego_space')
             generator = PreparedDeepSeekGenerator(None, preparation_path, evidence_dir)
         manifest_path = Path(teaching_manifest).resolve(strict=True)

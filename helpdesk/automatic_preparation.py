@@ -88,7 +88,7 @@ def _source_review(store, task_id, *, allow_ego=False, allow_completed=False, al
              and snapshot.get('context_revision') == task['context_revision']
              and (snapshot.get('generation_adapter') == PreparedDeepSeekGenerator.identity
                   or (allow_ego and snapshot.get('generation_adapter') == 'EGO_LITE_DEEPSEEK'
-                      and snapshot.get('ego_policy') == 'DIRECT_ORIGINAL'))
+                      and snapshot.get('ego_policy') in ('DIRECT_ORIGINAL', 'MATCH_THEN_TEACH')))
              and snapshot.get('simulated') is False
              and Path(snapshot.get('session_store_path', '')).resolve() == Path(store.path).resolve(),
              'FROZEN_RUN_TASK_MISMATCH')

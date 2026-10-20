@@ -1,8 +1,7 @@
 """Natural-language ego teaching results into the existing Workflow/Outbox.
 
-Requires a frozen DIRECT_ORIGINAL run and its original source clarity review.
-One native request creates/binds its chat if needed. No sending, JSON uploads,
-or independent completion ledger.
+Uses a frozen native policy and its original source clarity review. Matching
+and teaching share the original run, session, receipts and delivery ledger.
 """
 from contextlib import closing
 from hashlib import sha256
@@ -19,8 +18,8 @@ from .teaching_bundle import verify_frozen_teaching
 
 
 def validate_direct_source(snapshot, *, allow_completed=False):
-    """One existing source review and local version checks; no webpage MATCH."""
-    if snapshot.get('ego_policy') != 'DIRECT_ORIGINAL':
+    """Existing source review and local version checks for either native policy."""
+    if snapshot.get('ego_policy') not in ('DIRECT_ORIGINAL', 'MATCH_THEN_TEACH'):
         raise ValueError('EGO_DIRECT_POLICY_REQUIRED')
     from .automatic_preparation import _source_review
     with closing(Store(Path(snapshot['session_store_path']).resolve(strict=True))) as store:
@@ -89,15 +88,57 @@ class EgoDeepSeekGenerator:
     identity = 'EGO_LITE_DEEPSEEK'
     simulated = False
 
-    def __init__(self, space_id, evidence_dir, *, page='p1', capture_only=False):
+    def __init__(self, space_id, evidence_dir, *, page='p1', capture_only=False, policy='DIRECT_ORIGINAL'):
         if type(space_id) is not int or space_id < 1 or not re.fullmatch(r'p[1-9][0-9]*', page):
             raise ValueError('An existing ego space and page are required')
         self.space_id, self.page = space_id, page
         self.directory = Path(evidence_dir).resolve()
         self.capture_only = capture_only
+        if policy not in ('DIRECT_ORIGINAL', 'MATCH_THEN_TEACH'):
+            raise ValueError('Unknown frozen ego policy')
+        self.policy = policy
 
     def browser_binding(self):
-        return {'space_id':self.space_id,'page':self.page,'evidence_dir':str(self.directory)}
+        return {'space_id':self.space_id,'page':self.page,'evidence_dir':str(self.directory),
+                **({'policy':self.policy} if self.policy != 'DIRECT_ORIGINAL' else {})}
+
+    def match(self, snapshot):
+        """First-stage only; existing native journal owns submission recovery."""
+        from .question_matching import begin_ego_attempt, ego_request, record_ego_result, validate_receipt
+        self._current(snapshot)
+        validate_direct_source(snapshot)
+        if 'question_match_result' in snapshot:
+            with closing(Store(snapshot['session_store_path'])) as store:
+                validate_receipt(store, snapshot)
+            return snapshot
+        request_id = snapshot['run_id'] + '-match'
+        capture = self.directory / (request_id + '.answer.json')
+        with closing(Store(snapshot['session_store_path'])) as store:
+            prior = store.one("SELECT details FROM audit WHERE run_id=? AND event='QUESTION_MATCH_ATTEMPT_STARTED'",
+                              (snapshot['run_id'],))
+            if prior:
+                request = ego_request(snapshot)
+                if json.loads(prior[0]).get('request') != request:
+                    raise ValueError('MATCH_NATIVE_REQUEST_CHANGED')
+            else:
+                if self.capture_only:
+                    raise ValueError('MATCH_PRIOR_ATTEMPT_REQUIRED')
+                request = begin_ego_attempt(store, snapshot, capture)['request']
+        browser = EgoDeepSeek(self.space_id, self.directory, page=self.page,
+                             allowed_files=[f['path'] for f in request['files']])
+        meter = RunMeter(snapshot['session_store_path'], snapshot['run_id'])
+        call_id = meter.start('DEEPSEEK_MATCH', self.identity, request_id, request_id)
+        try:
+            browser.submit(request_id, request['session_url'], request['prompt'],
+                attachments=[Path(f['path']) for f in request['files']], capture_only=bool(prior) or self.capture_only,
+                **({'new_session':True} if request.get('new_session') else {}))
+        except Exception:
+            meter.finish(call_id, 'UNKNOWN', 'EGO_MATCH_CAPTURE_NOT_CONFIRMED')
+            raise
+        with closing(Store(snapshot['session_store_path'])) as store:
+            finish_match_meter(store, snapshot, capture)
+            saved = record_ego_result(store, snapshot, capture)
+        return saved
 
     def _current(self, snapshot):
         from .service import Helpdesk
@@ -144,17 +185,25 @@ class EgoDeepSeekGenerator:
             from .ego_revision import revision_source
             with closing(Store(snapshot['session_store_path'])) as store:
                 revision = revision_source(store,snapshot)
+        if self.policy == 'MATCH_THEN_TEACH':
+            from .question_matching import frozen_receipt
+            matched = frozen_receipt(origin or revision or snapshot)
+            url = self._current(snapshot)
+            new_session = False
         files = [] if origin or revision else [Path(item['path']).resolve(strict=True) for item in skills]
         for item in snapshot['attachments']:
             path = Path(item['path']).resolve(strict=True)
             if sha256(path.read_bytes()).hexdigest() != item['sha256']:
                 raise ValueError('EGO_STUDENT_ATTACHMENT_CHANGED')
-            if not revision and (not origin or item['sha256'] not in {a['sha256'] for a in origin['attachments']}):
+            if self.policy == 'DIRECT_ORIGINAL' and not revision and (not origin or item['sha256'] not in {a['sha256'] for a in origin['attachments']}):
                 files.append(path)
         words = snapshot.get('student_words') or ''
         prompt = words if words.strip() else '第' + str(snapshot['student_question']['number']) + '题'
         if revision:
             prompt=snapshot['ego_revision']['prompt']
+        if self.policy == 'MATCH_THEN_TEACH':
+            prompt += '\n本会话历史生成内容为内部稿；仅明确列出的实际回复代表已交付。'
+            prompt += '\n按学生当前版本讲解。题面核验结果：' + json.dumps(matched['checked'], ensure_ascii=False)
         if not snapshot['attachments'] and not origin and not revision:
             q = snapshot['student_question']
             prompt = '\n'.join([snapshot.get('student_material') or '', q['verified_stem'],
@@ -176,7 +225,7 @@ class EgoDeepSeekGenerator:
             raise ValueError('EGO_CALL_HISTORY_REQUIRES_REVIEW')
         call_id = calls[0]['call_id'] if calls else meter.start('DEEPSEEK_TEACH', self.identity, request_id, request_id)
         try:
-            captured = browser.submit(request_id, snapshot['ego_request_url'], prompt, attachments=files,
+            captured = browser.submit(request_id, url if self.policy == 'MATCH_THEN_TEACH' else snapshot['ego_request_url'], prompt, attachments=files,
                                       capture_only=self.capture_only, **({'new_session':True} if new_session else {}))
         except Exception:
             meter.finish(call_id, 'UNKNOWN', 'EGO_CAPTURE_NOT_CONFIRMED')
@@ -192,8 +241,12 @@ class EgoDeepSeekGenerator:
             meter.finish(call_id, 'CONFIRMED', evidence)
         meter.close('DEEPSEEK_TEACH', evidence)
         # The approved direct policy makes no search or MATCH model calls.
-        meter.close('DEEPSEEK_MATCH', 'direct-original-policy')
-        meter.close('SEARCH', 'direct-original-policy')
+        if self.policy == 'DIRECT_ORIGINAL':
+            meter.close('DEEPSEEK_MATCH', 'direct-original-policy')
+            meter.close('SEARCH', 'direct-original-policy')
+        elif origin or revision:
+            meter.close('DEEPSEEK_MATCH', 'reused-original-match')
+            meter.close('SEARCH', 'reused-original-match')
         # Recheck while the browser was generating; the old answer must never pass.
         verify_frozen_teaching(snapshot)
         current_url = self._current(snapshot)
@@ -250,6 +303,10 @@ class EgoDeepSeekGenerator:
 def _capture_record(store, snapshot, body, option_id=None):
     """Read immutable capture evidence; this never approves a current source."""
     verify_frozen_teaching(snapshot)
+    if (snapshot.get('ego_policy') == 'MATCH_THEN_TEACH'
+            and not snapshot.get('ego_material_reuse') and not snapshot.get('ego_revision')):
+        from .question_matching import validate_receipt
+        validate_receipt(store, snapshot)
     actual_delivery_files(snapshot)
     if snapshot.get('ego_revision'):
         from .ego_revision import revision_source
@@ -336,6 +393,25 @@ def freeze_material_reuse(store, snapshot):
     raise ValueError('EGO_FOLLOWUP_MATERIALS_UNVERIFIED')
 
 
+def finish_match_meter(store, snapshot, capture):
+    """Close/reconcile the original first-stage call from saved native evidence."""
+    rows = store.all("SELECT details FROM audit WHERE run_id=? AND event='ANSWER_CALL_STARTED'",
+                     (snapshot['run_id'],))
+    calls = [json.loads(r[0]) for r in rows if json.loads(r[0])['kind'] == 'DEEPSEEK_MATCH']
+    if len(calls) != 1:
+        raise ValueError('MATCH_COST_ATTEMPT_REQUIRED')
+    meter = RunMeter(store.path, snapshot['run_id'])
+    call_id = calls[0]['call_id']
+    results = [json.loads(r[0]) for r in store.all(
+        "SELECT details FROM audit WHERE run_id=? AND event='ANSWER_CALL_RESULT'", (snapshot['run_id'],))]
+    evidence = 'sha256:' + sha256(Path(capture).read_bytes()).hexdigest()
+    if any(r['call_id'] == call_id and r['status'] == 'UNKNOWN' for r in results):
+        meter.confirm_ego_capture(call_id, capture)
+    else:
+        meter.finish(call_id, 'CONFIRMED', evidence)
+    meter.close('DEEPSEEK_MATCH', evidence)
+
+
 def run_existing(store, run_id, space_id, evidence_dir, *, page='p1', capture_only=False):
     """Resume one frozen ego run into the original Workflow, never dispatch."""
     from .locking import resource_lock
@@ -346,8 +422,9 @@ def run_existing(store, run_id, space_id, evidence_dir, *, page='p1', capture_on
             raise ValueError('EGO_FROZEN_RUN_REQUIRED')
         if row['state'] != 'RUNNING':
             return {'state':row['state'],'resubmitted':False}
-        generator=EgoDeepSeekGenerator(space_id,evidence_dir,page=page,capture_only=capture_only)
         snapshot=json.loads(row['input_json'])
+        generator=EgoDeepSeekGenerator(space_id,evidence_dir,page=page,capture_only=capture_only,
+                                      policy=snapshot.get('ego_policy','DIRECT_ORIGINAL'))
         verify_frozen_teaching(snapshot)
         workflow=Workflow(store,generation_adapter=generator,
                           teaching_manifest=snapshot['teaching_skills'][0]['manifest_path'])

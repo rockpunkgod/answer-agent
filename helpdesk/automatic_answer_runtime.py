@@ -54,7 +54,7 @@ class AutomaticAnswerRuntime:
                  if isinstance(config, (str, Path)) else deepcopy(config))
         value = {'enabled': False} if value is None else value
         if (not isinstance(value, dict) or type(value.get('enabled')) is not bool
-                or set(value) - {'enabled', 'display_index', 'new_chat_button', 'preparation_controls', 'max_generation_attempts', 'backend', 'space_id', 'page'}):
+                or set(value) - {'enabled', 'display_index', 'new_chat_button', 'preparation_controls', 'max_generation_attempts', 'backend', 'space_id', 'page', 'ego_policy'}):
             raise ValueError('Explicit local automatic answer configuration required')
         self.backend = value.get('backend','windows_mcp')
         if self.backend not in ('windows_mcp','ego_lite'):
@@ -76,9 +76,11 @@ class AutomaticAnswerRuntime:
         self.current_transport = None
         self.last_result = None
         self.error_type = None
+        self.reconcile_on_tick = True
         if self.enabled and self.backend == 'ego_lite':
             from .ego_generation import EgoDeepSeekGenerator
-            EgoDeepSeekGenerator(value.get('space_id'), self.workspace/'data/private/ego-generation', page=value.get('page','p1'))
+            EgoDeepSeekGenerator(value.get('space_id'), self.workspace/'data/private/ego-generation', page=value.get('page','p1'),
+                                 policy=value.get('ego_policy','DIRECT_ORIGINAL'))
             if transport_factory is not None or navigator is not None:
                 raise ValueError('ego runtime does not use the desktop transport')
         if self.enabled and self.backend == 'windows_mcp':
@@ -126,6 +128,7 @@ class AutomaticAnswerRuntime:
                     self.pending_process.held_lock = None
                 self.pending_process = None
             self.pause_requested.clear()
+            self.reconcile_on_tick = True
         else:
             raise ValueError('Use pause or resume')
 
@@ -332,6 +335,13 @@ class AutomaticAnswerRuntime:
         return run_existing(store,snapshot['run_id'],self.config['space_id'],task['evidence_dir'],
                             page=self.config.get('page','p1'))
 
+    def _match_ego(self, *, store, task, snapshot, attempt_id):
+        self.require_running()
+        from .ego_generation import EgoDeepSeekGenerator
+        snapshot = self._matching_input(store, snapshot)
+        return EgoDeepSeekGenerator(self.config['space_id'], task['evidence_dir'],
+            page=self.config.get('page','p1'), policy='MATCH_THEN_TEACH').match(snapshot)
+
     def _execute_ready(self, store, queued):
         from .reviewed_question_queue import advance, get, _phase
         task_id = queued['task_id']
@@ -342,12 +352,13 @@ class AutomaticAnswerRuntime:
                 return queued
             row=store.one('SELECT input_json FROM runs WHERE id=?',(queued['run_id'],))
             frozen=json.loads(row[0])
-            if frozen.get('generation_adapter') != 'EGO_LITE_DEEPSEEK':
+            if (frozen.get('generation_adapter') != 'EGO_LITE_DEEPSEEK'
+                    or frozen.get('ego_policy') != self.config.get('ego_policy','DIRECT_ORIGINAL')):
                 _phase(store,task_id,'NEEDS_ATTENTION',reason='AUTOMATIC_ANSWER_BACKEND_CHANGED')
                 return get(store,task_id)
             self.require_running()
             self._course(dict(store.one('SELECT * FROM operator_tasks WHERE id=?',(task_id,))))
-            return advance(store,task_id,executor='LUNA',generator=self._generate_ego)
+            return advance(store,task_id,executor='LUNA',generator=self._generate_ego,matcher=self._match_ego)
         if queued['phase'] == 'READY_FOR_GENERATION':
             _phase(store,task_id,'NEEDS_ATTENTION',reason='AUTOMATIC_ANSWER_BACKEND_CHANGED')
             return get(store,task_id)
@@ -411,14 +422,26 @@ class AutomaticAnswerRuntime:
             return {'state': 'EXECUTOR_BUSY'}
         try:
             self.require_running()
-            from .reviewed_question_queue import list_queue
+            from .reviewed_question_queue import list_queue, advance
             with closing(Store(self.database.resolve(strict=True))) as store:
                 eligible = {row[0] for row in store.all('SELECT id FROM operator_tasks WHERE label=?',
                     ('SOURCE_MESSAGE',))} if not self.simulation and store.one(
                         "SELECT name FROM sqlite_master WHERE name='operator_tasks'") else None
-                candidates = [q for q in list_queue(store) if (eligible is None or q['task_id'] in eligible) and q['phase'] in (
+                queues = list_queue(store)
+                if self.backend == 'ego_lite' and self.reconcile_on_tick:
+                    self.reconcile_on_tick = False
+                    for queued in queues:
+                        if queued['phase'] == 'EXECUTION_UNCERTAIN' and (eligible is None or queued['task_id'] in eligible):
+                            recovered = advance(store, queued['task_id'])
+                            if recovered['phase'] == 'GENERATED':
+                                self.last_result = dict(task_id=queued['task_id'], state='GENERATED', reason=None)
+                                self.error_type = None
+                                return self.last_result
+                    queues = list_queue(store)
+                candidates = [q for q in queues if (eligible is None or q['task_id'] in eligible) and q['phase'] in (
                     'WAITING_DESKTOP_EXECUTOR', 'READY_FOR_PREPARATION', 'ATTACHMENTS_READY', 'WAITING_FOR_PAGE',
-                    'SESSION_CREATION_STARTED', 'PREPARATION_STARTED', 'GENERATION_STARTED', 'READY_FOR_GENERATION')]
+                    'SESSION_CREATION_STARTED', 'PREPARATION_STARTED', 'GENERATION_STARTED', 'READY_FOR_GENERATION',
+                    'READY_FOR_MATCHING', 'MATCHING_STARTED')]
                 if not candidates:
                     return {'state': 'IDLE'}
                 task_id = candidates[0]['task_id']

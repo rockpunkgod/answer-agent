@@ -95,16 +95,17 @@ def _ego_capture_proof(store, run_id, call_id, capture):
     row, _ = _run(store, run_id)
     snapshot = json.loads(row['input_json'])
     calls = [c for c in _records(store, run_id, START) if c['call_id'] == call_id]
-    _require(len(calls) == 1 and calls[0]['provider'] == 'EGO_LITE_DEEPSEEK'
-             and calls[0]['kind'] == 'DEEPSEEK_TEACH'
-             and calls[0]['request_key'] == run_id + '-teach', 'COST_RECOVERY_CALL_MISMATCH')
-    expected = Path(snapshot['ego_browser']['evidence_dir']) / (run_id + '-teach.answer.json')
+    suffix = {'DEEPSEEK_TEACH':'teach', 'DEEPSEEK_MATCH':'match'}.get(calls[0]['kind']) if len(calls) == 1 else None
+    _require(suffix and calls[0]['provider'] == 'EGO_LITE_DEEPSEEK'
+             and (suffix != 'match' or snapshot.get('ego_policy') == 'MATCH_THEN_TEACH')
+             and calls[0]['request_key'] == run_id + '-' + suffix, 'COST_RECOVERY_CALL_MISMATCH')
+    expected = Path(snapshot['ego_browser']['evidence_dir']) / (run_id + '-' + suffix + '.answer.json')
     path = Path(capture).resolve(strict=True)
     _require(path == expected.resolve(strict=True), 'COST_RECOVERY_CAPTURE_PATH_CHANGED')
     raw = path.read_bytes()
     digest = sha256(raw).hexdigest()
     value = json.loads(raw)
-    state = json.loads(path.with_name(run_id + '-teach.state.json').read_text(encoding='utf-8'))
+    state = json.loads(path.with_name(run_id + '-' + suffix + '.state.json').read_text(encoding='utf-8'))
     _require(snapshot['generation_adapter'] == 'EGO_LITE_DEEPSEEK'
              and value.get('adapter') == 'EGO_LITE' and value.get('complete') is True
              and value.get('space_id') == snapshot['ego_browser']['space_id']

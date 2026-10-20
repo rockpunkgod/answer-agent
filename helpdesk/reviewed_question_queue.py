@@ -141,8 +141,9 @@ def _ego_admission(store, task_id):
     value = json.loads(rows[0][0]).get('ego_browser') if rows else None
     if value is None:
         return {}
-    _require(isinstance(value,dict) and set(value)=={'space_id','page'}, 'ADMISSION_BACKEND_EVIDENCE_CHANGED')
-    return {'ego_space':value['space_id'],'ego_page':value['page']}
+    _require(isinstance(value,dict) and set(value) in ({'space_id','page'}, {'space_id','page','policy'}), 'ADMISSION_BACKEND_EVIDENCE_CHANGED')
+    return {'ego_space':value['space_id'],'ego_page':value['page'],
+            **({'ego_policy':value['policy']} if value.get('policy','DIRECT_ORIGINAL') != 'DIRECT_ORIGINAL' else {})}
 
 
 def _resume_admission(store, row):
@@ -176,7 +177,7 @@ def _resume_admission(store, row):
 
 
 def request_enqueue(store, task_id, manifest, *, preparation_path=None, evidence_dir=None, candidate_path=None,
-                    ego_space=None, ego_page='p1'):
+                    ego_space=None, ego_page='p1', ego_policy='DIRECT_ORIGINAL'):
     """Persist trusted scheduling intent, then admit if actual ACK/stop allow it.
 
     A WAITING_ACK task stays reviewed but unfrozen. Later resume_pending reuses
@@ -186,8 +187,8 @@ def request_enqueue(store, task_id, manifest, *, preparation_path=None, evidence
     _require(not store.connection.in_transaction, 'COMMITTED_REVIEW_TRANSACTION_REQUIRED')
     if ego_space is not None:
         from .ego_generation import EgoDeepSeekGenerator
-        EgoDeepSeekGenerator(ego_space, evidence_dir or Path(store.path).parent, page=ego_page)
-    elif ego_page != 'p1':
+        EgoDeepSeekGenerator(ego_space, evidence_dir or Path(store.path).parent, page=ego_page, policy=ego_policy)
+    elif ego_page != 'p1' or ego_policy != 'DIRECT_ORIGINAL':
         raise ValueError('ego_page requires ego_space')
     with resource_lock(str(Path(store.path).resolve()) + '.reviewed-question-admissions.lock'):
         _, task, _ = _reviewed_task(store, task_id)
@@ -198,7 +199,8 @@ def request_enqueue(store, task_id, manifest, *, preparation_path=None, evidence
         config = (str(manifest), digest, str(prep), str(evidence), str(candidate))
         row = store.one('SELECT * FROM reviewed_question_admissions WHERE task_id=?', (task_id,))
         if row:
-            expected_backend = {'ego_space':ego_space,'ego_page':ego_page} if ego_space is not None else {}
+            expected_backend = ({'ego_space':ego_space,'ego_page':ego_page,
+                **({'ego_policy':ego_policy} if ego_policy != 'DIRECT_ORIGINAL' else {})} if ego_space is not None else {})
             _require(_ego_admission(store,task_id) == expected_backend, 'ADMISSION_BACKEND_CHANGED')
             _require(tuple(row[k] for k in ('manifest_path', 'manifest_sha256', 'preparation_path', 'evidence_dir', 'candidate_path')) == config,
                      'ADMISSION_CONFIGURATION_CHANGED')
@@ -210,7 +212,8 @@ def request_enqueue(store, task_id, manifest, *, preparation_path=None, evidence
                      phase,created_at,updated_at) VALUES(?,?,?,?,?,?,'READY_FOR_ENQUEUE',?,?)''',
                     (task_id, *config, timestamp, timestamp))
                 _admission_audit(store, task_id, 'REVIEWED_QUESTION_ADMISSION_REQUESTED',
-                    {'phase':'READY_FOR_ENQUEUE', **({'ego_browser':{'space_id':ego_space,'page':ego_page}} if ego_space is not None else {})})
+                    {'phase':'READY_FOR_ENQUEUE', **({'ego_browser':{'space_id':ego_space,'page':ego_page,
+                        **({'policy':ego_policy} if ego_policy != 'DIRECT_ORIGINAL' else {})}} if ego_space is not None else {})})
             row = store.one('SELECT * FROM reviewed_question_admissions WHERE task_id=?', (task_id,))
         _resume_admission(store, row)
         return next(a for a in list_admissions(store) if a['task_id'] == task_id)
@@ -291,7 +294,7 @@ def _generated_outbox(store, run_id):
 
 
 def enqueue(store, task_id, manifest, *, preparation_path=None, evidence_dir=None, candidate_path=None,
-            ego_space=None, ego_page='p1'):
+            ego_space=None, ego_page='p1', ego_policy='DIRECT_ORIGINAL'):
     """Freeze an already reviewed task and queue it without desktop execution.
 
     Call after the initial review transaction commits. Repeated identical calls
@@ -302,7 +305,7 @@ def enqueue(store, task_id, manifest, *, preparation_path=None, evidence_dir=Non
         tasks, task, _ = _reviewed_task(store, task_id)
         prep, evidence, candidate = _paths(store, task, preparation_path, evidence_dir, candidate_path)
         task = tasks.freeze(task_id, teaching_manifest=manifest, preparation_path=prep, evidence_dir=evidence,
-                            **({'ego_space':ego_space,'ego_page':ego_page} if ego_space is not None else {}))
+                            ego_space=ego_space, ego_page=ego_page, ego_policy=ego_policy)
         _schema(store)
         existing = store.one('SELECT * FROM reviewed_question_queue WHERE task_id=?', (task_id,))
         if existing:
@@ -346,7 +349,24 @@ def _authoritative_result(store, task_id, *, recover_attempts=True):
         return None, None, 'NEEDS_ATTENTION'
     checked_task, snapshot, _ = _source_review(store, task_id, allow_ego=True)
     if snapshot.get('generation_adapter') == 'EGO_LITE_DEEPSEEK':
-        _require(snapshot.get('ego_policy') == 'DIRECT_ORIGINAL', 'EGO_DIRECT_POLICY_REQUIRED')
+        _require(snapshot.get('ego_policy') in ('DIRECT_ORIGINAL','MATCH_THEN_TEACH'), 'EGO_POLICY_REQUIRED')
+        if (snapshot['ego_policy'] == 'MATCH_THEN_TEACH'
+                and not snapshot.get('ego_material_reuse') and not snapshot.get('ego_revision')):
+            from .question_matching import record_ego_result, validate_receipt
+            if 'question_match_result' not in snapshot:
+                capture = Path(task['evidence_dir']) / (run['id']+'-match.answer.json')
+                match_state = capture.with_name(run['id']+'-match.state.json')
+                if match_state.is_file() and json.loads(match_state.read_text(encoding='utf-8')).get('phase') == 'CAPTURED':
+                    from .ego_generation import finish_match_meter
+                    finish_match_meter(store, snapshot, capture)
+                    record_ego_result(store, snapshot, capture)
+                    for attempt in queue['attempts']:
+                        if recover_attempts and attempt['stage'] == 'MATCHING' and attempt['state'] == 'STARTED':
+                            _attempt_finish(store, attempt['id'], 'RECOVERED_FROM_CAPTURE')
+                    return _authoritative_result(store,task_id,recover_attempts=recover_attempts)
+                _phase(store, task_id, 'READY_FOR_MATCHING')
+                return checked_task, snapshot, 'MATCHING'
+            validate_receipt(store, snapshot)
         saved_state = Path(task['evidence_dir']) / (run['id']+'-teach.state.json')
         if saved_state.is_file() and json.loads(saved_state.read_text(encoding='utf-8')).get('phase') == 'CAPTURED':
             # Only an already completed local capture may recover implicitly.
@@ -358,7 +378,7 @@ def _authoritative_result(store, task_id, *, recover_attempts=True):
             if recovered.get('state'):
                 return _authoritative_result(store,task_id,recover_attempts=recover_attempts)
         _phase(store, task_id, 'READY_FOR_GENERATION')
-        # No separate webpage MATCH or upload stage in the approved direct policy.
+        # Teaching uses one native stage; only DIRECT_ORIGINAL skips matching.
         return checked_task, snapshot, 'GENERATION'
     owned = store.one('SELECT session_url FROM deepseek_chats WHERE session_id=?', (run['session_id'],))
     if owned:
@@ -401,7 +421,7 @@ def _authoritative_result(store, task_id, *, recover_attempts=True):
     return checked_task, snapshot, 'SESSION_CREATION'
 
 
-def advance(store, task_id, *, executor=None, session_creator=None, preparer=None, generator=None):
+def advance(store, task_id, *, executor=None, session_creator=None, preparer=None, generator=None, matcher=None):
     """Advance at most one desktop stage through an explicitly injected LUNA actor.
 
     All callbacks receive keyword arguments store, task, snapshot, attempt_id.
@@ -431,13 +451,13 @@ def advance(store, task_id, *, executor=None, session_creator=None, preparer=Non
                 _attempt_finish(store, prior['id'], 'UNCERTAIN', 'EXECUTOR_INTERRUPTED')
             _phase(store, task_id, 'EXECUTION_UNCERTAIN', reason=stage + '_NOT_REPLAYED')
             return get(store, task_id)
-        callback = {'SESSION_CREATION': session_creator, 'PREPARATION': preparer, 'GENERATION': generator}[stage]
+        callback = {'SESSION_CREATION': session_creator, 'PREPARATION': preparer, 'MATCHING': matcher, 'GENERATION': generator}[stage]
         stop = store.one("SELECT value FROM settings WHERE key='stop_requested'")
         if stop and stop[0] == 'true':
             _phase(store, task_id, queue['phase'], reason='STOPPED')
             return get(store, task_id)
         if executor != 'LUNA' or callback is None:
-            phase = {'SESSION_CREATION': 'WAITING_DESKTOP_EXECUTOR', 'PREPARATION': 'READY_FOR_PREPARATION',
+            phase = {'SESSION_CREATION': 'WAITING_DESKTOP_EXECUTOR', 'PREPARATION': 'READY_FOR_PREPARATION', 'MATCHING':'READY_FOR_MATCHING',
                      'GENERATION': 'READY_FOR_GENERATION' if snapshot.get('generation_adapter') == 'EGO_LITE_DEEPSEEK' else 'ATTACHMENTS_READY'}[stage]
             _phase(store, task_id, phase, reason='LUNA_EXECUTOR_REQUIRED:' + stage)
             return get(store, task_id)
@@ -464,6 +484,9 @@ def advance(store, task_id, *, executor=None, session_creator=None, preparer=Non
             elif stage == 'PREPARATION':
                 preparation = complete_automatic_preparation(store, task_id, queue['candidate_path'])
                 _phase(store, task_id, 'ATTACHMENTS_READY', session_url=preparation['session_url'])
+            elif stage == 'MATCHING':
+                _, _, authoritative_stage = _authoritative_result(store, task_id, recover_attempts=False)
+                _require(authoritative_stage == 'GENERATION', 'MATCHER_DID_NOT_PERSIST_VALID_RESULT')
             else:
                 _, _, authoritative_stage = _authoritative_result(store, task_id, recover_attempts=False)
                 _require(authoritative_stage == 'GENERATED', 'GENERATOR_DID_NOT_PERSIST_VALID_ANSWER')

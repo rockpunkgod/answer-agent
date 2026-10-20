@@ -384,7 +384,7 @@ python -m playwright install chromium
 
 本地已审核任务可用现有 `python -m tools.operator_task --database <本地库> freeze --help` 查看冻结参数，新增 `--ego-space <已有空间编号>` 与 `--ego-page p1`，不执行网页或发送。冻结后空间、页面、结果目录及后端写入原 run，重启沿用；不能把已冻结的旧 MCP run 改为 ego，也不能换空间绕过未知请求。`run_ego_answer` 只接受与冻结值相同的参数，原消息审核、本机版本和固定教学来源仍是先决条件；新会话链接在首次生成后核验绑定。
 
-当前确认的 ego 流程是一次取答：题面确认 → 原任务排队 → 原图和教学原文上传 → 题号/原话 → 自然语言答案 → 原 Outbox。沿用现有自动答疑配置入口，设置 backend 为 ego_lite、space_id 为已有 TaskSpace 编号、page 为已有页面标签，并显式启用 enabled；不需要 display_index、new_chat_button 或旧 preparation_controls。配置来自本机，网页请求不能修改空间、附件目录或收件人。默认配置和生产库本轮未自动切换。
+ego 两阶段沿用现有自动答疑配置入口：设置 `backend=ego_lite`、`ego_policy=MATCH_THEN_TEACH`，并填写已有 TaskSpace 的 `space_id` 和页面 `page`。同一原任务先搜题、上传原图并核验，再在同一会话上传固定 ANSWER 原文生成，结果进入原 Outbox；普通追问复用已核验材料，不重新搜题、上传原文。启动仍用现有 `-AutomaticAnswerConfig` 和已准入的 `-ReferenceLookupConfig`；不需要 Windows-MCP 的显示器和控件配置。此路径目前仅模拟验证，尚未真实网页验收；默认配置和生产库未自动启用。旧任务继续使用冻结的 `DIRECT_ORIGINAL`，不可中途换策略。
 
 普通追问复用同一学生、题目、版本和会话已核验的首次上传，不重传相同 ANSWER 与旧图片。复用依据保存在原 run，读取前后都校验原捕获摘要；追问仍使用本轮学生原话及实际交付记录，不把未发草稿当成已交付。不重复题干或答案字母的普通解释可沿用原确认选项；明确改变答案、原证据变动时转人工。连续追问直接引用首次上传，避免复用链。没有新增后台服务或数据库表。
 
