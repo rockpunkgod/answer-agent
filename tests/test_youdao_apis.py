@@ -182,9 +182,11 @@ class YoudaoApiTests(unittest.TestCase):
         from tools.test_youdao_apis import main
         with patch('tools.test_youdao_apis.Settings.load',return_value=self.settings), \
              patch('tools.test_youdao_apis.ROOT',self.root), \
+             patch.object(PhotoSearch,'execute',autospec=True,side_effect=PhotoSearch.execute) as execute, \
              patch('helpdesk.youdao_api.http.client.HTTPSConnection') as network, redirect_stdout(io.StringIO()) as stdout:
             code=main(['--image',str(self.image),'--dry-run','--output-dir',str(self.root/'data/private/results')])
         self.assertEqual(code,0);network.assert_not_called()
+        self.assertNotIn('synthetic_test',execute.call_args.kwargs['context'])
         result=json.loads(stdout.getvalue());self.assertEqual(result['status'],'DRY_RUN')
         self.assertNotIn('synthetic-search',stdout.getvalue())
         self.assertNotIn('q',result)

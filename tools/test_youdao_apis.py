@@ -38,7 +38,7 @@ def main(argv=None):
         if args.dry_run or not args.pipeline:
             client=HandwritingErase(settings) if args.erase_only or args.pipeline and args.needs_cleanup else PhotoSearch(settings)
             result=client.execute(args.image,context={'question_version':'ANONYMOUS_SINGLE_IMAGE',
-                'context_revision':1,'synthetic_test':True},dry_run=args.dry_run)
+                'context_revision':1},dry_run=args.dry_run)
         else:
             if not args.db or not args.db.is_file() or not args.run_id:
                 raise ApiError('EXISTING_TASK_REQUIRED_FOR_PIPELINE')
