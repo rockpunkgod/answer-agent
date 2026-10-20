@@ -484,6 +484,21 @@ class WeComToolTests(unittest.TestCase):
             with self.assertRaises(ValueError):self.service._message_frame(desktop,self.pin,recipe)
         desktop._call.assert_called_once_with('Shortcut',shortcut='escape')
 
+    def test_test_answer_resolves_only_through_validated_test_mapping(self):
+        from helpdesk.delivery import BoundMessage
+        with closing(Store(self.db_path)) as db:
+            db.execute("UPDATE outbox SET purpose='TEST_ANSWER' WHERE id='reply'")
+            db.execute("UPDATE bindings SET group_key='local-test-source',student_key='original-student'")
+            row=db.one("SELECT * FROM outbox WHERE id='reply'")
+            mapped=BoundMessage('reply',self.binding,'wecom',self.target,'收到')
+            with patch('helpdesk.test_answer_queue.validate_test_copy',return_value=mapped) as validate:
+                self.assertEqual(self.service._reply_bound(db,row),mapped)
+                validate.assert_called_once_with(db,row)
+            with patch('helpdesk.test_answer_queue.validate_test_copy',side_effect=ValueError('TEST_COPY_STALE')):
+                with self.assertRaisesRegex(ValueError,'TEST_COPY_STALE'):
+                    self.service._reply_bound(db,row)
+        self.assertEqual(self.transport.calls,[])
+
     def test_prepare_only_uses_original_outbox_and_never_sends_or_completes(self):
         result=self.service.call('prepare_reply',outbox_id='reply')
         self.assertEqual(result['status'],'PREPARED_VERIFIED')

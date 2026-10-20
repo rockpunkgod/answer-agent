@@ -607,13 +607,22 @@ class WeComTools:
                     evidence={'attempt_id':result.get('attempt_id')})
         return {'status':'INVOKED_UNVERIFIED','message_id':message_id,'image_content_verified':False}
 
+    @staticmethod
+    def _reply_bound(db,row):
+        # A test copy retains its original task identity; only the existing
+        # validated test mapping may resolve its authorized contact destination.
+        if row['purpose']=='TEST_ANSWER':
+            from .test_answer_queue import validate_test_copy
+            return validate_test_copy(db,row)
+        return Workflow(db)._bound(row)
+
     def _bound_reply(self,db,desktop,pin,outbox_id):
         if Workflow(db)._stopped():
             raise ValueError('STOPPED')
         row=db.one('SELECT * FROM outbox WHERE id=?',(outbox_id,))
         if not row or row['purpose'] not in ('TEST_ANSWER','PROGRESS'):
             raise ValueError('AUTHORIZED_TEST_OUTBOX_REQUIRED')
-        bound=Workflow(db,desktop=desktop)._bound(row)
+        bound=self._reply_bound(db,row)
         if (bound.group_key,bound.student_key)!=('wecom',self.session['target_key']):
             raise ValueError('OUTBOX_TARGET_MISMATCH')
         if db.one("SELECT 1 FROM outbox WHERE binding_id=? AND state IN ('SENDING','SEND_UNKNOWN')",(row['binding_id'],)):
@@ -654,7 +663,7 @@ class WeComTools:
         with closing(Store(self.database)) as db:
             row=db.one('SELECT * FROM outbox WHERE id=?',(outbox_id,))
             if not row:raise ValueError('UNKNOWN_OUTBOX')
-            bound=Workflow(db)._bound(row)
+            bound=self._reply_bound(db,row)
             if row['purpose'] not in ('TEST_ANSWER','PROGRESS') or (bound.group_key,bound.student_key)!=('wecom',self.session['target_key']):
                 raise ValueError('OUTBOX_TARGET_MISMATCH')
             if row['state']!='PENDING':

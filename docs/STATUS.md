@@ -7,6 +7,20 @@
 
 # 当前能力与缺口
 
+## 最新消息受控真实交付成功（2026-10-20）
+
+REAL：仅企业微信苇中鹤。原生poll取得新原话“老师讲讲第二题C错在哪，binge-watching是主旨我就选C了”（复制证据01082a6dd400437b9250affa085fa314），新增观察1；三张新原图经原生预览/另存为保存、可解码及哈希核验。固定收到Outbox 2a991e9ca27a445da17f636405551463于北京时间13:59:24核验送达。界面分钟标签13:50没有完整原日期/秒证据，不填造source_sent_at，不据此宣称正式SLA通过。
+
+新阅读任务5e6fea3f17b64709979121857cdf335e，run782ae73dd30b43ea976f1ad99bff0ff6。冻结ANSWER 1c388a0596b13935ae7c6a1af00834915a8efa33、对应阅读manifest；原图+教学原文+原话在新题独立DeepSeek会话提交一次并实际捕获；原检查器NO_AUTOMATIC_FLAGS、版本/选项证据通过。无教学重试。
+
+原生CLI发现TEST_ANSWER错用原任务身份核验目标的缺口，发送前已停。最小修复：目标仅经现有validate_test_copy取得，仍检查冻结原答案、审核、版本、映射和白名单，不让模型填写目标。相关75项UNIT/MOCK回归通过；此前两次命令误写不存在的测试模块，各报1项导入错误，修正命令后全部通过。命令：python -X utf8 -B -m unittest -q tests.test_wecom_tools tests.test_wecom_cli tests.test_wecom_native tests.test_mcp_test_delivery tests.test_routing。
+
+REAL：答案Test Outbox 40d632e5272e4d52be3415a1a2c46961，原文无测试前缀，14:05:45实际发送并精确复制回读SENT_UI_CONFIRMED。测试库原政策只允许PROGRESS自动，首次返回MANUAL_SEND_REQUIRED且未点击发送；在本轮完整测试授权下，仅现有唯一待发TEST_ANSWER临时允许AUTO，完成后恢复原政策。重复同一send返回resubmitted=false，SEND_STARTED仍1。收到与答案各成功1条，无UNKNOWN/重发。
+
+绩效：OPERATOR_TEST与测试副本仍明确排除正式统计；同一原库两次generate日报版本一致、第二次changed=false，白天综合/语法听力/夜间答题均0。未把测试副本标成学生原群已交付，未静默完成原来源Outbox。详细私有证据：data/private/ego-acceptance-20261020/latest-1350-acceptance.json及latest-1350-daily-report.json。
+
+本条验证范围：人工监督下新消息→原生收到→三图保存→真实DeepSeek→原生实际答案发送→原台账回执与测试排除/日报幂等。未验证正式群持续收题、完整原始时间SLA、该题真实追问、付费成本或20个真实任务；不得据单条成功宣称CORE_FLOW_STABLE，整体NOT_READY。
+
 ## 本轮完整联调实际停止点（2026-10-20）
 
 后续用户确认“以印刷题号为准”（call_a99d1be1415140d2ae6347fb4e6cd8e3）。先用既有confirm_input解决原定位人工任务，再通过既有CORRECTION草稿/审核建立同一Question的明确澄清版本，未伪造成学生追问或增加独立题。任务b72a05b75cd94a8e98296215b5e0e517、run11c387b4351147b2907cf3b39fc01287及唯一修订f970d09f03344eb7aee7b4aabc4f5e79均复用原DeepSeek会话。自然请求增加印刷第7空的已核验前后原文，未增加答案、教学规则或JSON。两次真实捕获已回到Coach your child instead of taking over段；仍被原ANSWER检查器的source_position_cue拦截。独立调用原quoted函数确认修订稿识别引文数为0：裸英文未带要求的双引号。
