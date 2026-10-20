@@ -75,6 +75,16 @@ class GroupAckCliTests(unittest.TestCase):
             code,_=self.run_cli(['--database',str(self.database),'--session',str(path),'renew'])
             self.assertEqual(code,2);self.assertEqual(path.read_bytes(),before)
 
+    def test_renewal_reports_safe_window_failure_but_not_arbitrary_error_text(self):
+        path,_=self.renewal_session();original=path.read_bytes()
+        for reason,expected in (('WECOM_WINDOW_CHANGED','WECOM_WINDOW_CHANGED'),
+                                ('private detail https://example.invalid/token','CURRENT_CHAT_NOT_VERIFIED')):
+            with patch('tools.wecom_cli.WeComTools') as tools:
+                tools.return_value.call.return_value={'status':'UNAVAILABLE','reason':reason}
+                code,result=self.run_cli(['--database',str(self.database),'--session',str(path),'renew'])
+            self.assertEqual(code,2);self.assertEqual(result['reason'],expected)
+            self.assertEqual(path.read_bytes(),original)
+
     def test_renewal_preserves_concurrent_user_edits(self):
         path,_=self.renewal_session()
         def changed(*args,**kwargs):

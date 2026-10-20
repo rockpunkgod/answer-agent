@@ -438,3 +438,5 @@ python tools/wecom_cli.py --database "<业务库>" --delivery-config "<原生ACK
 `incoming_discovery.copy_menu_offset_box=[左,上,右,下]` 可将审核过的复制菜单搜索范围设置为相对于每条气泡中心的图像像素偏移；仍需已有 `copy_menu_search_box` 和准确的“复制”控件识别。偏移越界、控件不唯一或画面变化时停止，不扩大范围或盲点。两项能力只改善当前可见文字的读取，不证明新消息到达、不获取完整原时间、不启用自动“收到”。
 
 批量扫描前可设置 `incoming_discovery.clear_selection` 为已审核的聊天空白区域：`reviewed=true`、`region_box`、`region_hash`、物理屏幕 `point`。命令先核对当前群及空白区域，确认点在区域内、区域位于编辑框上方后，只点击一次，再用新截图提取整批气泡。这用于避免复制前面的消息时取消后面消息的旧选择、使整批初始哈希失效。区域变化或未审核时停止；不通过忽略题面哈希解决选中状态差异。
+
+`renew` 失败会返回可直接处理的错误码，例如 `WECOM_WINDOW_CHANGED` 或 `TEST_CONTACT_VISUAL_PIN_CHANGED`（沿用现有共享校验器的代码）。窗口变化需要重新审核当前窗口，不能仅手改有效期；任意异常详情、路径和服务响应不会作为错误原因输出。

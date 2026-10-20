@@ -199,7 +199,7 @@ class WeComToolTests(unittest.TestCase):
         before=path.read_bytes();self.transport.calls.clear()
         Image.new('RGB',(200,100),'red').save(self.image)
         with patch('tools.wecom_cli.WeComTools',side_effect=build):
-            with self.assertRaisesRegex(ValueError,'CURRENT_CHAT_NOT_VERIFIED'):
+            with self.assertRaisesRegex(ValueError,'TEST_CONTACT_VISUAL_PIN_CHANGED'):
                 renew_read_only_session(args)
         self.assertEqual(path.read_bytes(),before)
         self.assertEqual([op for op,_ in self.transport.calls],['PowerShell','Screenshot','PowerShell'])

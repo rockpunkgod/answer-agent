@@ -4,6 +4,7 @@ from copy import deepcopy
 from hashlib import sha256
 import math
 import os
+import re
 import tempfile
 import json
 from pathlib import Path
@@ -111,7 +112,8 @@ def renew_read_only_session(args):
     if (state.get('status')!='VERIFIED_CURRENT_CHAT'
             or state.get('chat_id')!=session.get('target_key')
             or state.get('display_name')!=session.get('display_name')):
-        raise ValueError('CURRENT_CHAT_NOT_VERIFIED')
+        reason=state.get('reason')
+        raise ValueError(reason if isinstance(reason,str) and re.fullmatch(r'[A-Z0-9_]{1,120}',reason) else 'CURRENT_CHAT_NOT_VERIFIED')
     temporary=None
     try:
         with tempfile.NamedTemporaryFile(mode='w',encoding='utf-8',dir=path.parent,
@@ -177,9 +179,9 @@ def main(argv=None):
     if args.operation=='renew':
         try:
             result=renew_read_only_session(args)
-        except Exception:
-            result={'status':'UNAVAILABLE','reason':'READ_ONLY_SESSION_RENEWAL_NOT_VERIFIED',
-                    'automatic_retry':False}
+        except Exception as exc:
+            reason=str(exc) if isinstance(exc,ValueError) and re.fullmatch(r'[A-Z0-9_]{1,120}',str(exc)) else 'READ_ONLY_SESSION_RENEWAL_NOT_VERIFIED'
+            result={'status':'UNAVAILABLE','reason':reason,'automatic_retry':False}
         print(json.dumps(result,ensure_ascii=False))
         return 0 if result['status']=='READ_ONLY_SESSION_RENEWED' else 2
     operation={'state':'get_chat_state','controls':'inspect_controls','chats':'list_chats',
