@@ -30,6 +30,11 @@ class IncomingCandidates(unittest.TestCase):
         self.bubble((20,150,240,190))
         self.assertEqual(len(incoming_bubbles(self.image,self.config)),2)
 
+    def test_small_translation_returns_current_coordinates_not_old_recipe(self):
+        self.bubble((22,38,222,73))
+        self.assertEqual(incoming_bubbles(self.image,self.config),[[22,38,223,74]])
+        self.assertNotIn([20,40,221,76],incoming_bubbles(self.image,self.config))
+
     def test_selected_text_frame_is_still_a_candidate(self):
         self.bubble((20,40,220,75),selected=True)
         self.assertEqual(incoming_bubbles(self.image,self.config),[[20,40,221,76]])
