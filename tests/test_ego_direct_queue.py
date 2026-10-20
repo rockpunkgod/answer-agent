@@ -231,8 +231,18 @@ class DirectQueueTests(unittest.TestCase):
     def test_followup_cannot_silently_change_the_original_selection(self):
         self.admit();self.assertEqual(self.runtime.tick()['state'],'GENERATED')
         self.followup();self.reply_text='第12题选D。'
-        result=self.runtime.tick();self.assertEqual(result['state'],'EXECUTION_UNCERTAIN',result)
-        self.assertEqual(self.db.one('SELECT COUNT(*) FROM answers')[0],1)
+        result=self.runtime.tick();self.assertEqual(result['state'],'NEEDS_ATTENTION',result)
+        self.assertEqual(result['reason'],'AUTHORITATIVE_RUN_REJECTED')
+        self.assertEqual([(r['state'],r['text']) for r in self.db.all('SELECT * FROM answers ORDER BY rowid')],
+                         [('STALE','第12题选C，因为要照顾母亲。'),('REJECTED','第12题选D。')])
+        task=self.fx.tasks.get_task(self.task['id'])
+        self.assertEqual(self.db.one('SELECT state FROM runs WHERE id=?',(task['run_id'],))[0],'REJECTED')
+        self.assertEqual(self.db.one('SELECT error FROM runs WHERE id=?',(task['run_id'],))[0],
+                         'EGO_FOLLOWUP_SELECTION_CHANGED_REVIEW')
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM outbox WHERE run_id=?',(task['run_id'],))[0],0)
+        calls=len(self.calls)
+        self.runtime.tick()
+        self.assertEqual(len(self.calls),calls)
 
     def test_followup_keeps_original_photo_in_session_without_reupload(self):
         from PIL import Image

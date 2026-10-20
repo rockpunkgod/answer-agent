@@ -187,7 +187,7 @@ class TextPreparationTests(unittest.TestCase):
         self.assertEqual(fake.calls, [])
         incomplete = deepcopy(self.snapshot)
         incomplete['student_question']['options'].pop()
-        with self.assertRaisesRegex(ValueError, 'A-D options'):
+        with self.assertRaisesRegex(ValueError, 'all verified options of the question kind'):
             DeepSeekSessionPreparer(fake, incomplete, URL, self.base / 'invalid.json', self.controls)
         self.assertEqual(fake.calls, [])
 
