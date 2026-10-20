@@ -110,10 +110,22 @@ class WeComTools:
         self.probe=probe
         self.allow_input=allow_input
         self.allow_send=allow_send
+        self.read_only_group=self.session.get('scope')=='REVIEWED_GROUP_READ_ONLY'
+        if self.session.get('scope') not in (None,'REVIEWED_GROUP_READ_ONLY'):
+            raise ValueError('UNKNOWN_SESSION_SCOPE')
+        names=self.session.get('allowed_group_names')
+        if self.read_only_group and (allow_send or not isinstance(names,list)
+                or not names or any(not isinstance(name,str) or not name.strip() for name in names)
+                or len(set(names))!=len(names)
+                or not isinstance(self.session.get('reviewer'),str) or not self.session['reviewer'].strip()
+                or self.session.get('reviewed') is not True
+                or not self.session.get('display_name')
+                or self.session.get('display_name') not in names):
+            raise ValueError('REVIEWED_READ_ONLY_GROUP_REQUIRED')
         self.backend=self.session.get('backend','NATIVE')
         if self.backend not in ('NATIVE','WINDOWS_MCP'):
             raise ValueError('UNKNOWN_WECOM_BACKEND')
-        if session and (session.get('platform')!='wecom' or session.get('display_name')!='苇中鹤'
+        if session and (session.get('platform')!='wecom' or (not self.read_only_group and session.get('display_name')!='苇中鹤')
                         or not session.get('target_key') or not isinstance(session.get('pin'),dict)):
             raise ValueError('REVIEWED_TEST_CONTACT_SESSION_REQUIRED')
         if transport_factory is None:
@@ -138,7 +150,7 @@ class WeComTools:
             raise ValueError('SESSION_NOT_CONFIGURED')
         pin=dict(self.session['pin'])
         if (pin.get('target_key')!=self.session['target_key']
-                or (pin.get('platform'),pin.get('display_name'))!=('wecom','苇中鹤')
+                or (pin.get('platform'),pin.get('display_name'))!=('wecom',self.session['display_name'])
                 or type(pin.get('display_index')) is not int
                 or time.time()>pin.get('expires_at',0)):
             raise ValueError('SESSION_PIN_EXPIRED_OR_CHANGED')
@@ -530,7 +542,7 @@ class WeComTools:
                         'observation_key':key,'text_observation_key':base,
                         'source_sent_at':None,'formal_statistics_eligible':False})
                     new_time_evidence+=1
-                confirmation=self._confirmed_observation_time(db,key,chat_id,message)
+                confirmation=None if self.read_only_group else self._confirmed_observation_time(db,key,chat_id,message)
                 if confirmation:
                     confirmed_times.append(confirmation)
                 if exists:
@@ -632,6 +644,8 @@ class WeComTools:
         return row,bound
 
     def prepare_reply(self,outbox_id):
+        if self.read_only_group:
+            raise ValueError('READ_ONLY_GROUP_SESSION')
         if not self.allow_input:
             raise ValueError('INPUT_DISABLED')
         with self._desktop() as (desktop,pin), closing(Store(self.database)) as db:
@@ -656,6 +670,8 @@ class WeComTools:
         return {'status':'PREPARED_VERIFIED','outbox_id':outbox_id,'sent':False}
 
     def send_reply(self,outbox_id):
+        if self.read_only_group:
+            raise ValueError('READ_ONLY_GROUP_SESSION')
         if not self.allow_send or not self.allow_input:
             raise ValueError('SEND_DISABLED')
         pin=self._pin()
@@ -687,6 +703,8 @@ class WeComTools:
         A historical same-body bubble is insufficient to prove a new submission.
         This command cannot change Outbox, completion or performance state.
         """
+        if self.read_only_group:
+            raise ValueError('READ_ONLY_GROUP_SESSION')
         self._require_input()
         with self._desktop() as (desktop,pin),closing(Store(self.database)) as db:
             row,bound=self._bound_reply(db,desktop,pin,outbox_id)

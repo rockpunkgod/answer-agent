@@ -58,6 +58,58 @@ class WeComToolTests(unittest.TestCase):
             transport_factory=lambda:self.transport,allow_input=True,
             probe=lambda root:{'status':'OK','controls':[{'control_type':'Window'},{'control_type':'Pane'}],'truncated':False,'window':{'client_version':'anonymous'}})
 
+    def test_reviewed_group_reads_without_enabling_delivery(self):
+        session={**self.session,'scope':'REVIEWED_GROUP_READ_ONLY',
+                 'reviewed':True,'reviewer':'local operator',
+                 'display_name':'anonymous English group',
+                 'allowed_group_names':['anonymous English group'],
+                 'pin':{**self.pin,'display_name':'anonymous English group'}}
+        service=WeComTools(self.db_path,session=session,root=self.root,
+                           transport_factory=lambda:self.transport,allow_input=True)
+        state=service.get_chat_state()
+        self.assertEqual(state['display_name'],'anonymous English group')
+        self.assertFalse(state['permanent_platform_identity'])
+        self.transport.calls.clear()
+        for operation in ('prepare_reply','send_reply','verify_reply'):
+            with self.assertRaisesRegex(ValueError,'READ_ONLY_GROUP_SESSION'):
+                getattr(service,operation)('reply')
+        self.assertEqual(self.transport.calls,[])
+        for changes in ({'allow_send':True},):
+            with self.assertRaisesRegex(ValueError,'REVIEWED_READ_ONLY_GROUP_REQUIRED'):
+                WeComTools(self.db_path,session=session,root=self.root,**changes)
+        for changes in ({'reviewed':False},{'allowed_group_names':[]},
+                        {'allowed_group_names':'anonymous English group'},
+                        {'allowed_group_names':[False]},{'reviewer':True},
+                        {'scope':'UNKNOWN'}):
+            with self.assertRaises(ValueError):
+                WeComTools(self.db_path,session={**session,**changes},root=self.root)
+        service.session['pin']['display_name']='different group'
+        with self.assertRaisesRegex(ValueError,'SESSION_PIN_EXPIRED_OR_CHANGED'):
+            service.get_chat_state()
+
+    def test_group_observations_do_not_inherit_contact_test_time_confirmation(self):
+        session={**self.session,'scope':'REVIEWED_GROUP_READ_ONLY',
+                 'reviewed':True,'reviewer':'local operator',
+                 'display_name':'anonymous English group',
+                 'allowed_group_names':['anonymous English group'],
+                 'pin':{**self.pin,'display_name':'anonymous English group'}}
+        service=WeComTools(self.db_path,session=session,root=self.root)
+        message={'id':'group-observation','text':'anonymous question',
+                 'source_sent_at':None,'source_time_evidence':{}}
+        with patch.object(service,'get_messages',return_value={'status':'OK','messages':[message]}), \
+                patch.object(service,'_confirmed_observation_time',side_effect=AssertionError('test-only evidence')):
+            first=service.poll_messages(self.target)
+            second=service.poll_messages(self.target)
+        self.assertEqual(first['new_observation_count'],1)
+        self.assertEqual(second['new_observation_count'],0)
+        self.assertEqual(first['confirmed_observation_times'],[])
+        self.assertFalse(first['automatic_ack_eligible'])
+        self.assertFalse(first['platform_identity_verified'])
+        with closing(Store(self.db_path)) as db:
+            self.assertEqual(db.one('SELECT count(*) FROM messages')[0],1)
+            self.assertEqual(db.one('SELECT count(*) FROM outbox')[0],1)
+            self.assertEqual(db.one('SELECT count(*) FROM performance_units')[0],0)
+
     def test_scoped_time_confirmation_is_read_after_restart_without_promoting_test(self):
         message={'id':'date-fixture','text':'original test','source_sent_at':None,
                  'source_time_evidence':{'normalized_original_time_label':'10/1923:12:32'}}

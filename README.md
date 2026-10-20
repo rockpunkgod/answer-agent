@@ -6,7 +6,9 @@
 
 ## 企业微信业务 MCP（原生后端试用）
 
-`tools/wecom_mcp_server.py` 提供控件检查、当前会话、读取、打开图片、准备回复、发送与附件核验及历史回复回读共15个受限工具。默认使用 Win32 原生后端，不启动 Windows-MCP；只允许已审核的“苇中鹤”测试会话，默认禁止输入和发送。工具不接受任意坐标、收件人、命令或文件路径。操作引用原 Outbox，发送不确定不重试，不另建完成或绩效台账。
+`tools/wecom_mcp_server.py` 提供控件检查、当前会话、读取、打开图片、准备回复、发送与附件核验及历史回复回读共15个受限工具。默认使用 Win32 原生后端，不启动 Windows-MCP；测试发送仅允许已审核的“苇中鹤”会话，默认禁止输入和发送。工具不接受任意坐标、收件人、命令或文件路径。操作引用原 Outbox，发送不确定不重试，不另建完成或绩效台账。
+
+群聊只读入口复用同一 CLI/MCP。私有会话配置需显式设置 `scope="REVIEWED_GROUP_READ_ONLY"`、`reviewed=true`、`reviewer`、`allowed_group_names`（完整群名数组），并让 `display_name` 与当前审核的 `pin.display_name` 一致；其余窗口、消息、图片配方仍须逐项审核且未过期。使用下方 `state/messages/scan/poll` 等命令；复制文本或打开图片仍需 `--enable-input`。这种会话拒绝 `--enable-send`，并禁止 `prepare/send/receipt`，不会开通群发送。读取结果是可追溯观察，不提供可信平台身份或补造原始时间，不创建 Ack、答疑任务或正式绩效。群自动“收到”另走绑定原任务的 ACK 发送入口，不能用只读会话绕过来源校验。
 
 使用已安装 MCP 2.2.0 的解释器运行（下例复用其依赖环境，不运行 Windows-MCP 服务）：
 
