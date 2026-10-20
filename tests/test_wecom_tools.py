@@ -257,6 +257,31 @@ class WeComToolTests(unittest.TestCase):
         self.assertEqual(evidence['time_status'],'REQUIRES_ORIGINAL_TIME_EVIDENCE')
         self.assertFalse(evidence['formal_statistics_eligible'])
 
+    def test_same_text_at_distinct_original_times_is_not_lost_on_restart(self):
+        message={'id':'same-text-class','text':'same wording','source_sent_at':None}
+        with patch.object(self.service,'get_messages',return_value={'status':'OK','messages':[message]}):
+            counts=[]
+            for label in ('10/1923:12:32','10/1923:14:01','10/1923:12:32','10/1923:14:01'):
+                message['source_time_evidence']={'normalized_original_time_label':label}
+                counts.append(self.service.poll_messages(self.target)['new_observation_count'])
+        self.assertEqual(counts,[1,1,0,0])
+        restarted=WeComTools(self.db_path,session=self.session,root=self.root)
+        with patch.object(restarted,'get_messages',return_value={'status':'OK','messages':[message]}):
+            self.assertEqual(restarted.poll_messages(self.target)['new_observation_count'],0)
+        with closing(Store(self.db_path)) as db:
+            self.assertEqual(db.one("SELECT count(*) FROM audit WHERE event='WECOM_VISIBLE_OBSERVATION'")[0],2)
+            self.assertEqual(db.one('SELECT count(*) FROM outbox')[0],1)
+
+    def test_date_padding_does_not_duplicate_but_unknown_year_is_not_guessed(self):
+        message={'id':'same-text-class','text':'same wording','source_sent_at':None}
+        with patch.object(self.service,'get_messages',return_value={'status':'OK','messages':[message]}):
+            for label,expected in (('1/223:12:32',1),('01/0223:12:32',0)):
+                message['source_time_evidence']={'normalized_original_time_label':label}
+                self.assertEqual(self.service.poll_messages(self.target)['new_observation_count'],expected)
+            message['source_time_evidence']={'normalized_original_time_label':'2026/01/0223:12:32'}
+            with self.assertRaisesRegex(ValueError,'VISIBLE_OCCURRENCE_YEAR_UNCONFIRMED'):
+                self.service.poll_messages(self.target)
+
     def test_new_time_evidence_enriches_existing_observation_without_recount(self):
         message={'id':'same-record','text':'raw original','source_sent_at':None}
         with patch.object(self.service,'get_messages',return_value={'status':'OK','messages':[message]}):

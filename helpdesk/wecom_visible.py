@@ -4,6 +4,19 @@ No OCR of student text and no automatic sender/time/ACK inference. Clipboard
 readback and the existing foreground/region guards must verify every candidate.
 """
 from collections import deque
+from datetime import datetime
+import re
+
+
+def time_label_identity(label):
+    """Auxiliary occurrence hint only; missing year stays missing."""
+    if not isinstance(label,str):return None
+    match=re.fullmatch(r'(?:(\d{4})[-/])?(\d{1,2})/(\d{1,2})(\d{2}):(\d{2}):(\d{2})',label)
+    if not match:return None
+    values=tuple(int(v) if v is not None else None for v in match.groups())
+    try:datetime(2000 if values[0] is None else values[0],*values[1:])
+    except ValueError:return None
+    return values
 
 
 def incoming_bubbles(image, config):

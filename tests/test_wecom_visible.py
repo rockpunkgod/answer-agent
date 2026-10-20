@@ -1,10 +1,16 @@
 """Synthetic local pixels, never a real message or desktop action."""
 import unittest
 from PIL import Image,ImageDraw
-from helpdesk.wecom_visible import incoming_bubbles
+from helpdesk.wecom_visible import incoming_bubbles,time_label_identity
 
 
 class IncomingCandidates(unittest.TestCase):
+    def test_timestamp_hint_does_not_guess_year_and_validates_dates(self):
+        self.assertEqual(time_label_identity('1/223:12:32'),(None,1,2,23,12,32))
+        self.assertEqual(time_label_identity('01/0223:12:32'),(None,1,2,23,12,32))
+        for label in ('0000/01/0223:12:32','10/1924:12:32','02/3023:12:32','invalid'):
+            self.assertIsNone(time_label_identity(label))
+
     def setUp(self):
         self.image=Image.new('RGB',(600,400),(245,247,250))
         self.config={'viewport':[0,0,600,400],'incoming_left':20,

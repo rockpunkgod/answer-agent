@@ -490,31 +490,50 @@ class WeComTools:
     def poll_messages(self, chat_id):
         """Persist reviewed observations, not verified new platform messages.
 
-        Identity includes recipe ID and text. Identical platform messages cannot
-        be distinguished by this fallback and must never trigger automatic ACKs.
+        Distinct displayed time labels keep distinct text observations.
+        This remains auxiliary identity and must never trigger automatic ACKs.
         """
         result=(self.scan_messages(chat_id) if self.session.get('incoming_discovery',{}).get('reviewed') is True
                 else self.get_messages(chat_id))
         if result.get('status')!='OK':
             return result
         fresh=[];new_time_evidence=0
+        from .wecom_visible import time_label_identity
         with closing(Store(self.database)) as db, db.transaction():
             for message in result['messages']:
-                key=sha256(encode([chat_id,message['id'],message['text']]).encode()).hexdigest()
-                exists=db.one("SELECT 1 FROM audit WHERE event='WECOM_VISIBLE_OBSERVATION' "
-                              "AND json_extract(details,'$.observation_key')=? LIMIT 1",(key,))
+                base=sha256(encode([chat_id,message['id'],message['text']]).encode()).hexdigest()
+                key=base
                 evidence=message.get('source_time_evidence') or {}
                 label=evidence.get('normalized_original_time_label')
-                if label and not db.one("SELECT 1 FROM audit WHERE event='WECOM_VISIBLE_TIME_OBSERVATION' "
+                hint=time_label_identity(label)
+                if hint is not None:
+                    previous=db.all("SELECT details FROM audit WHERE event='WECOM_VISIBLE_TIME_OBSERVATION' "
+                        "AND (json_extract(details,'$.text_observation_key')=? "
+                        "OR json_extract(details,'$.observation_key')=?)",(base,base))
+                    known=[]
+                    for row in previous:
+                        old=json.loads(row['details']);old_hint=time_label_identity(old.get('normalized_original_time_label'))
+                        if old_hint is not None:known.append((old['observation_key'],old_hint))
+                    if any(old_hint[1:]==hint[1:] and old_hint[0]!=hint[0]
+                           and (old_hint[0] is None or hint[0] is None) for _,old_hint in known):
+                        raise ValueError('VISIBLE_OCCURRENCE_YEAR_UNCONFIRMED')
+                    matches={old_key for old_key,old_hint in known if old_hint==hint}
+                    if len(matches)>1:raise ValueError('VISIBLE_OCCURRENCE_AMBIGUOUS')
+                    if matches:key=next(iter(matches))
+                    elif known:key=sha256(encode([base,hint]).encode()).hexdigest()
+                exists=db.one("SELECT 1 FROM audit WHERE event='WECOM_VISIBLE_OBSERVATION' "
+                              "AND json_extract(details,'$.observation_key')=? LIMIT 1",(key,))
+                if hint is not None and not db.one("SELECT 1 FROM audit WHERE event='WECOM_VISIBLE_TIME_OBSERVATION' "
                         "AND json_extract(details,'$.observation_key')=? "
                         "AND json_extract(details,'$.normalized_original_time_label')=? LIMIT 1",(key,label)):
                     Workflow(db)._event('WECOM_VISIBLE_TIME_OBSERVATION',details={**evidence,
-                        'observation_key':key,'source_sent_at':None,'formal_statistics_eligible':False})
+                        'observation_key':key,'text_observation_key':base,
+                        'source_sent_at':None,'formal_statistics_eligible':False})
                     new_time_evidence+=1
                 if exists:
                     continue
                 Workflow(db)._event('WECOM_VISIBLE_OBSERVATION',details={
-                    'observation_key':key,'chat_id':chat_id,'message':message,
+                    'observation_key':key,'text_observation_key':base,'chat_id':chat_id,'message':message,
                     'platform_identity_verified':False,'automatic_ack_eligible':False})
                 fresh.append(message)
         return {**result,'status':'OBSERVATIONS_SAVED' if fresh else 'NO_NEW_OBSERVATIONS',
