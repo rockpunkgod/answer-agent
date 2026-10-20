@@ -1,0 +1,20 @@
+# Disabled by default. Copy to data/private/youdao.local.toml; never add secrets here.
+[youdao]
+erase_enabled = false
+search_enabled = false
+config_version = "youdao-2026-10-20-v1"
+approved_image_root = "data/private/youdao/test-images"
+private_root = "data/private/youdao/cache"
+credential_file = "data/private/youdao-credentials.local.json"
+retention_seconds = 604800
+connect_timeout = 5
+read_timeout = 20
+max_response_bytes = 16000000
+budget_cny = "0.50"
+warning_cny = "1.00"
+# Set conservative single-call ceilings only after checking YOUR account/package.
+# These are budget reservations, never actual billed amounts. Missing => no POST.
+# erase_reservation_cny = "<reviewed ceiling>"
+# search_reservation_cny = "<reviewed ceiling>"
+# Credentials: YOUDAO_ERASE_APP_KEY / YOUDAO_ERASE_APP_SECRET
+#              YOUDAO_SEARCH_APP_KEY / YOUDAO_SEARCH_APP_SECRET

@@ -446,3 +446,32 @@ python tools/wecom_cli.py --database "<业务库>" --delivery-config "<原生ACK
 批量扫描前可设置 `incoming_discovery.clear_selection` 为已审核的聊天空白区域：`reviewed=true`、`region_box`、`region_hash`、物理屏幕 `point`。命令先核对当前群及空白区域，确认点在区域内、区域位于编辑框上方后，只点击一次，再用新截图提取整批气泡。这用于避免复制前面的消息时取消后面消息的旧选择、使整批初始哈希失效。区域变化或未审核时停止；不通过忽略题面哈希解决选中状态差异。
 
 `renew` 失败会返回可直接处理的错误码，例如 `WECOM_WINDOW_CHANGED` 或 `TEST_CONTACT_VISUAL_PIN_CHANGED`（沿用现有共享校验器的代码）。窗口变化需要重新审核当前窗口，不能仅手改有效期；任意异常详情、路径和服务响应不会作为错误原因输出。
+
+
+## 有道单图检索（默认关闭）
+
+两个独立客户端复用本地缓存、现有审计表和候选审核，不启动 DeepSeek、不创建答案 Outbox、不发送、不计绩效；没有新增数据库或依赖。应用 ID 和 AppSecret 分别读取 `YOUDAO_ERASE_APP_KEY` / `YOUDAO_ERASE_APP_SECRET` 与 `YOUDAO_SEARCH_APP_KEY` / `YOUDAO_SEARCH_APP_SECRET`。也可放入忽略的 `data/private/youdao-credentials.local.json`，键名仍用这四个环境变量名；环境变量优先。密钥只在本机配置，不粘贴到普通日志、源码或测试。
+
+[配置示例](config/youdao.example.toml)保持两项关闭。要准备受控单图测试，将它复制到 `data/private/youdao.local.toml`；审核账号价格后填写两个单次预算预留上限。缺凭据返回 `CREDENTIALS_NOT_CONFIGURED`，缺上限返回 `BUDGET_REVIEW_REQUIRED`，均不请求网络。不得仅因写好配置就启用自动队列；真实调用仍需用户明确指定匿名图片并授权。
+
+当前只需验证本地图片，可执行：
+
+```powershell
+python -m tools.test_youdao_apis --image "data/private/youdao/test-images/synthetic-single-question.png" --search-only --dry-run
+```
+
+该图为本次自制离线样例；`--dry-run`检查批准目录、格式、大小和尺寸，不上传。`--erase-only`、`--search-only`各验证一个客户端，`--pipeline --db <已有库> --run-id <原run>`才关联原任务；组合流程要求图片路径与 SHA-256 均在该 run 的原附件中。命令不会创建空业务库或自动迁移旧库。`--output-dir`只改变脱敏摘要位置，不改变幂等缓存；只能在 `data/private` 内、缓存目录外。完整响应与擦除图留在固定私有缓存，不输出到终端。
+
+协议核对（2026-10-20）：[擦除文档](https://ai.youdao.com/DOCSIRMA/html/learn/api/sjsxtcc/index.html)采用 HTTPS 表单 POST、`signType=v3`，返回 `eraseEnhanceImg`；[搜题文档](https://ai.youdao.com/DOCSIRMA/html/learn/api/jptk/index.html)采用 `v2`、`type=1`、`searchType=img`，读取 `data.questions[].content/id/answer/analysis`。签名分别实现，均按各自文档及官方 demo 使用 SHA-256 与 curtime；擦除参数表漏写 curtime 的一处公式不作为实现依据。
+
+两者接受 JPEG/PNG/BMP；擦除编码后须小于5,000,000字节，搜题为单题，保守同时限制原文件和编码后均小于1,000,000字节，并按[官方 FAQ](https://ai.youdao.com/DOCSIRMA/html/learn/faq/jptk/index.html)要求最短边大于10、最长边小于2048像素。不自动压缩、裁切或改写原图来通过限制。擦除另设本地20百万像素解码上限，属于本地资源限制，不冒充官方尺寸承诺。
+
+默认 `needs_cleanup=false`。只有明确需要清理时，组合流程才请求擦除；图像解码成功只表示 `CLEANUP_SUCCEEDED`，不证明印刷题面保留完整。API不提供清理前后文字对照，因此在继续搜题前需要人工逐字核验，可通过 `--cleanup-review` 引用批准私有目录内的核验记录：原图/处理图哈希、当前 question_version/context_revision、reviewer、按实际处理图读取的 Question 与 material。程序用原 compare 核对材料、题干、题号和选项；不通过则停在 `MANUAL_REVIEW_REQUIRED`，不继续付费。此记录是本地核验数据，不上传给 API 或 DeepSeek。
+
+题库 `content` 是不可信 HTML。当前复用已有严格解析器，只对可完整提取材料、印刷题号及四个独立选项的题目建立比较；缺项、图像依赖和其他未覆盖结构保留未核验候选，不补造题面。只保留 Top2，选项换序沿用学生版字母；外部答案和解析只在私有响应/客户端证据中，不进入返回教学用的候选或确认输入。注册到原 ReferenceResolution 后仍需原审核，不自动批准同题。
+
+调用前落盘意图，关联任务时同时写原 call_costs 审计：擦除计 OTHER、搜题计 SEARCH；两项分别记录。未知 POST 会保留阻断标记，改文件名、请求参数或配置版本也不能重提；需要人工核验，尚未提供自动重试/自动解除入口。缓存键绑定原图及实际输入哈希、API协议、账号摘要、题目/上下文版本、规范化参数和配置版本。有效缓存复用不增加调用；过期只转人工，不自动再次付费。CLI按 retention_seconds 清理缓存响应及处理图，保留不含题目/答案原文的意图摘要；绝不清理学生原图、聊天或业务台账。
+
+预算使用人工审核的单次上限作预留，与真实扣费分开。同一学生材料范围内的各题、版本和追问共用现有审计计算；其他调用费用未核实且无预留时停止，不能当零。默认每篇上限0.50元，1.00元预警可独立配置；独立CLI仅能控制单图，不声称已核实每篇成本。真实金额只能用原账单确认入口登记，未取得凭证时 `amount_cny=null`。价格参考[擦除计费](https://ai.youdao.com/DOCSIRMA/html/learn/price/sjsxtcc/index.html)、[搜题计费](https://ai.youdao.com/DOCSIRMA/html/learn/price/jptk/index.html)，体验金、资源包与有效/无效检索计费不同，不硬编码为已付金额。
+
+本轮仅离线HTTP模拟和本地 dry-run；真实API请求为0。用户提供的两个应用标识仅保存于忽略的本机凭据文件，对应 AppSecret 与指定匿名图的真实调用授权仍待配置/确认。新 Provider 保持关闭，未修改 ANSWER、发送权限或绩效规则。
