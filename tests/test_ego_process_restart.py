@@ -19,6 +19,30 @@ ARGS = ('restart-test', 'https://chat.deepseek.com/a/chat/s/anonymous', 'ç¬¬12é¢
 EXIT = 86
 
 
+def crash_queue_worker(root, stage):
+    """Persist the real anonymous queue, then hard-exit after a native capture."""
+    from tests.test_ego_two_stage_queue import EgoTwoStageQueueTests
+    tempfile.tempdir = str(root)
+    fixture = EgoTwoStageQueueTests()
+    fixture.setUp()
+    fixture.admit()
+    (root / 'queue.json').write_text(json.dumps(dict(
+        database=str(fixture.db.path), task_id=fixture.fx.task['id'],
+        manifest=fixture.fx.fx.manifest)), encoding='utf-8')
+
+    def captured_then_exit(request_id, *args, **kwargs):
+        result = fixture.submit(request_id, *args, **kwargs)
+        if request_id.endswith('-' + stage):
+            os._exit(EXIT)
+        return result
+
+    fixture.fx.submit = captured_then_exit
+    fixture.runtime.tick()
+    if stage == 'teach':
+        fixture.runtime.tick()
+    raise AssertionError('Queue crash point not reached')
+
+
 def complete(root):
     state_path = root / 'receipts/restart-test.state.json'
     state = json.loads(state_path.read_text(encoding='utf-8'))
@@ -46,6 +70,45 @@ def crash_worker(root, phase):
 
 
 class EgoProcessRestartTests(unittest.TestCase):
+    def test_two_stage_queue_recovers_captured_result_after_hard_exit(self):
+        from contextlib import ExitStack, closing
+        from helpdesk.reviewed_question_queue import advance
+        from helpdesk.storage import Store
+        for stage in ('match', 'teach'):
+            with self.subTest(stage=stage), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                child = subprocess.run([sys.executable, '-X', 'utf8', '-B', '-m',
+                    'tests.test_ego_process_restart', '--crash-queue', str(root), stage],
+                    cwd=ROOT, capture_output=True, timeout=30,
+                    creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
+                self.assertEqual(child.returncode, EXIT, child.stderr.decode('utf-8', errors='replace'))
+                saved = json.loads((root / 'queue.json').read_text(encoding='utf-8'))
+                with closing(Store(saved['database'])) as store, ExitStack() as stack:
+                    for name in ('helpdesk.operator_tasks.verify_bundle', 'helpdesk.workflow.verify_bundle',
+                                 'helpdesk.automatic_preparation.verify_bundle', 'helpdesk.teaching_bundle.verify_bundle',
+                                 'helpdesk.ego_generation.verify_frozen_teaching'):
+                        stack.enter_context(patch(name, return_value=saved['manifest']))
+
+                    def capture_only(_self, request_id, _url, _prompt, **kwargs):
+                        self.assertTrue(kwargs['capture_only'])
+                        task = store.one('SELECT evidence_dir FROM operator_tasks WHERE id=?', (saved['task_id'],))
+                        return json.loads((Path(task[0]) / (request_id + '.answer.json')).read_text(encoding='utf-8'))
+
+                    stack.enter_context(patch.object(EgoDeepSeek, '__init__', return_value=None))
+                    stack.enter_context(patch.object(EgoDeepSeek, 'submit', capture_only))
+                    expected_calls = 1 if stage == 'match' else 2
+                    for _ in range(2):
+                        result = advance(store, saved['task_id'])
+                        self.assertEqual(result['phase'], 'READY_FOR_GENERATION' if stage == 'match' else 'GENERATED')
+                        self.assertEqual(store.one("SELECT COUNT(*) FROM audit WHERE event='ANSWER_CALL_STARTED'")[0], expected_calls)
+                        self.assertEqual(store.one("SELECT COUNT(*) FROM outbox WHERE purpose='ANSWER'")[0], int(stage == 'teach'))
+                        self.assertEqual(store.one('SELECT COUNT(*) FROM performance_units')[0], 0)
+                    results = [json.loads(row[0]) for row in store.all(
+                        "SELECT details FROM audit WHERE event='ANSWER_CALL_RESULT'")]
+                    self.assertEqual(len(results), expected_calls)
+                    self.assertTrue(all(row['status'] == 'CONFIRMED' for row in results))
+                    self.assertEqual(store.one("SELECT COUNT(*) FROM reviewed_question_attempts WHERE state='STARTED'")[0], 0)
+
     def test_hard_exit_never_replays_and_only_capture_releases_page(self):
         for phase in ('PREPARING', 'SUBMISSION_INTENT', 'SUBMITTED', 'CAPTURED'):
             with self.subTest(phase=phase), tempfile.TemporaryDirectory() as directory:
@@ -102,5 +165,7 @@ class EgoProcessRestartTests(unittest.TestCase):
 if __name__ == '__main__':
     if len(sys.argv) == 4 and sys.argv[1] == '--crash-worker':
         crash_worker(Path(sys.argv[2]), sys.argv[3])
+    elif len(sys.argv) == 4 and sys.argv[1] == '--crash-queue':
+        crash_queue_worker(Path(sys.argv[2]), sys.argv[3])
     else:
         unittest.main()
