@@ -573,6 +573,12 @@ class WeComTools:
                     or linked['raw_text']!=message['text']):
                 continue
             label=time_label_identity(original.get('normalized_original_time_label'))
+            current=time_label_identity((message.get('source_time_evidence') or {}).get(
+                'normalized_original_time_label'))
+            # Identical wording without a current clock can be another occurrence.
+            # A prior operator confirmation is not a default timestamp for text.
+            if current is None or label is None or current!=label:
+                continue
             try:
                 stamp=datetime.fromisoformat(proof['confirmed_source_sent_at'])
             except (KeyError,TypeError,ValueError):

@@ -84,6 +84,11 @@ class WeComToolTests(unittest.TestCase):
             self.assertIsNone(db.one("SELECT source_sent_at FROM messages WHERE id='message'")[0])
             self.assertEqual(db.one('SELECT count(*) FROM performance_units')[0],0)
             self.assertEqual(db.one('SELECT count(*) FROM outbox')[0],1)
+            without_clock={**message,'source_time_evidence':{}}
+            self.assertIsNone(restarted._confirmed_observation_time(db,key,self.target,without_clock))
+            different_clock={**message,'source_time_evidence':{
+                'normalized_original_time_label':'10/2023:12:32'}}
+            self.assertIsNone(restarted._confirmed_observation_time(db,key,self.target,different_clock))
             proof['confirmed_source_sent_at']='2026-10-18T23:12:32+08:00'
             db.execute("UPDATE audit SET details=? WHERE event='WECOM_VISIBLE_TIME_OPERATOR_CONFIRMED'",(json.dumps(proof),))
             self.assertIsNone(restarted._confirmed_observation_time(db,key,self.target,message))
