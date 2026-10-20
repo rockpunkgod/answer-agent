@@ -61,6 +61,19 @@ class NativeGuardTests(unittest.TestCase):
         self.native.user.OpenInputDesktop.assert_not_called()
         self.native.user.mouse_event.assert_not_called()
 
+    def test_find_shortcut_rechecks_target_and_releases_keys_without_enter(self):
+        self.native._key=Mock()
+        self.native.call('Shortcut',{'shortcut':'ctrl+f'})
+        self.assertEqual(self.native._key.call_args_list,
+                         [unittest.mock.call(0x11),unittest.mock.call(0x46),
+                          unittest.mock.call(0x46,True),unittest.mock.call(0x11,True)])
+        self.assertEqual(self.native.foreground.call_count,1)
+        self.native._key.reset_mock()
+        self.current['process']='OtherApp'
+        with self.assertRaises(ValueError):
+            self.native.call('Shortcut',{'shortcut':'ctrl+f'})
+        self.native._key.assert_not_called()
+
     def test_lock_window_change_and_outside_point_stop_before_click(self):
         for kind in ('locked','moved','other_process','outside'):
             with self.subTest(kind=kind):

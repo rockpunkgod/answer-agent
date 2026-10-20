@@ -174,6 +174,7 @@ class NativeWeComTransport:
 
     def _shortcut(self,shortcut):
         keys={'ctrl+a':[0x11,0x41],'ctrl+c':[0x11,0x43],'ctrl+v':[0x11,0x56],
+              'ctrl+f':[0x11,0x46],
               'right':[0x27],'escape':[0x1b],'esc':[0x1b]}.get(shortcut)
         if not keys:raise ValueError('SHORTCUT_OUTSIDE_ALLOWLIST')
         pressed=[]
