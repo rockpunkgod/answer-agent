@@ -169,6 +169,9 @@ class WeComToolTests(unittest.TestCase):
             result=self.service.get_messages(self.target)
         classified=result['messages'][0]['name_classification']
         self.assertEqual(classified['student_key'],classify_names(self.session['display_name'],'Alice')['student_key'])
+        self.assertEqual(classified['evidence']['frame_attempt_id'],'anonymous-local-fixture')
+        self.assertEqual(classified['evidence']['region_box'],[20,5,70,19])
+        self.assertEqual(classified['evidence']['region_hash'],recipe['sender_name']['region_hash'])
         self.assertIsNone(result['messages'][0]['source_sent_at'])
         self.transport.calls.clear()
         recipe['sender_name'].update(region([20,55,70,65]))
@@ -461,6 +464,79 @@ class WeComToolTests(unittest.TestCase):
         self.assertNotIn('messages',self.session)
         with closing(Store(self.db_path)) as db:
             self.assertEqual(db.one('SELECT count(*) FROM outbox')[0],1)
+
+    def test_scan_matches_known_name_at_new_bubble_and_moves_copy_menu_scope(self):
+        from PIL import Image,ImageDraw
+        self.pin['display_bounds']=[0,0,200,100]
+        self.session['incoming_discovery']={'reviewed':True,'copy_menu_search_box':[20,20,180,70],
+            'match_sender_templates':True,'copy_menu_offset_box':[-10,-30,20,-10]}
+        with Image.open(self.image) as bitmap:
+            ImageDraw.Draw(bitmap).text((23,41),'Alice',fill=(80,80,80));bitmap.save(self.image)
+            sender={'reviewed':True,'display_name':'Alice','region_box':[20,20,70,34],
+                    'region_hash':pixel_hash(bitmap,[22,40,72,54])}
+        self.session['messages']=[{'kind':'text','region_box':[20,40,80,60],'sender_name':sender}]
+        def read(reader,chat_id):
+            recipe=reader.session['messages'][0]
+            self.assertEqual(recipe['sender_name']['region_box'],[22,40,72,54])
+            self.assertEqual(recipe['sender_name']['verification'],'EXACT_REVIEWED_NAME_TEMPLATE')
+            self.assertEqual(recipe['copy_menu']['ocr_search_box'],[61,45,91,65])
+            return {'status':'OK','messages':[]}
+        with patch('helpdesk.wecom_visible.incoming_bubbles',return_value=[[22,60,120,90]]), \
+                patch.object(WeComTools,'get_messages',autospec=True,side_effect=read):
+            self.service.scan_messages(self.target)
+        self.assertEqual(sender['region_box'],[20,20,70,34])
+        self.assertFalse(any(t in ('Click','Clipboard','Shortcut') for t,_ in self.transport.calls))
+
+    def test_scan_clears_reviewed_selection_before_capturing_batch_hashes(self):
+        from PIL import Image,ImageDraw
+        self.pin['display_bounds']=[0,0,200,100]
+        with Image.open(self.image) as image:
+            blank_hash=pixel_hash(image,[100,60,110,70])
+            ImageDraw.Draw(image).rectangle((20,20,79,49),fill=(51,153,255));image.save(self.image)
+            selected=pixel_hash(image,[20,20,80,50])
+        self.session['incoming_discovery']={'reviewed':True,'copy_menu_search_box':[20,20,180,70],
+            'clear_selection':{'reviewed':True,'region_box':[100,60,110,70],
+                               'region_hash':blank_hash,'point':[105,65]}}
+        original=self.transport.call
+        def clear(tool,args):
+            result=original(tool,args)
+            if tool=='Click' and args['loc']==[105,65]:
+                with Image.open(self.image) as image:
+                    ImageDraw.Draw(image).rectangle((20,20,79,49),fill=(228,231,235));image.save(self.image)
+            return result
+        self.transport.call=clear
+        def read(reader,chat_id):
+            self.assertNotEqual(reader.session['messages'][0]['region_hash'],selected)
+            return {'status':'OK','messages':[]}
+        with patch('helpdesk.wecom_visible.incoming_bubbles',return_value=[[20,20,80,50]]), \
+                patch.object(WeComTools,'get_messages',autospec=True,side_effect=read):
+            self.service.scan_messages(self.target)
+        self.assertEqual([args for op,args in self.transport.calls if op=='Click'],[{'loc':[105,65]}])
+
+    def test_scan_never_clears_unreviewed_or_changed_blank(self):
+        self.pin['display_bounds']=[0,0,200,100]
+        self.session['incoming_discovery']={'reviewed':True,'copy_menu_search_box':[20,20,180,70]}
+        for clear in ({'reviewed':False},{'reviewed':True,'region_box':[100,60,110,70],
+                      'region_hash':'0'*64,'point':[105,65]},
+                      {'reviewed':True,'region_box':[100,80,110,90],'region_hash':'0'*64,'point':[105,85]}):
+            self.session['incoming_discovery']['clear_selection']=clear
+            with self.assertRaises(ValueError):self.service.scan_messages(self.target)
+        self.assertFalse(any(op=='Click' for op,_ in self.transport.calls))
+
+    def test_scan_rejects_invalid_relative_menu_before_input(self):
+        self.pin['display_bounds']=[0,0,200,100]
+        self.session['incoming_discovery']={'reviewed':True,'copy_menu_search_box':[20,20,180,70],
+                                           'copy_menu_offset_box':[-10,-50,20,-30]}
+        with patch('helpdesk.wecom_visible.incoming_bubbles',return_value=[[20,10,80,40]]), \
+                patch.object(WeComTools,'get_messages') as read:
+            with self.assertRaisesRegex(ValueError,'INCOMING_COPY_MENU_OUTSIDE_DISPLAY'):
+                self.service.scan_messages(self.target)
+        read.assert_not_called()
+        self.transport.calls.clear()
+        self.session['incoming_discovery']['copy_menu_offset_box']=[True,0,30,40]
+        with self.assertRaisesRegex(ValueError,'INCOMING_COPY_MENU_OFFSET_INVALID'):
+            self.service.scan_messages(self.target)
+        self.assertEqual(self.transport.calls,[])
 
     def test_scan_missing_copy_region_reports_configuration_before_desktop(self):
         self.session['incoming_discovery']={'reviewed':True}

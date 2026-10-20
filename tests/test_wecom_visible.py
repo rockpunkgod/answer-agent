@@ -113,3 +113,55 @@ class VisibleBoundary(unittest.TestCase):
         self.assertIsNone(state)
         self.assertEqual(result['reason'],'BASELINE_CORRUPT')
         with self.assertRaises(ValueError):self.step(None,[])
+
+
+class SenderTemplates(unittest.TestCase):
+    def setUp(self):
+        from helpdesk.mcp_test_delivery import pixel_hash
+        self.image=Image.new('RGB',(250,200),'white')
+        tile=Image.new('RGB',(50,14),'white')
+        ImageDraw.Draw(tile).text((1,1),'Alice',fill=(80,80,80))
+        self.image.paste(tile,(22,100))
+        self.template={'region_box':[20,60,120,90],'sender_name':{
+            'reviewed':True,'display_name':'Alice','region_box':[20,40,70,54],
+            'region_hash':pixel_hash(self.image,[22,100,72,114])}}
+
+    def test_known_name_follows_new_bubble_without_reusing_original_position(self):
+        from helpdesk.wecom_visible import match_sender_template
+        result=match_sender_template(self.image,[22,120,150,150],[self.template,self.template])
+        self.assertEqual(result['display_name'],'Alice')
+        self.assertEqual(result['region_box'],[22,100,72,114])
+        self.assertEqual(result['verification'],'EXACT_REVIEWED_NAME_TEMPLATE')
+        self.assertEqual(self.template['sender_name']['region_box'],[20,40,70,54])
+
+    def test_one_pixel_name_baseline_rounding_still_requires_exact_pixels(self):
+        from helpdesk.wecom_visible import match_sender_template
+        tile=self.image.crop((22,100,72,114))
+        self.image=Image.new('RGB',self.image.size,'white')
+        self.image.paste(tile,(22,99))
+        result=match_sender_template(self.image,[22,120,150,150],[self.template])
+        self.assertEqual(result['region_box'],[22,99,72,113])
+        self.image=Image.new('RGB',self.image.size,'white')
+        self.image.paste(tile,(22,94))
+        self.assertIsNone(match_sender_template(self.image,[22,120,150,150],[self.template]))
+
+    def test_missing_header_unknown_name_and_blank_template_do_not_infer_sender(self):
+        from helpdesk.wecom_visible import match_sender_template
+        from helpdesk.mcp_test_delivery import pixel_hash
+        self.assertIsNone(match_sender_template(self.image,[22,160,150,190],[self.template]))
+        blank={**self.template,'sender_name':{**self.template['sender_name'],
+            'region_hash':pixel_hash(self.image,[22,140,72,154])}}
+        self.assertIsNone(match_sender_template(self.image,[22,160,150,190],[blank]))
+
+    def test_conflicting_names_and_unreviewed_templates_stop(self):
+        from helpdesk.wecom_visible import match_sender_template
+        other={**self.template,'sender_name':{**self.template['sender_name'],'display_name':'Bob'}}
+        with self.assertRaisesRegex(ValueError,'AMBIGUOUS_SENDER_NAME_TEMPLATE'):
+            match_sender_template(self.image,[22,120,150,150],[self.template,other])
+        bad={**self.template,'sender_name':{**self.template['sender_name'],'reviewed':False}}
+        with self.assertRaisesRegex(ValueError,'NOT_REVIEWED'):
+            match_sender_template(self.image,[22,120,150,150],[bad])
+        for templates in ([None],[{**self.template,'sender_name':{**self.template['sender_name'],
+                            'region_box':[20,70,70,84]}}]):
+            with self.assertRaises(ValueError):
+                match_sender_template(self.image,[22,120,150,150],templates)

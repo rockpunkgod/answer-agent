@@ -66,6 +66,46 @@ def advance_visible_view(previous, fingerprints, *, scope_key, started_at, compl
                   'observed_after':previous['started_at'],'observed_by':completed_at}
 
 
+def match_sender_template(image, body, templates):
+    """Match reviewed adjacent name pixels at this bubble, never infer continuation."""
+    from .mcp_test_delivery import pixel_hash
+    if not isinstance(templates,list) or len(templates)>200:
+        raise ValueError('SENDER_TEMPLATES_INVALID')
+    def rectangle(box):
+        return (isinstance(box,list) and len(box)==4 and all(type(v) is int for v in box)
+                and 0<=box[0]<box[2]<=image.width and 0<=box[1]<box[3]<=image.height)
+    if not rectangle(body):raise ValueError('SENDER_TEMPLATE_BODY_INVALID')
+    found={}
+    for template in templates:
+        if not isinstance(template,dict):raise ValueError('SENDER_TEMPLATES_INVALID')
+        old=template.get('region_box');sender=template.get('sender_name')
+        if not isinstance(sender,dict) or sender.get('reviewed') is not True:
+            raise ValueError('SENDER_TEMPLATE_NOT_REVIEWED')
+        box=sender.get('region_box');name=sender.get('display_name');digest=sender.get('region_hash')
+        if (not rectangle(old) or not rectangle(box)
+                or not isinstance(name,str) or not name.strip() or any(c in name for c in '\r\n\x00')
+                or not isinstance(digest,str) or not re.fullmatch('[0-9a-f]{64}',digest)
+                or box[2]-box[0]>512 or box[3]-box[1]>48
+                or box[0]<old[0]-16 or box[2]>old[2]+256
+                or box[1]<old[1]-48 or box[3]>old[1]):
+            raise ValueError('SENDER_TEMPLATE_INVALID')
+        dx,dy=body[0]-old[0],body[1]-old[1]
+        # UI line rounding may shift the name baseline by one pixel between
+        # bubbles. Only exact approved pixels within this bounded header count.
+        for adjustment in range(-2,3):
+            current=[v+(dx if i%2==0 else dy+adjustment) for i,v in enumerate(box)]
+            if (not rectangle(current) or current[2]>body[2]+256
+                    or current[1]<body[1]-48 or current[3]>body[1]):continue
+            crop=image.crop(current).convert('RGB')
+            # A solid empty header is not a usable name template.
+            if all(low==high for low,high in crop.getextrema()):continue
+            if pixel_hash(image,current)==digest:
+                key=(name.strip(),tuple(current),digest)
+                found[key]={**sender,'region_box':current,'verification':'EXACT_REVIEWED_NAME_TEMPLATE'}
+    if len(found)>1:raise ValueError('AMBIGUOUS_SENDER_NAME_TEMPLATE')
+    return next(iter(found.values()),None)
+
+
 def time_label_identity(label):
     """Auxiliary occurrence hint only; missing year stays missing."""
     if not isinstance(label,str):return None

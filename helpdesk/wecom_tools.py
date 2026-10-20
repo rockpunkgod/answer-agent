@@ -376,6 +376,9 @@ class WeComTools:
                             or box[1]<body[1]-48 or box[3]>body[1]):
                         raise ValueError('SENDER_NAME_REGION_NOT_MESSAGE_HEADER')
                     self._checked_region(record,sender)
+                    classification['evidence']={'frame_attempt_id':record.get('attempt_id'),
+                        'region_box':box,'region_hash':sender['region_hash'],
+                        'verification':sender.get('verification','REVIEWED_ADJACENT_NAME_REGION')}
                 time_evidence=None
                 if recipe.get('time_hover',{}).get('reviewed') is True:
                     record,recipe,time_evidence=self._hover_time(desktop,pin,record,recipe)
@@ -524,36 +527,75 @@ class WeComTools:
         config=self.session.get('incoming_discovery') or {}
         if self.backend!='NATIVE' or config.get('reviewed') is not True:
             raise ValueError('INCOMING_DISCOVERY_NOT_REVIEWED')
+        if type(config.get('match_sender_templates',False)) is not bool:
+            raise ValueError('SENDER_TEMPLATE_POLICY_INVALID')
         menu_box=config.get('copy_menu_search_box')
         if (not isinstance(menu_box,list) or len(menu_box)!=4 or any(type(v) is not int for v in menu_box)
                 or not 0<=menu_box[0]<menu_box[2] or not 0<=menu_box[1]<menu_box[3]
                 or menu_box[2]-menu_box[0]>512 or menu_box[3]-menu_box[1]>256):
             raise ValueError('INCOMING_COPY_MENU_NOT_REVIEWED')
+        offset=config.get('copy_menu_offset_box')
+        if offset is not None and (not isinstance(offset,list) or len(offset)!=4
+                or any(type(v) is not int or abs(v)>512 for v in offset)
+                or not 0<offset[2]-offset[0]<=512 or not 0<offset[3]-offset[1]<=256):
+            raise ValueError('INCOMING_COPY_MENU_OFFSET_INVALID')
         self._require_input()
         from PIL import Image
-        from .wecom_visible import incoming_bubbles
+        from .wecom_visible import incoming_bubbles,match_sender_template
         with self._desktop() as (desktop,pin):
             record,_=self._frame(desktop,pin)
+            clear=config.get('clear_selection')
+            if clear is not None:
+                if not isinstance(clear,dict) or clear.get('reviewed') is not True:
+                    raise ValueError('INCOMING_SELECTION_CLEAR_NOT_REVIEWED')
+                box=clear.get('region_box');point=clear.get('point');bounds=pin['display_bounds']
+                if (not isinstance(box,list) or len(box)!=4 or any(type(v) is not int for v in box)
+                        or not 0<=box[0]<box[2]<=pin['image_size'][0]
+                        or not 0<=box[1]<box[3]<=pin['image_size'][1]
+                        or box[2]-box[0]>128 or box[3]-box[1]>128
+                        or not isinstance(point,list) or len(point)!=2 or any(type(v) is not int for v in point)):
+                    raise ValueError('INCOMING_SELECTION_CLEAR_REGION_INVALID')
+                x=(point[0]-bounds[0])*pin['image_size'][0]/(bounds[2]-bounds[0])
+                y=(point[1]-bounds[1])*pin['image_size'][1]/(bounds[3]-bounds[1])
+                if not box[0]<=x<box[2] or not box[1]<=y<box[3] or box[3]>pin['editor_box'][1]:
+                    raise ValueError('INCOMING_SELECTION_CLEAR_POINT_INVALID')
+                self._checked_region(record,clear)
+                before=record.get('attempt_id')
+                desktop._call('Click',loc=point)
+                record,_=self._frame(desktop,pin)
+                self._audit('scan_messages','SELECTION_CLEARED',controls=['message_list'],
+                    evidence={'before_frame':before,'after_frame':record.get('attempt_id')})
             path=next(c['path'] for c in record['content'] if c.get('type')=='image')
             with Image.open(path) as image:
                 boxes=incoming_bubbles(image,config)
                 recipes=[]
                 bounds=pin['display_bounds'];width,height=pin['image_size']
                 for box in boxes:
+                    copy_box=menu_box
+                    if offset is not None:
+                        cx,cy=(box[0]+box[2])//2,(box[1]+box[3])//2
+                        copy_box=[v+(cx if i%2==0 else cy) for i,v in enumerate(offset)]
+                        if not 0<=copy_box[0]<copy_box[2]<=width or not 0<=copy_box[1]<copy_box[3]<=height:
+                            raise ValueError('INCOMING_COPY_MENU_OUTSIDE_DISPLAY')
                     digest=pixel_hash(image,box)
                     recipes.append({'id':'visible-region:'+digest,'kind':'text',
                         'region_box':box,'region_hash':digest,
                         'point':[bounds[0]+int((box[0]+box[2])*(bounds[2]-bounds[0])/(2*width)),
                                  bounds[1]+int((box[1]+box[3])*(bounds[3]-bounds[1])/(2*height))],
-                        'copy_menu':{'ocr_only':True,'region_box':config['copy_menu_search_box'],
-                                     'ocr_search_box':config['copy_menu_search_box']}})
+                        'copy_menu':{'ocr_only':True,'region_box':copy_box,
+                                     'ocr_search_box':copy_box}})
                     if config.get('time_hover',{}).get('reviewed') is True:
                         recipes[-1]['time_hover']=config['time_hover']
                     named=[m['sender_name'] for m in self.session.get('messages',[])
                            if m.get('kind')=='text' and m.get('region_box')==box and m.get('sender_name')]
-                    if len(named)>1:
+                    if len(named)>1 and config.get('match_sender_templates') is not True:
                         raise ValueError('AMBIGUOUS_SENDER_NAME_RECIPE')
-                    if named:
+                    if config.get('match_sender_templates') is True:
+                        templates=[m for m in self.session.get('messages',[])
+                                   if m.get('kind')=='text' and m.get('sender_name') is not None]
+                        matched=match_sender_template(image,box,templates)
+                        if matched:recipes[-1]['sender_name']=matched
+                    elif named:
                         recipes[-1]['sender_name']=dict(named[0])
         if not recipes:
             return {'status':'NO_VISIBLE_TEXT_CANDIDATES','messages':[],
