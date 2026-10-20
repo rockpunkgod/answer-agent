@@ -17,6 +17,7 @@ from helpdesk.wecom_tools import WeComTools
 
 
 SUCCESS_STATUSES={
+    'activate-window':{'WINDOW_ACTIVATED_CHAT_NOT_YET_VERIFIED'},
     'renew':{'READ_ONLY_SESSION_RENEWED'},
     'state':{'VERIFIED_CURRENT_CHAT'},'controls':{'OK'},'chats':{'OK'},
     'open':{'ALREADY_OPEN'},'messages':{'OK'},'image':{'INVOKED_UNVERIFIED'},
@@ -151,6 +152,7 @@ def main(argv=None):
     for name,key in (('open','chat_id'),('messages','chat_id'),('image','message_id'),
                      ('attachment','message_id'),('prepare','outbox_id'),('send','outbox_id'),('receipt','outbox_id')):
         sub.add_parser(name).add_argument(key)
+    sub.add_parser('activate-window',help='Activate only the bound WXWork main window; chat verification stays separate')
     sub.add_parser('renew',help='Reverify unchanged native read-only group pin; no inputs')
     sub.add_parser('poll').add_argument('chat_id')
     sub.add_parser('baseline',help='Establish current visible text as history; never sends').add_argument('chat_id')
@@ -184,7 +186,7 @@ def main(argv=None):
             result={'status':'UNAVAILABLE','reason':reason,'automatic_retry':False}
         print(json.dumps(result,ensure_ascii=False))
         return 0 if result['status']=='READ_ONLY_SESSION_RENEWED' else 2
-    operation={'state':'get_chat_state','controls':'inspect_controls','chats':'list_chats',
+    operation={'activate-window':'activate_window','state':'get_chat_state','controls':'inspect_controls','chats':'list_chats',
         'open':'open_chat','messages':'get_messages','image':'open_image',
         'attachment':'download_attachment','prepare':'prepare_reply','send':'send_reply','receipt':'verify_reply',
         'poll':'poll_messages','baseline':'poll_messages','watch':'poll_messages','history':'history_page','save-image':'save_open_image',

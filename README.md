@@ -75,12 +75,15 @@ CLI 复用上述业务实现和全部守卫，无需启动 MCP 会话，默认�
 
 ```powershell
 python tools/wecom_cli.py --database <已有数据库> --session <审核会话文件> state
+python tools/wecom_cli.py --database <已有数据库> --session <审核会话文件> --enable-input activate-window
 python tools/wecom_cli.py --database <已有数据库> --session <审核会话文件> chats
 python tools/wecom_cli.py --database <已有数据库> --session <审核会话文件> --enable-input messages <已绑定chat_id>
 python tools/wecom_cli.py --database <已有数据库> --session <审核会话文件> --enable-input prepare <原Outbox_ID>
 ```
 
 其他子命令为 `controls`、`open`、`image`、`attachment`、`send`、`receipt`；发送仍需显式启用输入与发送及原审批。输出一份命令结果，退出码0表示命令结果可用，2表示不可用；不自动重试。消息原文输出应只保存在私有目录。CLI不是新的持续采集服务，也不会自动补发历史消息。
+
+`activate-window` 只激活会话已绑定的 WXWork“企业微信”主窗口，不输入、不选群、不续期。即使聊天定位有效期已过，也可先激活主窗；成功只表示 `WINDOW_ACTIVATED_CHAT_NOT_YET_VERIFIED`。随后仍须用原 `state`/只读 `renew` 核验当前群，过期或变更的定位不能用于读取、填写或发送。
 
 `receipt <原Outbox_ID>` 仅重新回读已是 `SENT_UI_CONFIRMED` 的历史回复，需要 `--enable-input` 执行右键复制，但不需要启用发送。它不更新Outbox、不确认未知发送、不计新交付或绩效。成功返回 `HISTORICAL_TEXT_VERIFIED`；详细证据存私有目录，命令只返回状态和证据路径/哈希。新原生发送需完整审核发送、回读及复制控件；没有发送前回读区域基线或未观察到变化时不确认新发送，重启丢失该基线需人工核验。
 

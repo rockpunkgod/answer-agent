@@ -26,6 +26,29 @@ class NativeGuardTests(unittest.TestCase):
             GetAsyncKeyState=Mock(return_value=0),
             SetCursorPos=Mock(return_value=True),mouse_event=Mock())
 
+    def test_activation_requires_exact_wxwork_main_window_and_never_types(self):
+        self.native.pin={'window_geometry_handle':[200,100,1]}
+        title=['other window']
+        def window_title(handle,buffer,size):buffer.value=title[0];return len(title[0])
+        self.native.user.IsWindow=Mock(return_value=True)
+        self.native.user.IsIconic=Mock(return_value=False)
+        self.native.user.GetWindowTextW=Mock(side_effect=window_title)
+        self.native.user.SetForegroundWindow=Mock()
+        self.native.foreground=Mock(side_effect=lambda handle=None:dict(self.current))
+        with self.assertRaisesRegex(ValueError,'REVIEWED_MAIN_WINDOW_IDENTITY_CHANGED'):
+            self.native.activate()
+        title[0]='企业微信'
+        self.current['process']='OtherApp'
+        with self.assertRaisesRegex(ValueError,'REVIEWED_MAIN_WINDOW_IDENTITY_CHANGED'):
+            self.native.activate()
+        self.native.user.SetForegroundWindow.assert_not_called()
+        self.current['process']='WXWork'
+        result=self.native.activate()
+        self.assertEqual(result['status'],'WINDOW_ACTIVATED_CHAT_NOT_YET_VERIFIED')
+        self.native.user.SetForegroundWindow.assert_called_once_with(1)
+        self.native.user.SetCursorPos.assert_not_called()
+        self.native.user.mouse_event.assert_not_called()
+
     def test_user_held_modifier_pauses_without_releasing_or_clicking(self):
         for held in (0x10,0x11,0x12,0x5b,0x5c):
             with self.subTest(held=held):

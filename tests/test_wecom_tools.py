@@ -742,6 +742,38 @@ class WeComToolTests(unittest.TestCase):
             self.assertEqual(self.service.call('open_chat',chat_id=self.target)['reason'],'TEST_CONTACT_VISUAL_PIN_CHANGED')
         self.transport.activate.assert_not_called()
 
+    def test_window_activation_does_not_renew_expired_chat_or_allow_message_input(self):
+        from unittest.mock import Mock
+        self.pin['expires_at']=1
+        self.transport.activate=Mock(return_value={'status':'WINDOW_ACTIVATED_CHAT_NOT_YET_VERIFIED'})
+        with patch('helpdesk.wecom_native.NativeWeComTransport',return_value=self.transport) as native:
+            result=self.service.call('activate_window')
+        self.assertEqual(result['status'],'WINDOW_ACTIVATED_CHAT_NOT_YET_VERIFIED')
+        self.assertFalse(result['chat_verified'])
+        self.assertFalse(result['session_renewed'])
+        self.assertEqual(self.pin['expires_at'],1)
+        self.assertEqual(native.call_args.args[0]['expires_at'],1)
+        self.transport.activate.assert_called_once()
+        for operation,arguments in [('get_chat_state',{}),('prepare_reply',{'outbox_id':'reply'})]:
+            self.assertEqual(self.service.call(operation,**arguments)['reason'],'SESSION_PIN_EXPIRED_OR_CHANGED')
+        self.assertEqual(self.transport.calls,[])
+        with closing(Store(self.db_path)) as db:
+            self.assertEqual(db.one("SELECT state FROM outbox WHERE id='reply'")[0],'PENDING')
+
+    def test_window_activation_still_honors_input_pause_and_bound_session(self):
+        with patch('helpdesk.wecom_native.NativeWeComTransport') as native:
+            self.service.allow_input=False
+            self.assertEqual(self.service.call('activate_window')['reason'],'INPUT_DISABLED')
+            self.service.allow_input=True
+            with closing(Store(self.db_path)) as db:
+                db.execute("INSERT OR REPLACE INTO settings VALUES('stop_requested','true')")
+            self.assertEqual(self.service.call('activate_window')['reason'],'STOPPED')
+            with closing(Store(self.db_path)) as db:
+                db.execute("UPDATE settings SET value='false' WHERE key='stop_requested'")
+            self.pin['target_key']='changed'
+            self.assertEqual(self.service.call('activate_window')['reason'],'SESSION_PIN_EXPIRED_OR_CHANGED')
+            native.assert_not_called()
+
     def test_current_chat_is_not_full_chat_list_and_foreground_mismatch_stops(self):
         self.assertFalse(self.service.call('list_chats')['complete_chat_list'])
         self.assertEqual(self.service.call('open_chat',chat_id=self.target)['status'],'ALREADY_OPEN')

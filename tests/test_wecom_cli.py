@@ -42,6 +42,20 @@ class GroupAckCliTests(unittest.TestCase):
         path.write_text(json.dumps(value),encoding='utf-8')
         return path,value
 
+    def test_activate_window_routes_without_chat_target_or_send_permission(self):
+        path,_=self.renewal_session()
+        with patch('tools.wecom_cli.WeComTools') as tools:
+            tools.return_value.call.return_value={'status':'WINDOW_ACTIVATED_CHAT_NOT_YET_VERIFIED',
+                                                  'chat_verified':False,'session_renewed':False}
+            code,result=self.run_cli(['--database',str(self.database),'--session',str(path),
+                                      '--enable-input','activate-window'])
+            self.assertEqual(code,0)
+            self.assertFalse(result['chat_verified'])
+            self.assertFalse(result['session_renewed'])
+            tools.return_value.call.assert_called_once_with('activate_window')
+            self.assertTrue(tools.call_args.kwargs['allow_input'])
+            self.assertFalse(tools.call_args.kwargs['allow_send'])
+
     def test_read_only_renewal_preserves_templates_and_requires_verified_same_chat(self):
         path,original=self.renewal_session()
         with patch('tools.wecom_cli.WeComTools') as tools,patch('tools.wecom_cli.time.time',return_value=1000):

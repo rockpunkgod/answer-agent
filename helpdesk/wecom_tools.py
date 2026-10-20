@@ -161,14 +161,14 @@ class WeComTools:
                          'backend':self.backend,'evidence':evidence or {},
                          'target_key':self.session.get('target_key'),'at':now()})
 
-    def _pin(self):
+    def _pin(self, *, require_fresh=True):
         if not self.session:
             raise ValueError('SESSION_NOT_CONFIGURED')
         pin=dict(self.session['pin'])
         if (pin.get('target_key')!=self.session['target_key']
                 or (pin.get('platform'),pin.get('display_name'))!=('wecom',self.session['display_name'])
                 or type(pin.get('display_index')) is not int
-                or time.time()>pin.get('expires_at',0)):
+                or (require_fresh and time.time()>pin.get('expires_at',0))):
             raise ValueError('SESSION_PIN_EXPIRED_OR_CHANGED')
         return pin
 
@@ -208,6 +208,18 @@ class WeComTools:
         return {'status':'OK','scope':'CURRENT_APPROVED_CHAT_ONLY',
                 'chats':[{'chat_id':state['chat_id'],'display_name':state['display_name']}],
                 'complete_chat_list':False}
+
+    def activate_window(self):
+        """Activate the bound WXWork main window; never validate or renew a chat."""
+        if self.backend!='NATIVE':
+            raise ValueError('NATIVE_WINDOW_ACTIVATION_REQUIRED')
+        self._require_input()
+        pin=self._pin(require_fresh=False)
+        from .wecom_native import NativeWeComTransport
+        with resource_lock(self.lock), NativeWeComTransport(pin,self.root,guard=self._require_input) as transport:
+            result=transport.activate()
+        self._audit('activate_window',result['status'])
+        return {**result,'chat_verified':False,'session_renewed':False,'automatic_retry':False}
 
     def open_chat(self, chat_id):
         if chat_id!=self.session.get('target_key'):
@@ -955,7 +967,7 @@ class WeComTools:
 
     def call(self,operation,**arguments):
         try:
-            if operation not in {'inspect_controls','get_chat_state','list_chats','open_chat','get_messages',
+            if operation not in {'inspect_controls','get_chat_state','list_chats','activate_window','open_chat','get_messages',
                                  'open_image','prepare_reply','send_reply','verify_reply','download_attachment','poll_messages','history_page','save_open_image','search_chat','scan_messages'}:
                 raise ValueError('OPERATION_OUTSIDE_ALLOWLIST')
             return getattr(self,operation)(**arguments)
