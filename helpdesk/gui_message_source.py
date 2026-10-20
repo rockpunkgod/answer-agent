@@ -46,10 +46,18 @@ def same_message_payload(first, second, *, message_id, room_id):
 class GUIMessageSource:
     source_name = "windows_gui"
 
-    def __init__(self, observation_provider, *, expected_room_id, business_timezone="Asia/Shanghai", attachment_root=None):
+    def __init__(self, observation_provider, *, expected_room_id, business_timezone="Asia/Shanghai", attachment_root=None,
+                 group_display_name=None, ambiguous_names=()):
         self.provider = observation_provider
         self.room = expected_room_id
         self.timezone = business_timezone
+        self.group_display_name = group_display_name
+        self.ambiguous_names = ambiguous_names
+        if group_display_name is not None:
+            from .wecom_tools import classify_names
+            expected = classify_names(group_display_name, '__configuration_check__', ambiguous_names=ambiguous_names)
+            if expected['group_key'] != expected_room_id:
+                raise ValueError('Configured name group differs from binding group')
         self.attachment_root = Path(attachment_root).resolve(strict=True) if attachment_root is not None else None
         if self.attachment_root is not None and not self.attachment_root.is_dir():
             raise ValueError("Approved attachment root must be a directory")
@@ -64,6 +72,8 @@ class GUIMessageSource:
             raise ValueError("Real official Windows-MCP observation provenance required")
         if observation.get("room_id") != self.room:
             raise ValueError("Observed group differs from configured group")
+        if self.group_display_name is not None and observation.get('room_name') != self.group_display_name:
+            raise ValueError('Observed group name differs from configured group')
         if observation.get("foreground") is not True or observation.get("desktop_unlocked") is not True:
             raise RuntimeError("Desktop is not foreground/unlocked; synchronization suspended")
         position = observation.get("last_position")
@@ -96,6 +106,14 @@ class GUIMessageSource:
                 except (TypeError, ValueError):
                     pass
             sender_id = item.get("sender_id")
+            if self.group_display_name is not None:
+                from .wecom_tools import classify_names
+                classification = classify_names(self.group_display_name, item.get('sender_display_name'),
+                                                ambiguous_names=self.ambiguous_names)
+                # Keep the provider's original item unchanged. Local grouping is
+                # not a claim that the platform account ID was obtained.
+                item = dict(item, name_classification=classification)
+                sender_id = classification['student_key']
             sender_present = isinstance(sender_id, str) and bool(sender_id.strip())
             trusted = (sender_present and item.get("sender_identity_verified") is True
                        and item.get("consecutive_header_verified") is True
