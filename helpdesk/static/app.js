@@ -256,15 +256,21 @@ function configureMode(data){
   const control=collectorStatus?.control||{};
   document.querySelector('button[data-action="collector_start"]').textContent=nativeImport?'启动原文导入':'启动采集';
   document.querySelector('button[data-action="collector_stop"]').textContent=nativeImport?'停止原文导入':'停止采集';
-  const controlLabels={IDLE:'尚未启动',STARTING:'正在启动，等待首次同步',RUNNING:'采集循环运行中',DEGRADED:'采集或收到处理失败，正在重试',STOPPING:'正在停止，等待当前调用完成',STOPPED:'已停止，进度保留',BLOCKED:'启动受阻，采集未运行'};
+  const controlLabels={IDLE:'尚未启动',STARTING:'正在启动，等待首次同步',RUNNING:'采集循环运行中',WAITING:'等待唤醒',DEGRADED:'采集或收到处理失败，正在重试',STOPPING:'正在停止，等待当前调用完成',STOPPED:'已停止，进度保留',BLOCKED:'启动受阻，采集未运行'};
   target.append(el('p','',`${nativeImport?'原文导入':'采集'}控制：${controlLabels[control.state]||control.state||'未知'}`));
   const labels={NEVER_SYNCED:'尚未读取到聊天记录',HEALTHY:'最近同步成功',FAILED:'同步失败',STALE:'同步已超时'};
   target.append(el('p','',`${nativeImport?'原文导入':'采集'}状态：${nativeImport&&metrics.health==='HEALTHY'?'已成功导入原文':labels[metrics.health]||metrics.health||'状态未知'}`));
   target.append(el('p','',nativeImport?'当前使用本机原生复制记录，无需存档账号。原文导入运行不代表桌面自动监听已经接通。':collectorStatus?.account_status==='NOT_CONFIGURED'?'缺少企业存档账号配置：请管理员在本机配置企业ID、存档凭据和解密私钥，并确认答疑群覆盖范围。':'接入配置已填写，真实账号能力仍待验证。'));
   target.append(el('p','',`待收到 ${collectorStatus?.pending_ack_count??0} 条 · 待核验 ${collectorStatus?.held_ack_count??0} 条 · 今日采集 ${metrics.messages_received_today??'未知'} 条`));
   target.append(el('p','',`最后成功同步：${metrics.last_successful_sync_at||'无'} · 未消费事件：${metrics.events_pending??0}`));
+  const unread=control.unread_wakeup;
+  if(unread){
+   const wakeLabels={NEVER_PROBED:'等待首次读取',STARTING:'正在启动',UNAVAILABLE:'提示读取暂不可用',STOPPING:'正在停止',STOPPED:'已停止'};
+   target.append(el('p','',`后台未读提示：${unread.state==='HINT_CAPTURED'?(unread.unread_hint?'检测到未读提示':'未检测到未读提示'):wakeLabels[unread.state]||'状态未知'}`));
+  }
   if(control.error_type)target.append(el('p','',control.error_type==='ArchiveNotConfigured'?'聊天尚未接通：重新点击启动不能补齐账号配置。':`采集遇到问题：${control.error_type}，请检查接入配置。`));
-  document.getElementById('collector-control-note').textContent=nativeImport?'新增的Windows-MCP原文归档会增量导入；此入口的状态不用于判定桌面监听或群内收到的发送结果。原文核验与发送方式分别处理，以当前阶段配置为准。':control.worker_alive?'采集正在进行，仅保存消息并排队收到。停止会等待当前有界调用完成，保留已确认进度；发送方式以当前阶段配置为准。':'工作台已打开，聊天采集未启动。管理员配置完成后再点击启动采集；发送键由你按。';
+  document.getElementById('collector-control-note').textContent=control.trigger_mode==='SIGNAL'?(unread?'后台提示只负责唤醒已配置的消息入口；实际消息和发送结果仍分别核验。':
+   '当前等待唤醒，尚未配置自动未读提示。'):nativeImport?'新增的Windows-MCP原文归档会增量导入；此入口的状态不用于判定桌面监听或群内收到的发送结果。原文核验与发送方式分别处理，以当前阶段配置为准。':control.worker_alive?'采集正在进行，仅保存消息并排队收到。停止会等待当前有界调用完成，保留已确认进度；发送方式以当前阶段配置为准。':'工作台已打开，聊天采集未启动。完成消息入口配置后再点击启动采集；发送方式以当前阶段配置为准。';
  }else if(realMode){
   document.title="英语答疑 · 真实已准备任务";
   document.getElementById("mode-label").textContent=questionAutoContinue?"题面确认后排队":"REAL · 已准备教学会话";

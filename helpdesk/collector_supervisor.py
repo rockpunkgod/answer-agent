@@ -12,6 +12,7 @@ from .collector_cli import load_source, run_live_iteration
 from .collector_storage import CollectorStore
 from .message_sources import CursorExpired
 from .wecom_archive import ArchiveNotConfigured, ArchiveProtocolError
+from .unread_wakeup import UnreadWakeMonitor
 
 
 def stamp():
@@ -38,6 +39,7 @@ class CollectorSupervisor:
         self.stop_event = Event()
         self.wake_event = Event()
         self.thread = None
+        self.unread_monitor = None
         self.state = "IDLE"
         self.health = "NEVER_SYNCED"
         self.last_result = None
@@ -53,7 +55,8 @@ class CollectorSupervisor:
             "error_type": self.error_type, "logs": list(self.logs),
             "processing_mode": "ACK_ONLY", "sync_mode": "LIVE", "student_send_enabled": False,
             "trigger_mode": (self.config or {}).get("collector", {}).get("trigger_mode", "POLL"),
-            "wake_pending": self.wake_event.is_set(),
+            "wake_pending": self.wake_event.is_set() and not self.stop_event.is_set(),
+            "unread_wakeup": self.unread_monitor.snapshot() if self.unread_monitor else None,
             "notification_listener_connected": False}
 
     def snapshot(self):
@@ -81,12 +84,19 @@ class CollectorSupervisor:
                 self.state, self.health, self.error_type = "BLOCKED", "SOURCE_UNAVAILABLE", "InvalidPollInterval"
                 self._log("START_BLOCKED", health=self.health, error_type=self.error_type)
                 return self._snapshot()
+            wake_config = settings.get("unread_wakeup")
             try:
+                if wake_config is not None:
+                    UnreadWakeMonitor.validate_config(wake_config)
+                    if wake_config["enabled"] and trigger_mode != "SIGNAL":
+                        raise ValueError("Unread hints require SIGNAL mode")
                 source = self.factory(self.config)
             except Exception as error:
                 self.state, self.health, self.error_type = "BLOCKED", failure_health(error, self.config), type(error).__name__
                 self._log("START_BLOCKED", health=self.health, error_type=self.error_type)
                 return self._snapshot()
+            self.unread_monitor = (UnreadWakeMonitor(wake_config, self.wake_event.set)
+                if wake_config and wake_config["enabled"] else None)
             self.stop_event.clear()
             self.wake_event.clear()
             self.state, self.health, self.error_type = "STARTING", "WAITING_FOR_FIRST_SYNC", None
@@ -117,6 +127,8 @@ class CollectorSupervisor:
             if signal_mode:
                 with self.lock:
                     self.state, self.health = "WAITING", "WAITING_FOR_SIGNAL"
+            if self.unread_monitor:
+                self.unread_monitor.start()
             while not self.stop_event.is_set():
                 if signal_mode:
                     self.wake_event.wait()
@@ -165,6 +177,8 @@ class CollectorSupervisor:
                 self.state, self.health, self.error_type = "BLOCKED", "SOURCE_UNAVAILABLE", type(error).__name__
                 self._log("LOOP_FAILED", health=self.health, error_type=self.error_type)
         finally:
+            if self.unread_monitor:
+                self.unread_monitor.stop()
             close = getattr(source, "close", None)
             if not callable(close):
                 close = getattr(getattr(source, "transport", None), "close", None)

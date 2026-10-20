@@ -11,6 +11,7 @@ teacher_sender_ids = []
 page_size = 1000
 max_pages = 1000
 poll_seconds = 10
+# trigger_mode = "SIGNAL" # Required when unread_wakeup.enabled is true.
 stale_after_seconds = 300
 
 [source]
@@ -48,3 +49,16 @@ cross_day_attribution_status = "CONFIRMED"
 # Count units do not imply a confirmed price.
 special_count_unit = "篇"
 special_price_status = "NEED_CONFIRMATION"
+
+# Background hints only. Requires a locally reviewed, full-window pixel profile.
+# Does not read messages, change focus or enable sending.
+[collector.unread_wakeup]
+enabled = false
+reviewer = ""
+verification_evidence = ""
+image_size = []
+indicator_box = []
+poll_seconds = 5
+repeat_seconds = 60
+timeout_seconds = 8
+min_red_pixels = 8

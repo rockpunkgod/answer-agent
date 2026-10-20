@@ -1105,3 +1105,17 @@ UNIT/MOCK：python -X utf8 -B -m unittest -q tests.test_wecom_cli tests.test_nat
 REAL：GPT-6 Luna low 执行只读预检，先核对脚本无输入/激活副作用，再运行 tools/probe_wecom.ps1 的默认 PrintWindow 模式（没有 CaptureVisible）。2026-10-20 16:41 北京时间，WXWork HWND1771226 不在前台且未最小化时，输出可读界面，含目标群红色未读角标1。私有证据 data/private/wecom-controls/luna-background-probe.png；本轮未发送、未修改真实业务数据库。一次额外前台查询碰到 PowerShell 只读变量 pid，未造成输入或状态修改；随后的独立只读查询确认前台进程非 WXWork。
 
 该证据仅证明一次后台可读，未证明最小化时可读或画面及时刷新；不能把截图或角标代替原消息、身份和原始时间。后续可据此实现轻量未读提示唤醒，仍须单独验证刷新/陈旧判断及真实读取入口。三个群尚未开启自动收到；整体 NOT_READY，完整最终验收目标不变。
+
+## 未读提示接入原采集唤醒（2026-10-20）
+
+上一目标轮完成13f0d71提交和Luna后台捕获预检，属于实际进展。本轮新增 helpdesk/unread_wakeup.py，并接入 CollectorSupervisor 生命周期：SIGNAL模式下默认等待，仅按审核ROI检查后台未读提示，不切换或恢复窗口、不调用模型、不执行发送。初次未读、角标变化或持续未读限频重查可触发同一个wake_event，提示合并；采集停止同时停止提示线程。错误显示UNAVAILABLE/unread_hint=null，不当作无消息，freshness_verified、message_source_verified、can_send始终false。文件导入仍是文件导入，所有原消息/时间/收件人/Outbox保护保留。默认配置不开启。
+
+复用 tools/probe_wecom.ps1，新增 MainWindowOnly：限定当前WXWork进程、唯一标题为企业微信的主窗口，拒绝最小化；输出后台捕获方式、几何等元数据。模块只调用固定脚本，不接受命令或正文，子进程有超时，不使用CaptureVisible。PNG每次覆盖当前运行私有目录的一张current.png，不生成逐步审计文件。工作台增加等待/角标状态，不改教学或绩效。
+
+真实预检由GPT-6 Luna low执行。首次严格命令在解析阶段失败（修改脚本时UTF-8 BOM被去掉），没有运行捕获；修复BOM后，同一powershell.exe仅语法解析返回SYNTAX_OK，再由Luna重测成功。失败保留，不计通过。修复后主窗口HWND1771226、未最小化、2564x1384，后台PrintWindow可读；确认左侧消息图标红角标ROI为[35,152,57,174]。一次UnreadWakeMonitor.sample_once使用仅写内存列表的回调，返回HINT_CAPTURED、unread_hint=true、wake_count=1；没有接Collector/HTTP/业务数据库/发送器，没有启动持续循环，没有输入或外发。私有核验配置 data/private/wecom-controls/unread-wakeup-reviewed.json 保持enabled=false，图片 luna-unread-profile.png、luna-unread-roi.png，以及 private/unread-wakeup/ae96547ea7fd4f69b64f28d17070c2cf/current.png 均存在。
+
+回归命令：python -X utf8 -B -m unittest -q tests.test_unread_wakeup tests.test_wecom_cli tests.test_native_group_ack tests.test_mcp_group_delivery tests.test_automatic_delivery_workbench tests.test_delivery_tasks tests.test_collector_watch tests.test_collector_supervisor tests.test_collector_ack_native：102项通过，0失败、0跳过。其中Windows PowerShell Parser测试真实验证静态脚本语法，不执行桌面；其他相关新增覆盖为合成图像、脚本化进程与匿名SQLite：角标变化/限频/延迟信号不丢、持续提示重查、失败恢复、停止、错误/尺寸/来源拒绝、无源配置不误启动、提示唤醒一次同步及联动停止。真实采样与MOCK分开，未据此宣称15分钟SLA通过。
+
+仍待验证：角标对新消息/清零的及时刷新及陈旧判断、最小化环境；三群实时原消息/学生/原始时间读取与群定位配置；Luna真实ACK发送与回读。没有更改真实业务数据库，三个群未开启自动收到，整体NOT_READY，最终完整目标继续保留。
+
+补充检查：tests.test_ack_only_workbench 与 tests.test_current_demo_launcher 共13项通过，0失败、0跳过；node --check helpdesk/static/app.js 和 git diff --check 通过。界面状态调整仅做静态语法/现有HTTP回归，未声称真实浏览器画面验收。

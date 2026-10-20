@@ -14,6 +14,7 @@ from helpdesk.message_sources import NormalizedMessage, MessageBatch, SyncMode, 
 from helpdesk.service import Helpdesk
 from helpdesk.storage import Store
 from helpdesk.wecom_archive import ArchiveNotConfigured
+from unittest.mock import patch
 
 
 class ControlledSource:
@@ -123,6 +124,72 @@ class CollectorSupervisorTests(unittest.TestCase):
         self.assertFalse(result["running"])
         self.assertNotIn("SECRET TOKEN", json.dumps(result))
         self.assertFalse(Path(self.config["collector"]["database"]).exists())
+
+    def test_unread_hint_wakes_one_sync_and_monitor_stops_with_collector(self):
+        from helpdesk.unread_wakeup import UnreadWakeMonitor
+        from tests.test_unread_wakeup import reviewed
+        self.config['collector'].update(trigger_mode='SIGNAL', unread_wakeup=reviewed())
+        done = Event()
+        calls = []
+        class Monitor:
+            validate_config = staticmethod(UnreadWakeMonitor.validate_config)
+            def __init__(self, config, wake):
+                self.wake, self.closed = wake, False
+            def start(self):
+                self.wake()
+            def stop(self):
+                self.closed = True
+            def snapshot(self):
+                return {'state':'MOCK_HINT', 'message_source_verified':False}
+        def runner(store, source, settings):
+            calls.append(True)
+            done.set()
+            return {'sync':{'inserted_count':0,'has_more':False}, 'events_processed':0}
+        supervisor = CollectorSupervisor(self.config, source_factory=lambda config: ControlledSource(), runner=runner)
+        self.supervisors.append(supervisor)
+        with patch('helpdesk.collector_supervisor.UnreadWakeMonitor', Monitor):
+            supervisor.start()
+            self.assertTrue(done.wait(2))
+            status = self.wait_state(supervisor, 'WAITING')
+            self.assertFalse(status['unread_wakeup']['message_source_verified'])
+            supervisor.stop(wait_seconds=3)
+        self.assertEqual(calls, [True])
+        self.assertTrue(supervisor.unread_monitor.closed)
+        self.assertFalse(supervisor.snapshot()['wake_pending'])
+
+    def test_unread_enabled_requires_signal_before_source_is_opened(self):
+        from tests.test_unread_wakeup import reviewed
+        self.config['collector']['unread_wakeup'] = reviewed()
+        called = []
+        supervisor = self.supervisor(lambda config: called.append(True))
+        self.assertEqual(supervisor.start()['state'], 'BLOCKED')
+        self.assertEqual(called, [])
+        self.assertIsNone(supervisor.unread_monitor)
+
+    def test_unread_capture_failure_stays_unknown_and_does_not_read_source(self):
+        from helpdesk.unread_wakeup import UnreadWakeMonitor
+        from tests.test_unread_wakeup import reviewed
+        self.config['collector'].update(trigger_mode='SIGNAL', unread_wakeup=reviewed())
+        source = ControlledSource()
+        class Unavailable:
+            validate_config = staticmethod(UnreadWakeMonitor.validate_config)
+            def __init__(self, config, wake):
+                pass
+            def start(self):
+                pass
+            def stop(self):
+                pass
+            def snapshot(self):
+                return {'state':'UNAVAILABLE','unread_hint':None}
+        supervisor = self.supervisor(lambda config: source)
+        with patch('helpdesk.collector_supervisor.UnreadWakeMonitor', Unavailable):
+            supervisor.start()
+            status = self.wait_state(supervisor, 'WAITING')
+            self.assertEqual(status['unread_wakeup']['state'], 'UNAVAILABLE')
+            self.assertIsNone(status['unread_wakeup']['unread_hint'])
+            self.assertIsNone(status['last_result'])
+            self.assertEqual(source.calls, [])
+            supervisor.stop(wait_seconds=3)
 
     def test_start_sync_ack_stop_restart_keeps_activation_cursor_and_one_ack(self):
         path = self.config["collector"]["business_database"]
