@@ -497,7 +497,7 @@ class WeComTools:
                 else self.get_messages(chat_id))
         if result.get('status')!='OK':
             return result
-        fresh=[];new_time_evidence=0
+        fresh=[];new_time_evidence=0;confirmed_times=[]
         from .wecom_visible import time_label_identity
         with closing(Store(self.database)) as db, db.transaction():
             for message in result['messages']:
@@ -530,6 +530,9 @@ class WeComTools:
                         'observation_key':key,'text_observation_key':base,
                         'source_sent_at':None,'formal_statistics_eligible':False})
                     new_time_evidence+=1
+                confirmation=self._confirmed_observation_time(db,key,chat_id,message)
+                if confirmation:
+                    confirmed_times.append(confirmation)
                 if exists:
                     continue
                 Workflow(db)._event('WECOM_VISIBLE_OBSERVATION',details={
@@ -539,7 +542,52 @@ class WeComTools:
         return {**result,'status':'OBSERVATIONS_SAVED' if fresh else 'NO_NEW_OBSERVATIONS',
                 'messages':fresh,'new_observation_count':len(fresh),
                 'new_time_evidence_count':new_time_evidence,
+                'confirmed_observation_times':confirmed_times,
                 'automatic_ack_eligible':False,'platform_identity_verified':False}
+
+    @staticmethod
+    def _confirmed_observation_time(db,key,chat_id,message):
+        """Read scoped human evidence; never promote a test into trusted ingress."""
+        from datetime import datetime
+        from .wecom_visible import time_label_identity
+        rows=db.all("SELECT id,details FROM audit WHERE event='WECOM_VISIBLE_TIME_OPERATOR_CONFIRMED' "
+                    "AND json_extract(details,'$.observation_key')=?",(key,))
+        accepted=[]
+        for row in rows:
+            proof=json.loads(row['details'])
+            if (proof.get('scope')!='this_observation_only'
+                    or proof.get('verification_method')!='human_confirmation'
+                    or proof.get('formal_statistics_eligible') is not False):
+                continue
+            original=db.one("SELECT details FROM audit WHERE id=? AND event='WECOM_VISIBLE_TIME_OBSERVATION'",
+                            (proof.get('original_time_audit_id'),))
+            observed=db.one("SELECT details FROM audit WHERE id=? AND event='WECOM_VISIBLE_OBSERVATION'",
+                            (proof.get('original_text_audit_id'),))
+            linked=db.one("SELECT source,raw_text FROM messages WHERE id=?",(proof.get('message_id'),))
+            if not original or not observed or not linked or linked['source']!='OPERATOR_TEST':
+                continue
+            original=json.loads(original['details']);observed=json.loads(observed['details'])
+            if (original.get('observation_key')!=key or observed.get('observation_key')!=key
+                    or observed.get('chat_id')!=chat_id
+                    or observed.get('message',{}).get('text')!=message['text']
+                    or linked['raw_text']!=message['text']):
+                continue
+            label=time_label_identity(original.get('normalized_original_time_label'))
+            try:
+                stamp=datetime.fromisoformat(proof['confirmed_source_sent_at'])
+            except (KeyError,TypeError,ValueError):
+                continue
+            actual=(stamp.year,stamp.month,stamp.day,stamp.hour,stamp.minute,stamp.second)
+            if (stamp.utcoffset() is None or stamp.utcoffset().total_seconds()!=28800
+                    or label is None or label[1:]!=actual[1:]
+                    or (label[0] is not None and label[0]!=actual[0])):
+                continue
+            accepted.append({'observation_key':key,'message_id':proof['message_id'],
+                'source_sent_at':stamp.isoformat(),'confirmation_audit_id':row['id'],
+                'time_status':'OPERATOR_CONFIRMED_TEST_ONLY','formal_statistics_eligible':False})
+        if len({p['source_sent_at'] for p in accepted})>1:
+            raise ValueError('VISIBLE_TIME_CONFIRMATION_CONFLICT')
+        return accepted[-1] if accepted else None
 
     def open_image(self,message_id):
         recipe=self._message(message_id)

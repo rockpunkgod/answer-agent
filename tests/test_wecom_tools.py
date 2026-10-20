@@ -58,6 +58,42 @@ class WeComToolTests(unittest.TestCase):
             transport_factory=lambda:self.transport,allow_input=True,
             probe=lambda root:{'status':'OK','controls':[{'control_type':'Window'},{'control_type':'Pane'}],'truncated':False,'window':{'client_version':'anonymous'}})
 
+    def test_scoped_time_confirmation_is_read_after_restart_without_promoting_test(self):
+        message={'id':'date-fixture','text':'original test','source_sent_at':None,
+                 'source_time_evidence':{'normalized_original_time_label':'10/1923:12:32'}}
+        result={'status':'OK','messages':[message]}
+        with patch.object(self.service,'get_messages',return_value=result):
+            self.service.poll_messages(self.target)
+        with closing(Store(self.db_path)) as db:
+            observed=db.one("SELECT id,details FROM audit WHERE event='WECOM_VISIBLE_OBSERVATION'")
+            original=db.one("SELECT id FROM audit WHERE event='WECOM_VISIBLE_TIME_OBSERVATION'")
+            key=json.loads(observed['details'])['observation_key']
+            proof={'observation_key':key,'message_id':'message','original_time_audit_id':original['id'],
+                'original_text_audit_id':observed['id'],'scope':'this_observation_only',
+                'verification_method':'human_confirmation','formal_statistics_eligible':False,
+                'confirmed_source_sent_at':'2026-10-19T23:12:32+08:00'}
+            from helpdesk.workflow import Workflow
+            Workflow(db)._event('WECOM_VISIBLE_TIME_OPERATOR_CONFIRMED',details=proof)
+        restarted=WeComTools(self.db_path,session=self.session,root=self.root)
+        with patch.object(restarted,'get_messages',return_value=result):
+            polled=restarted.poll_messages(self.target)
+        self.assertEqual(polled['new_observation_count'],0)
+        self.assertEqual(polled['confirmed_observation_times'][0]['source_sent_at'],proof['confirmed_source_sent_at'])
+        self.assertFalse(polled['automatic_ack_eligible'])
+        with closing(Store(self.db_path)) as db:
+            self.assertIsNone(db.one("SELECT source_sent_at FROM messages WHERE id='message'")[0])
+            self.assertEqual(db.one('SELECT count(*) FROM performance_units')[0],0)
+            self.assertEqual(db.one('SELECT count(*) FROM outbox')[0],1)
+            proof['confirmed_source_sent_at']='2026-10-18T23:12:32+08:00'
+            db.execute("UPDATE audit SET details=? WHERE event='WECOM_VISIBLE_TIME_OPERATOR_CONFIRMED'",(json.dumps(proof),))
+            self.assertIsNone(restarted._confirmed_observation_time(db,key,self.target,message))
+            proof['confirmed_source_sent_at']='2027-10-19T23:12:32+08:00'
+            db.execute("UPDATE audit SET details=? WHERE event='WECOM_VISIBLE_TIME_OPERATOR_CONFIRMED'",(json.dumps(proof),))
+            Workflow(db)._event('WECOM_VISIBLE_TIME_OPERATOR_CONFIRMED',details={**proof,
+                'confirmed_source_sent_at':'2026-10-19T23:12:32+08:00'})
+            with self.assertRaisesRegex(ValueError,'VISIBLE_TIME_CONFIRMATION_CONFLICT'):
+                restarted._confirmed_observation_time(db,key,self.target,message)
+
     def test_poll_persists_raw_observation_and_deduplicates_after_restart(self):
         message={'id':'reviewed-1','text':'anonymous question','source_sent_at':None,'observed_at':now()}
         result={'status':'OK','messages':[message],'continuous_listener':False}
