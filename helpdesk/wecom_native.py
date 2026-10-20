@@ -32,6 +32,7 @@ class NativeWeComTransport:
         self.user.IsWindow.argtypes=[w.HWND]
         self.user.IsIconic.argtypes=[w.HWND]
         self.user.GetWindowRect.argtypes=[w.HWND,ctypes.POINTER(w.RECT)]
+        self.user.GetCursorPos.argtypes=[ctypes.POINTER(w.POINT)]
         self.user.GetWindowThreadProcessId.argtypes=[w.HWND,ctypes.POINTER(w.DWORD)]
         self.user.GetWindowTextW.argtypes=[w.HWND,w.LPWSTR,ctypes.c_int]
         self.kernel.OpenProcess.argtypes=[w.DWORD,w.BOOL,w.DWORD];self.kernel.OpenProcess.restype=w.HANDLE
@@ -60,6 +61,12 @@ class NativeWeComTransport:
         if not self.user.GetWindowRect(handle,ctypes.byref(rect)):raise ValueError('NATIVE_WINDOW_UNAVAILABLE')
         return {'process':Path(name.value).stem,'handle':int(handle),'left':rect.left,'top':rect.top,
                 'width':rect.right-rect.left,'height':rect.bottom-rect.top}
+
+    def pointer(self):
+        point=w.POINT()
+        if not self.user.GetCursorPos(ctypes.byref(point)):
+            raise ValueError('NATIVE_POINTER_UNAVAILABLE')
+        return [point.x,point.y]
 
     def activate(self):
         self.guard()
@@ -181,6 +188,7 @@ class NativeWeComTransport:
 
     def call(self,tool,arguments):
         attempt=uuid4().hex;started=datetime.now(timezone.utc).isoformat()
+        capture_metadata={}
         journal={'attempt_id':attempt,'tool':tool,'backend':'WECOM_NATIVE','started_at':started,
                  'status':'OUTCOME_UNCONFIRMED','automatic_retry_allowed':False}
         path=self.directory/('attempt-'+attempt+'.json')
@@ -201,7 +209,9 @@ class NativeWeComTransport:
             info=MonitorInfo();info.size=ctypes.sizeof(info)
             if not monitor or not self.user.GetMonitorInfoW(monitor,ctypes.byref(info)) or [info.monitor.left,info.monitor.top,info.monitor.right,info.monitor.bottom]!=region:
                 raise ValueError('DISPLAY_LAYOUT_CHANGED')
+            capture_metadata['pointer_before']=self.pointer()
             image=ImageGrab.grab(bbox=tuple(region),all_screens=True)
+            capture_metadata['pointer_after']=self.pointer()
             size=self.pin['image_size']
             if list(image.size)!=size:image=image.resize(tuple(size),Image.Resampling.LANCZOS)
             output=self.directory/(attempt+'.png');image.save(output)
@@ -238,7 +248,8 @@ class NativeWeComTransport:
                 self.user.mouse_event(2,0,0,0,0);self.user.mouse_event(4,0,0,0,0)
                 self._clipboard('set',text);self._shortcut('ctrl+v');content=[]
         else:raise ValueError('NATIVE_OPERATION_OUTSIDE_ALLOWLIST')
-        result={'tool':tool,'backend':'WECOM_NATIVE','is_error':False,'attempt_id':attempt,'content':content}
+        result={'tool':tool,'backend':'WECOM_NATIVE','is_error':False,'attempt_id':attempt,'content':content,
+                **capture_metadata}
         result_path=self.directory/(attempt+'.json');result_path.write_text(json.dumps(result,ensure_ascii=False),encoding='utf-8')
         journal.update(status='TOOL_RETURNED',result_path=str(result_path));path.write_text(json.dumps(journal),encoding='utf-8')
         return result

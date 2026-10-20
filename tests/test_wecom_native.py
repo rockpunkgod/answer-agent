@@ -4,7 +4,7 @@ from pathlib import Path
 import tempfile
 from types import SimpleNamespace
 import unittest
-from unittest.mock import Mock
+from unittest.mock import Mock,patch
 
 from helpdesk.wecom_native import NativeWeComTransport
 from helpdesk.mcp_window_probe import FOREGROUND_COMMAND
@@ -90,6 +90,36 @@ class NativeGuardTests(unittest.TestCase):
         self.native.user.mouse_event.assert_not_called()
         with self.assertRaisesRegex(ValueError,'INVALID_POINTER_MOVE'):
             self.native.call('Move',{'loc':[150,150],'clicks':1})
+
+    def test_pointer_read_returns_actual_coordinates_or_explicitly_fails(self):
+        def position(pointer):
+            pointer._obj.x=-40;pointer._obj.y=70
+            return True
+        self.native.user.GetCursorPos=Mock(side_effect=position)
+        self.assertEqual(self.native.pointer(),[-40,70])
+        self.native.user.GetCursorPos.side_effect=None
+        self.native.user.GetCursorPos.return_value=False
+        with self.assertRaisesRegex(ValueError,'NATIVE_POINTER_UNAVAILABLE'):
+            self.native.pointer()
+        self.native.user.SetCursorPos.assert_not_called()
+
+    def test_native_capture_retains_actual_pointer_before_and_after_image(self):
+        from PIL import Image
+        self.native.pin={'display_bounds':[100,100,300,200],'image_size':[200,100],'display_index':0}
+        self.native.user.MonitorFromRect=Mock(return_value=1)
+        def monitor(handle,pointer):
+            info=pointer._obj
+            info.monitor.left=100;info.monitor.top=100;info.monitor.right=300;info.monitor.bottom=200
+            info.device='DISPLAY1'
+            return True
+        self.native.user.GetMonitorInfoW=Mock(side_effect=monitor)
+        self.native.pointer=Mock(side_effect=[[150,150],[151,150]])
+        with patch('PIL.ImageGrab.grab',return_value=Image.new('RGB',(200,100),'white')):
+            result=self.native.call('Screenshot',{})
+        saved=json.loads((self.native.directory/(result['attempt_id']+'.json')).read_text())
+        self.assertEqual(saved['pointer_before'],[150,150])
+        self.assertEqual(saved['pointer_after'],[151,150])
+        self.native.user.SetCursorPos.assert_not_called()
 
     def test_verified_click_records_native_backend_not_windows_mcp(self):
         result=self.native.call('Click',{'loc':[150,150]})

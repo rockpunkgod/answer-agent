@@ -453,6 +453,11 @@ class WeComTools:
             recipe={**recipe,'region_hash':pixel_hash(image,recipe['region_box'])}
         desktop._call('Move',loc=point);time.sleep(1.2)
         record,_=self._frame(desktop,pin)
+        if record.get('backend')=='WECOM_NATIVE':
+            if 'pointer_before' not in record or 'pointer_after' not in record:
+                raise ValueError('TIME_HOVER_POINTER_EVIDENCE_MISSING')
+            if record['pointer_before']!=point or record['pointer_after']!=point:
+                raise ValueError('TIME_HOVER_POINTER_MOVED')
         # The timestamp's shadow can change the bubble's upper edge. At this
         # point no text has been accepted yet: bind the upcoming clipboard read
         # to the current, uniquely located bubble rather than its pre-hover paint.

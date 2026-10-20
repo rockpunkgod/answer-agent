@@ -434,6 +434,24 @@ class WeComToolTests(unittest.TestCase):
         self.assertEqual(evidence['label_box'],[14,-3,364,29])
         self.assertEqual(evidence['requested_hover_point'],[50,35])
 
+    def test_hover_stops_before_ocr_or_copy_when_native_pointer_evidence_changes(self):
+        from unittest.mock import Mock
+        self.pin['display_bounds']=[0,0,200,100]
+        recipe={'region_box':[20,20,80,50],'point':[60,35],'time_hover':{'blank':{
+            'region_box':[0,0,10,10],'region_hash':self.pin['avatar_hash'],'point':[5,5]}}}
+        base={'attempt_id':'anonymous','backend':'WECOM_NATIVE',
+              'content':[{'type':'image','path':str(self.image)}]}
+        for evidence,reason in (({},'TIME_HOVER_POINTER_EVIDENCE_MISSING'),
+                ({'pointer_before':[61,35],'pointer_after':[61,35]},'TIME_HOVER_POINTER_MOVED'),
+                ({'pointer_before':[60,35],'pointer_after':[61,35]},'TIME_HOVER_POINTER_MOVED')):
+            desktop=Mock()
+            with patch.object(self.service,'_frame',return_value=({**base,**evidence},{})), \
+                    patch('helpdesk.wecom_control_ocr.read_time_label') as read, \
+                    patch('helpdesk.wecom_tools.time.sleep'), self.assertRaisesRegex(ValueError,reason):
+                self.service._hover_time(desktop,self.pin,base,recipe)
+            read.assert_not_called()
+            self.assertFalse(any(call.args[0]=='Clipboard' for call in desktop._call.call_args_list))
+
     def test_reviewed_time_crop_is_passed_without_inventing_original_date(self):
         from unittest.mock import Mock
         self.pin['display_bounds']=[100,-100,500,100]
