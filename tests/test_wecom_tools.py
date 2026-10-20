@@ -110,6 +110,44 @@ class WeComToolTests(unittest.TestCase):
         self.assertEqual(self.service.call('history_page',chat_id=self.target)['reason'],'HISTORY_POINT_OUTSIDE_VIEWPORT')
         self.assertFalse(any(t=='Scroll' for t,a in self.transport.calls))
 
+    def test_save_image_requires_review_before_any_input(self):
+        self.session['messages']=[{'id':'photo','kind':'image'}]
+        result=self.service.call('save_open_image',message_id='photo')
+        self.assertEqual(result['reason'],'IMAGE_SAVE_CONTROLS_NOT_REVIEWED')
+        self.assertEqual(self.transport.calls,[])
+
+    def test_save_image_uses_internal_generated_path_and_checks_original_hash(self):
+        from unittest.mock import Mock
+        from PIL import Image
+        database=self.root/'data/private/save-test/probe.sqlite'
+        database.parent.mkdir(parents=True)
+        (database.parent/'attachments').mkdir()
+        Store(database).close()
+        self.service.database=database
+        region={'region_box':[0,0,10,10],'region_hash':self.pin['avatar_hash']}
+        self.session['messages']=[{'id':'photo','kind':'image','save_preview':{
+            'reviewed':True,'window_geometry_handle':[200,100,1],
+            'source_region':region,'save_button':{**region,'point':[5,5]}}}]
+        self.transport.foreground=Mock(return_value={'process':'WXWork','width':200,'height':100,'handle':1})
+        def save(args,**kwargs):
+            target=Path(args[-1])
+            self.assertEqual(target.parent,database.parent/'attachments')
+            self.assertFalse(target.exists())
+            Image.new('RGB',(20,20),'white').save(target)
+            return Mock(returncode=0)
+        with patch('helpdesk.wecom_tools.subprocess.run',side_effect=save):
+            result=self.service.call('save_open_image',message_id='photo')
+        self.assertEqual(result['status'],'ORIGINAL_SAVED')
+        self.assertTrue(Path(result['path']).is_file())
+        self.transport.calls.clear()
+        self.session['messages'][0]['attachment_sha256']='0'*64
+        with patch('helpdesk.wecom_tools.subprocess.run',side_effect=save):
+            result=self.service.call('save_open_image',message_id='photo')
+        self.assertEqual(result['reason'],'SAVED_ORIGINAL_HASH_MISMATCH')
+        with closing(Store(database)) as db:
+            self.assertEqual(db.one('SELECT count(*) FROM performance_units')[0],0)
+            self.assertEqual(db.one('SELECT count(*) FROM outbox')[0],0)
+
     def test_failed_poll_never_consumes_observations(self):
         with patch.object(self.service,'get_messages',side_effect=ValueError('WINDOW_CHANGED')):
             result=self.service.call('poll_messages',chat_id=self.target)

@@ -1,5 +1,14 @@
 # 当前能力与缺口
 
+## 企业微信真实翻页与原图保存（2026-10-20）
+
+用户明确交接桌面，授权只读取/操作、不发送。重新激活企业微信，当前苇中鹤头部/头像与原审核哈希均一致，建立限时私有history会话。首次history因ChatGPT占据焦点返回WECOM_NOT_FOREGROUND，无输入；随后open_chat核验目标，原生history返回HISTORY_VIEW_CHANGED。动作是真实通过，messages_imported=0，不当作完整历史读取。
+
+原生open_image打开同一消息的第2张照片，保存按钮打开实际另存为。发现文件名ID1001、保存按钮ID1；UIA在后续读取出现Pane类型不稳定，初次脚本编码/选择/回读分别失败，均未点击保存。改为ASCII脚本及固定原生控件ID、有限SendMessageTimeout写入/回读/BM_CLICK一次；实际保存383788字节JPEG，sha256=e25848726f6e89ea541e9cdfcb0526ce7330206eecb2ac54c1798df7e76c4ee3，与原original-2.jpg字节完全一致。随后save-image CLI同一路径完整再验证一次，新增native-d1109d28642943dab432154377d06db7.jpg，哈希一致，不覆盖旧件。
+
+实现tools/wecom_save_image.ps1、WeComTools.save_open_image、CLI save-image、MCP wecom_save_open_image。保存前审核预览/图片/按钮，写入仅原库旁项目私有attachments、新UUID文件；保存后可解码、哈希核验；意图/结果使用原audit，不发送、不计绩效。仅已审核图片配方，未实现任意新气泡自动发现。REAL脚本边界：私有目录外/已有文件分别明确拒绝、未输入。UNIT/MOCK相关62项通过、0失败/跳过；完整discover仍运行，未算通过。真实链路未向任何联系人发送，NOT_READY。
+
+
 ## 新入口实际MCP传输验证（2026-10-20）
 
 使用本机已有MCP 2.2.0解释器，通过ClientSession + stdio_client真实启动tools/wecom_mcp_server.py，initialize/list_tools列出12个工具，含wecom_history_page和wecom_poll_messages。两者使用白名单外匿名目标实际call_tool均返回UNAVAILABLE/CHAT_OUTSIDE_ALLOWLIST，未调用桌面。使用临时SQLite，退出后清理；没有访问正式库或发送。属于真实本机MCP进程/协议验证，不是企业微信业务动作REAL通过。历史翻页/图片保存仍需桌面交接后适配；不据此宣称完成持续收题或上线。NOT_READY。

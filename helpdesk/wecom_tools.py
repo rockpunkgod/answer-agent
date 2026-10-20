@@ -467,6 +467,48 @@ class WeComTools:
             return {'status':status,'outbox_id':outbox_id,'new_delivery':False,'outbox_changed':False,
                     'server_receipt':False,'recipient_read':False,'evidence':proof}
 
+    def save_open_image(self,message_id):
+        """Save the currently reviewed native preview through its real dialog."""
+        recipe=self._message(message_id)
+        save=recipe.get('save_preview') or {}
+        if self.backend!='NATIVE' or recipe.get('kind')!='image' or save.get('reviewed') is not True:
+            raise ValueError('IMAGE_SAVE_CONTROLS_NOT_REVIEWED')
+        self._require_input()
+        directory=self.database.parent/'attachments'
+        if directory.resolve(strict=True)!=directory or not directory.is_dir():
+            raise ValueError('ATTACHMENT_DIRECTORY_REDIRECTED')
+        if not directory.is_relative_to(self.root/'data/private'):
+            raise ValueError('SAVE_PATH_OUTSIDE_PRIVATE_ROOT')
+        destination=directory/('native-'+uuid4().hex+'.jpg')
+        # The business tool receives no filename, window handle or coordinates.
+        with self._desktop() as (desktop,pin):
+            transport=desktop.transport
+            current=transport.foreground()
+            if current['process']!='WXWork' or [current['width'],current['height'],current['handle']]!=save['window_geometry_handle']:
+                raise ValueError('IMAGE_PREVIEW_WINDOW_CHANGED')
+            transport.last_native=current
+            record=desktop._call('Screenshot')
+            self._checked_region(record,save['source_region'])
+            self._checked_region(record,save['save_button'])
+            self._audit('save_open_image','SAVE_INTENT',controls=['image_save','file_name','file_save'],
+                        evidence={'message_id':message_id,'destination':str(destination)})
+            desktop._call('Click',loc=save['save_button']['point'])
+            result=subprocess.run(['powershell.exe','-NoProfile','-File',str(self.root/'tools/wecom_save_image.ps1'),
+                '-MainHandle',str(pin['window_geometry_handle'][2]),'-PreviewHandle',str(current['handle']),
+                '-Destination',str(destination)],capture_output=True,timeout=20,shell=False,
+                creationflags=getattr(subprocess,'CREATE_NO_WINDOW',0))
+            if result.returncode or not destination.is_file():
+                raise ValueError('IMAGE_SAVE_RESULT_UNCONFIRMED')
+            from PIL import Image
+            with Image.open(destination) as image:image.verify()
+            digest=sha256(destination.read_bytes()).hexdigest()
+            if recipe.get('attachment_sha256') and digest!=recipe['attachment_sha256']:
+                raise ValueError('SAVED_ORIGINAL_HASH_MISMATCH')
+        self._audit('save_open_image','ORIGINAL_SAVED',controls=['image_save','file_name','file_save'],
+                    evidence={'message_id':message_id,'path':str(destination),'sha256':digest})
+        return {'status':'ORIGINAL_SAVED','message_id':message_id,'path':str(destination),
+                'sha256':digest,'new_download_performed':True,'automatic_retry':False}
+
     def download_attachment(self,message_id):
         # Only already saved originals are returned. A native Save As recipe
         # will be added after that dialog's current UIA/fallback is reviewed.
@@ -485,7 +527,7 @@ class WeComTools:
     def call(self,operation,**arguments):
         try:
             if operation not in {'inspect_controls','get_chat_state','list_chats','open_chat','get_messages',
-                                 'open_image','prepare_reply','send_reply','verify_reply','download_attachment','poll_messages','history_page'}:
+                                 'open_image','prepare_reply','send_reply','verify_reply','download_attachment','poll_messages','history_page','save_open_image'}:
                 raise ValueError('OPERATION_OUTSIDE_ALLOWLIST')
             return getattr(self,operation)(**arguments)
         except Exception as exc:

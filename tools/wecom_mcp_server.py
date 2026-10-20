@@ -71,6 +71,11 @@ def build_server(service):
         return service.call('verify_reply',outbox_id=outbox_id)
 
     @mcp.tool()
+    def wecom_save_open_image(message_id: str) -> dict:
+        """Save a reviewed open native preview to a generated private attachment filename. Never overwrites."""
+        return service.call('save_open_image',message_id=message_id)
+
+    @mcp.tool()
     def wecom_download_attachment(message_id: str) -> dict:
         """Verify an already saved original attachment; no arbitrary download path or new Save As."""
         return service.call('download_attachment',message_id=message_id)
