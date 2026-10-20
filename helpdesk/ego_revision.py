@@ -42,7 +42,8 @@ def revision_prompt(check):
     if check.get('status')!='REVIEW_REQUIRED' or not isinstance(flags,list) or not 0<len(flags)<=20:
         raise ValueError('EGO_REVISION_CHECK_FLAGS_REQUIRED')
     lines=['请按本会话已上传的教学原文修订上一份讲解。以下为检查器原文，请逐项对照学生原图处理；不确定的不要编造。',
-           '请重新给出本题完整的自然讲解，不输出检查报告，不声称学生已收到旧稿。']
+           '请重新给出本题完整的自然讲解，不输出检查报告，不声称学生已收到旧稿。',
+           '涉及空前、空后等位置时，把实际逐字英文短引文放在中文双引号“……”内；不能只给没有引号的英文或中文位置复述。']
     for flag in flags:
         if not all(isinstance(flag.get(k),str) and 0<len(flag[k])<=4000 for k in ('message','excerpt')):
             raise ValueError('EGO_REVISION_CHECK_FLAGS_REQUIRED')

@@ -64,6 +64,7 @@ class RevisionTests(unittest.TestCase):
         self.assertEqual(self.fx.calls[-1][3],[])
         self.assertIn('Anonymous checker: quote the source.',self.fx.calls[-1][2])
         self.assertNotIn('JSON',self.fx.calls[-1][2])
+        self.assertIn('中文双引号',self.fx.calls[-1][2])
         self.assertFalse(self.fx.calls[-1][-1])
         self.assertEqual(self.db.one('SELECT count(*) FROM answers')[0],2)
         self.assertEqual(self.db.one("SELECT count(*) FROM outbox WHERE purpose='ANSWER'")[0],1)

@@ -9,6 +9,10 @@
 
 ## 本轮完整联调实际停止点（2026-10-20）
 
+后续用户确认“以印刷题号为准”（call_a99d1be1415140d2ae6347fb4e6cd8e3）。先用既有confirm_input解决原定位人工任务，再通过既有CORRECTION草稿/审核建立同一Question的明确澄清版本，未伪造成学生追问或增加独立题。任务b72a05b75cd94a8e98296215b5e0e517、run11c387b4351147b2907cf3b39fc01287及唯一修订f970d09f03344eb7aee7b4aabc4f5e79均复用原DeepSeek会话。自然请求增加印刷第7空的已核验前后原文，未增加答案、教学规则或JSON。两次真实捕获已回到Coach your child instead of taking over段；仍被原ANSWER检查器的source_position_cue拦截。独立调用原quoted函数确认修订稿识别引文数为0：裸英文未带要求的双引号。
+
+未改变ANSWER、原始捕获、检查输入或旧拒绝状态；未为旧版本重置重试预算。answer-agent的既有revision_prompt只补充明确的中文双引号格式说明，供后续合法修订使用；本题不再自动调用。现有human_tasks登记ANSWER_QUOTE_FORMAT_REQUIRES_REVIEW，答案Outbox=0、正式绩效=0。UNIT/MOCK：python -X utf8 -B -m unittest -q tests.test_ego_revision tests.test_ego_generation tests.test_lesson_checks，28项通过、无跳过/失败；没有以模拟代替本轮交付验收。NOT_READY。
+
 用户要求本轮尝试跑完全部，外发范围仍仅苇中鹤。当前未见新学生消息；继续原“讲七选五和阅读”请求中尚未运行的第7题，不补发历史收到。空间列表实际为空，依据长期授权重建ego空间9；DeepSeek登录正常。ANSWER仍冻结1c388a0596b13935ae7c6a1af00834915a8efa33，本地工作树干净，manifest核验通过。
 
 REAL：原始JPEG2/3与既有第7题草稿经题面定位审核，创建任务423e0fe90c584fa78efbc72c5283d53b。新会话2ecb74c3-bedb-429e-9488-4bb6280d3953成功上传原图+教学原文、语义发送按钮提交“第7题”、捕获完整答案。原run 0c079e933ea34f5d97d647ca937a3761被ANSWER原检查器拒绝；唯一修订run 49455436116f447e94bdbe50a8944892复用原会话、无附件重传，仍错误定位Give specific praise段，拒绝且预算耗尽。两个答案/捕获原文保留，未产生答案Outbox、未外发、performance_units=0。既有human_tasks登记QUESTION_NUMBER_LOCATION_REQUIRES_REVIEW；已询问印刷/手写题号口径，不能继续默认题号无歧义。
