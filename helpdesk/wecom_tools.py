@@ -36,6 +36,22 @@ CONTROLS = {
 }
 
 
+def classify_names(group_name, student_name, *, ambiguous_names=()):
+    """Local business grouping, explicitly not a platform account identifier."""
+    if (any(not isinstance(v,str) or not v.strip() or any(c in v for c in '\r\n\x00')
+            for v in (group_name,student_name))
+            or not isinstance(ambiguous_names,(list,tuple))
+            or any(not isinstance(v,str) or not v.strip() for v in ambiguous_names)):
+        raise ValueError('GROUP_AND_STUDENT_NAMES_REQUIRED')
+    group,student=group_name.strip(),student_name.strip()
+    ambiguous=student in {v.strip() for v in ambiguous_names}
+    return {'method':'GROUP_AND_DISPLAY_NAME','status':'NAME_REQUIRES_REVIEW' if ambiguous else 'CLASSIFIED_BY_NAME',
+            'group_name':group_name,'student_display_name':student_name,
+            'group_key':'name-group:'+sha256(encode([group]).encode()).hexdigest(),
+            'student_key':None if ambiguous else 'name-student:'+sha256(encode([group,student]).encode()).hexdigest(),
+            'platform_identity_verified':False,'name_changes_auto_merged':False}
+
+
 def probe_controls(root=ROOT):
     result = subprocess.run(['powershell.exe','-NoProfile','-File',str(root/'tools/probe_wecom_controls.ps1')],
         capture_output=True, timeout=20, shell=False,
@@ -344,6 +360,22 @@ class WeComTools:
             for original_recipe in recipes:
                 recipe=dict(original_recipe)
                 record=self._message_frame(desktop,pin,recipe)
+                classification=None
+                sender=recipe.get('sender_name')
+                if sender is not None:
+                    if not isinstance(sender,dict) or sender.get('reviewed') is not True:
+                        raise ValueError('SENDER_NAME_NOT_REVIEWED')
+                    classification=classify_names(self.session['display_name'],sender.get('display_name'),
+                        ambiguous_names=self.session.get('ambiguous_sender_names',()))
+                    box=sender.get('region_box');body=recipe['region_box']
+                    if (not isinstance(box,list) or len(box)!=4 or any(type(v) is not int for v in box)
+                            or not 0<=box[0]<box[2]<=pin['image_size'][0]
+                            or not 0<=box[1]<box[3]<=pin['image_size'][1]
+                            or box[2]-box[0]>512 or box[3]-box[1]>48
+                            or box[0]<body[0]-16 or box[2]>body[2]+256
+                            or box[1]<body[1]-48 or box[3]>body[1]):
+                        raise ValueError('SENDER_NAME_REGION_NOT_MESSAGE_HEADER')
+                    self._checked_region(record,sender)
                 time_evidence=None
                 if recipe.get('time_hover',{}).get('reviewed') is True:
                     record,recipe,time_evidence=self._hover_time(desktop,pin,record,recipe)
@@ -377,6 +409,8 @@ class WeComTools:
                 if time_evidence:
                     messages[-1]['source_time_evidence']=time_evidence
                     messages[-1]['time_status']=time_evidence.get('time_status','REQUIRES_ORIGINAL_TIME_EVIDENCE')
+                if classification:
+                    messages[-1]['name_classification']=classification
         self._audit('get_messages','VISIBLE_RECORDS_READ',controls=['message_list','copy_menu'],
                     evidence={'count':len(messages)})
         return {'status':'OK','messages':messages,'scope':'REVIEWED_VISIBLE_RECORDS_ONLY',
@@ -398,6 +432,15 @@ class WeComTools:
                 or crop[0]<body[0]-128 or crop[2]>body[2]+128
                 or crop[1]<body[1]-128 or crop[3]>body[1]+9):
             raise ValueError('TIME_LABEL_REGION_INVALID')
+        # Reuse the reviewed message-copy point inside the body. Its leftmost
+        # pixels can be a bubble tail and need not trigger a timestamp tooltip.
+        point=recipe.get('point',[
+            bounds[0]+int((body[0]+body[2])*(bounds[2]-bounds[0])/(2*pin['image_size'][0])),
+            bounds[1]+int((body[1]+body[3])*(bounds[3]-bounds[1])/(2*pin['image_size'][1]))])
+        if (not isinstance(point,list) or len(point)!=2 or any(type(v) is not int for v in point)
+                or not body[0]<=(point[0]-bounds[0])*pin['image_size'][0]/(bounds[2]-bounds[0])<body[2]
+                or not body[1]<=(point[1]-bounds[1])*pin['image_size'][1]/(bounds[3]-bounds[1])<body[3]):
+            raise ValueError('TIME_HOVER_POINT_OUTSIDE_MESSAGE')
         x=(blank['point'][0]-bounds[0])*pin['image_size'][0]/(bounds[2]-bounds[0])
         y=(blank['point'][1]-bounds[1])*pin['image_size'][1]/(bounds[3]-bounds[1])
         box=blank['region_box']
@@ -408,8 +451,6 @@ class WeComTools:
         path=next(c['path'] for c in record['content'] if c.get('type')=='image')
         with Image.open(path) as image:
             recipe={**recipe,'region_hash':pixel_hash(image,recipe['region_box'])}
-        point=[bounds[0]+int((body[0]+5)*(bounds[2]-bounds[0])/pin['image_size'][0]),
-               bounds[1]+int((body[1]+body[3])*(bounds[3]-bounds[1])/(2*pin['image_size'][1]))]
         desktop._call('Move',loc=point);time.sleep(1.2)
         record,_=self._frame(desktop,pin)
         # The timestamp's shadow can change the bubble's upper edge. At this
@@ -429,7 +470,7 @@ class WeComTools:
             evidence={'time_status':'REQUIRES_ORIGINAL_TIME_EVIDENCE','reason':str(exc),
                       'source_sent_at':None,'formal_statistics_eligible':False,
                       'source_record':str(self.root/'data/private/wecom-native'/(record['attempt_id']+'.json')),
-                      'label_box':crop}
+                      'label_box':crop,'requested_hover_point':point}
         current,_=self._frame(desktop,pin);self._checked_region(current,recipe)
         return current,recipe,evidence
 
@@ -478,6 +519,11 @@ class WeComTools:
         config=self.session.get('incoming_discovery') or {}
         if self.backend!='NATIVE' or config.get('reviewed') is not True:
             raise ValueError('INCOMING_DISCOVERY_NOT_REVIEWED')
+        menu_box=config.get('copy_menu_search_box')
+        if (not isinstance(menu_box,list) or len(menu_box)!=4 or any(type(v) is not int for v in menu_box)
+                or not 0<=menu_box[0]<menu_box[2] or not 0<=menu_box[1]<menu_box[3]
+                or menu_box[2]-menu_box[0]>512 or menu_box[3]-menu_box[1]>256):
+            raise ValueError('INCOMING_COPY_MENU_NOT_REVIEWED')
         self._require_input()
         from PIL import Image
         from .wecom_visible import incoming_bubbles
@@ -498,6 +544,12 @@ class WeComTools:
                                      'ocr_search_box':config['copy_menu_search_box']}})
                     if config.get('time_hover',{}).get('reviewed') is True:
                         recipes[-1]['time_hover']=config['time_hover']
+                    named=[m['sender_name'] for m in self.session.get('messages',[])
+                           if m.get('kind')=='text' and m.get('region_box')==box and m.get('sender_name')]
+                    if len(named)>1:
+                        raise ValueError('AMBIGUOUS_SENDER_NAME_RECIPE')
+                    if named:
+                        recipes[-1]['sender_name']=dict(named[0])
         if not recipes:
             return {'status':'NO_VISIBLE_TEXT_CANDIDATES','messages':[],
                     'scope':'REVIEWED_VISIBLE_INCOMING_LANE_ONLY','chat_empty':None,'chat_empty_verified':False,
@@ -526,7 +578,11 @@ class WeComTools:
         from .wecom_visible import time_label_identity
         with closing(Store(self.database)) as db, db.transaction():
             for message in result['messages']:
-                base=sha256(encode([chat_id,message['id'],message['text']]).encode()).hexdigest()
+                identity=[chat_id,message['id'],message['text']]
+                if message.get('name_classification'):
+                    classification=message['name_classification']
+                    identity.extend([classification['group_key'],classification['student_display_name'].strip()])
+                base=sha256(encode(identity).encode()).hexdigest()
                 key=base
                 evidence=message.get('source_time_evidence') or {}
                 label=evidence.get('normalized_original_time_label')

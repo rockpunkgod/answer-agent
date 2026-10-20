@@ -10,6 +10,8 @@
 
 群聊只读入口复用同一 CLI/MCP。私有会话配置需显式设置 `scope="REVIEWED_GROUP_READ_ONLY"`、`reviewed=true`、`reviewer`、`allowed_group_names`（完整群名数组），并让 `display_name` 与当前审核的 `pin.display_name` 一致；其余窗口、消息、图片配方仍须逐项审核且未过期。使用下方 `state/messages/scan/poll` 等命令；复制文本或打开图片仍需 `--enable-input`。这种会话拒绝 `--enable-send`，并禁止 `prepare/send/receipt`，不会开通群发送。读取结果是可追溯观察，不提供可信平台身份或补造原始时间，不创建 Ack、答疑任务或正式绩效。群自动“收到”另走绑定原任务的 ACK 发送入口，不能用只读会话绕过来源校验。
 
+业务分类按用户确认的“群名＋学生显示名”执行，不等待平台账号 ID。在 `messages[].sender_name` 配置 `reviewed=true`、实际 `display_name` 及新鲜名称区域的 `region_box/region_hash`；名称区域必须位于该消息正上方。读取结果的 `name_classification` 返回本地 `name-group:`、`name-student:` 分类键及原始名称，明确不冒充平台 ID。`poll` 去重包含学生名称，两个学生相同文字不会因此合并；没有名称证据的消息不猜归属。已知同群重名可在该会话 `ambiguous_sender_names` 数组标记，分类为待人工核对；名称变更不自动合并历史。分类确认不等于时间确认、实际发送或绩效完成。
+
 使用已安装 MCP 2.2.0 的解释器运行（下例复用其依赖环境，不运行 Windows-MCP 服务）：
 
 ```powershell
@@ -47,6 +49,8 @@ E:\作业帮\.venv-windows-mcp\Scripts\python.exe tools/wecom_mcp_server.py --da
 `scan <绑定chat_id>` / MCP `wecom_scan_messages` 使用本机会话 `incoming_discovery` 的已审核消息视口、左侧来信位置、气泡颜色及局部复制菜单搜索区域。本地图像处理只提出气泡候选；每个候选仍需原会话/消息区域核验，再由Windows本地OCR找唯一“复制”菜单并从剪贴板取得原文，不用OCR猜学生文字，也不需要预先填写每条文字消息的位置。选中蓝色文字通过完整灰色气泡边框识别，不能仅凭零散颜色放行。
 
 时间证据独立追加，重复观察取得新时间时不重建原记录；相同时间标签不重复保存。年份缺失、标签歧义或非法日期保留明确待核对状态，仍不填系统时间。若默认时间裁切包含发送者名称，可在已审核的 `messages[].time_hover.label_box` 指定只含当前消息时间标签的图像像素框 `[左,上,右,下]`，并设置 `time_hover.message_box` 为该消息的 `region_box`，避免扫描其他气泡时套用同一个绝对裁切。需由实际悬停图核验，最多512×128，限定在同一气泡上缘附近，越界或气泡不匹配在桌面动作前停止。解析仍要求唯一完整标签，不从混合文字中猜取日期，也不补年份。
+
+悬停复用该消息已审核的正文复制点 `messages[].point`；未提供点的扫描候选使用气泡中心，避免固定落在气泡左边缘。点位按当前显示器缩放转换后必须位于同一气泡内，否则在任何点击前停止；失败结果记录 `requested_hover_point`，它表示程序请求的位置，不代表已确认用户未移动鼠标或成功显示时间。
 
 配置启用后，`poll/watch` 复用扫描并持久化观察；未启用时保留原审核消息配方。无候选返回 `NO_VISIBLE_TEXT_CANDIDATES`，不代表群里没消息或历史读完；视口以外、图片和未适配布局不在覆盖范围。相同文字但显示原时间不同可保留为独立观察；日期补零差异不新增记录。无时间、同秒重复或缺年份跨年仍不能可靠区分，观察也不等于平台消息身份，所以不能自动触发Ack、答疑或正式绩效。当前只支持已授权联系人，不是持续群消息入口。
 

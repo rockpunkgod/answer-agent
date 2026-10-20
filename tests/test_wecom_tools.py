@@ -10,7 +10,7 @@ from unittest.mock import patch
 
 from helpdesk.storage import Store,now
 from helpdesk.service import Helpdesk
-from helpdesk.wecom_tools import WeComTools,control_inventory
+from helpdesk.wecom_tools import WeComTools,control_inventory,classify_names
 from helpdesk.mcp_test_delivery import pixel_hash
 
 
@@ -57,6 +57,59 @@ class WeComToolTests(unittest.TestCase):
         self.service=WeComTools(self.db_path,session=self.session,root=self.root,
             transport_factory=lambda:self.transport,allow_input=True,
             probe=lambda root:{'status':'OK','controls':[{'control_type':'Window'},{'control_type':'Pane'}],'truncated':False,'window':{'client_version':'anonymous'}})
+
+    def test_name_classification_scopes_students_by_group_and_preserves_raw_names(self):
+        alice=classify_names('English A','Alice')
+        self.assertEqual(alice['status'],'CLASSIFIED_BY_NAME')
+        self.assertEqual(alice['student_key'],classify_names(' English A ',' Alice ')['student_key'])
+        self.assertNotEqual(alice['student_key'],classify_names('English B','Alice')['student_key'])
+        self.assertNotEqual(alice['student_key'],classify_names('English A','Bob')['student_key'])
+        held=classify_names('English A',' Alice ',ambiguous_names=['Alice'])
+        self.assertEqual(held['student_display_name'],' Alice ')
+        self.assertEqual(held['status'],'NAME_REQUIRES_REVIEW')
+        self.assertIsNone(held['student_key'])
+        self.assertFalse(alice['platform_identity_verified'])
+        self.assertFalse(alice['name_changes_auto_merged'])
+        for names in (('', 'Alice'),('A',None),('A','Alice\nBob')):
+            with self.assertRaises(ValueError):classify_names(*names)
+
+    def test_same_text_from_different_names_keeps_separate_observations(self):
+        for name,expected in (('Alice',1),('Bob',1),('Alice',0)):
+            message={'id':'same-local-slot','text':'same question','source_sent_at':None,
+                     'name_classification':classify_names('English A',name)}
+            with patch.object(self.service,'get_messages',return_value={'status':'OK','messages':[message]}):
+                result=self.service.poll_messages(self.target)
+            self.assertEqual(result['new_observation_count'],expected)
+            self.assertFalse(result['automatic_ack_eligible'])
+        with closing(Store(self.db_path)) as db:
+            self.assertEqual(db.one("SELECT count(*) FROM audit WHERE event='WECOM_VISIBLE_OBSERVATION'")[0],2)
+            self.assertEqual(db.one('SELECT count(*) FROM outbox')[0],1)
+            self.assertEqual(db.one('SELECT count(*) FROM performance_units')[0],0)
+
+    def test_copied_message_uses_reviewed_adjacent_sender_name(self):
+        from PIL import Image
+        def region(box):
+            with Image.open(self.image) as image:
+                return {'region_box':box,'region_hash':pixel_hash(image,box)}
+        recipe={'id':'named-text','kind':'text','point':[50,35],**region([20,20,80,50]),
+                'sender_name':{'reviewed':True,'display_name':'Alice',**region([20,5,70,19])},
+                'copy_menu':{'point':[90,30],**region([80,20,100,40])}}
+        self.session['messages']=[recipe]
+        original=self.transport.call
+        def copied(tool,args):
+            if tool=='Clipboard' and args.get('mode')=='get':self.transport.clipboard='same question'
+            return original(tool,args)
+        self.transport.call=copied
+        with patch('helpdesk.wecom_tools.time.sleep'):
+            result=self.service.get_messages(self.target)
+        classified=result['messages'][0]['name_classification']
+        self.assertEqual(classified['student_key'],classify_names(self.session['display_name'],'Alice')['student_key'])
+        self.assertIsNone(result['messages'][0]['source_sent_at'])
+        self.transport.calls.clear()
+        recipe['sender_name'].update(region([20,55,70,65]))
+        with self.assertRaisesRegex(ValueError,'SENDER_NAME_REGION_NOT_MESSAGE_HEADER'):
+            self.service.get_messages(self.target)
+        self.assertFalse(any(tool in ('Clipboard','Click') for tool,args in self.transport.calls))
 
     def test_reviewed_group_reads_without_enabling_delivery(self):
         session={**self.session,'scope':'REVIEWED_GROUP_READ_ONLY',
@@ -319,6 +372,34 @@ class WeComToolTests(unittest.TestCase):
         with closing(Store(self.db_path)) as db:
             self.assertEqual(db.one('SELECT count(*) FROM outbox')[0],1)
 
+    def test_scan_missing_copy_region_reports_configuration_before_desktop(self):
+        self.session['incoming_discovery']={'reviewed':True}
+        result=self.service.call('scan_messages',chat_id=self.target)
+        self.assertEqual(result['reason'],'INCOMING_COPY_MENU_NOT_REVIEWED')
+        self.assertEqual(self.transport.calls,[])
+
+    def test_scan_keeps_sender_name_only_for_matching_message_region(self):
+        self.pin['display_bounds']=[0,0,200,100]
+        self.session['incoming_discovery']={'reviewed':True,'copy_menu_search_box':[20,20,180,70]}
+        sender={'reviewed':True,'display_name':'Alice','region_box':[20,5,70,19],
+                'region_hash':self.pin['header_hash']}
+        self.session['messages']=[{'kind':'text','region_box':[20,20,80,50],'sender_name':sender}]
+        def read(reader,chat_id):
+            recipes=reader.session['messages']
+            self.assertEqual(recipes[0]['sender_name'],sender)
+            self.assertIsNot(recipes[0]['sender_name'],sender)
+            self.assertNotIn('sender_name',recipes[1])
+            return {'status':'OK','messages':[]}
+        with patch('helpdesk.wecom_visible.incoming_bubbles',return_value=[[20,20,80,50],[20,60,80,90]]), \
+                patch.object(WeComTools,'get_messages',autospec=True,side_effect=read):
+            self.service.scan_messages(self.target)
+        self.session['messages'].append(dict(self.session['messages'][0]))
+        with patch('helpdesk.wecom_visible.incoming_bubbles',return_value=[[20,20,80,50]]), \
+                patch.object(WeComTools,'get_messages') as read:
+            with self.assertRaisesRegex(ValueError,'AMBIGUOUS_SENDER_NAME_RECIPE'):
+                self.service.scan_messages(self.target)
+        read.assert_not_called()
+
     def test_hover_time_stops_if_same_incoming_bubble_cannot_be_located(self):
         from unittest.mock import Mock
         self.pin['display_bounds']=[0,0,200,100]
@@ -351,22 +432,28 @@ class WeComToolTests(unittest.TestCase):
         self.assertFalse(evidence['formal_statistics_eligible'])
         self.assertEqual(evidence['source_record'],str(self.root/'data/private/wecom-native/anonymous.json'))
         self.assertEqual(evidence['label_box'],[14,-3,364,29])
+        self.assertEqual(evidence['requested_hover_point'],[50,35])
 
     def test_reviewed_time_crop_is_passed_without_inventing_original_date(self):
         from unittest.mock import Mock
-        self.pin['display_bounds']=[0,0,200,100]
+        self.pin['display_bounds']=[100,-100,500,100]
         record={'attempt_id':'anonymous','content':[{'type':'image','path':str(self.image)}]}
         box=[30,5,80,19]
-        recipe={'region_box':[20,20,80,50],'time_hover':{'label_box':box,'message_box':[20,20,80,50],'blank':{
-            'region_box':[0,0,10,10],'region_hash':self.pin['avatar_hash'],'point':[5,5]}}}
+        recipe={'region_box':[20,20,80,50],'point':[220,-30],
+                'time_hover':{'label_box':box,'message_box':[20,20,80,50],'blank':{
+            'region_box':[0,0,10,10],'region_hash':self.pin['avatar_hash'],'point':[110,-90]}}}
         evidence={'time_status':'REQUIRES_YEAR_EVIDENCE','source_sent_at':None,
                   'formal_statistics_eligible':False}
+        desktop=Mock()
         with patch.object(self.service,'_frame',return_value=(record,{})), \
                 patch('helpdesk.wecom_visible.incoming_bubbles',return_value=[[20,20,80,50]]), \
                 patch('helpdesk.wecom_control_ocr.read_time_label',return_value=evidence) as read, \
                 patch('helpdesk.wecom_tools.time.sleep'):
-            _,_,result=self.service._hover_time(Mock(),self.pin,record,recipe)
+            _,_,result=self.service._hover_time(desktop,self.pin,record,recipe)
         self.assertEqual(read.call_args.args[1],box)
+        moves=[call for call in desktop._call.call_args_list if call.args[0]=='Move']
+        self.assertEqual(len(moves),1)
+        self.assertEqual(moves[0].kwargs['loc'],recipe['point'])
         self.assertIsNone(result['source_sent_at'])
         self.assertFalse(result['formal_statistics_eligible'])
 
@@ -385,6 +472,16 @@ class WeComToolTests(unittest.TestCase):
             desktop=Mock()
             recipe['time_hover'].update(label_box=[30,5,80,19],message_box=anchor)
             with self.assertRaisesRegex(ValueError,'TIME_LABEL_REGION_INVALID'):
+                self.service._hover_time(desktop,self.pin,{},recipe)
+            desktop._call.assert_not_called()
+
+    def test_time_hover_rejects_copy_point_outside_same_message_before_actions(self):
+        from unittest.mock import Mock
+        self.pin['display_bounds']=[100,-100,500,100]
+        for point in (None,[],[True,0],[220.0,-30],[110,-90],[260,-30]):
+            desktop=Mock()
+            recipe={'region_box':[20,20,80,50],'point':point,'time_hover':{'blank':{}}}
+            with self.subTest(point=point), self.assertRaisesRegex(ValueError,'TIME_HOVER_POINT_OUTSIDE_MESSAGE'):
                 self.service._hover_time(desktop,self.pin,{},recipe)
             desktop._call.assert_not_called()
 
