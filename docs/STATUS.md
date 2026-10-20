@@ -7,13 +7,20 @@
 
 # 当前能力与缺口
 
+## 当前只读联调与核心回归（2026-10-20）
+
+- REAL：用户重新交接前，原生窗口元数据发现MissionPlanner前台、企业微信最小化，未输入。用户恢复苇中鹤后，新帧的原联系人标题哈希完全匹配；应用左栏自身头像外观变化，初次严格校验停止，经查看新帧仅在新限时只读配方重新审核该区域，不修改原配方或发送守卫。
+- REAL：原生CLI watch有限2轮、间隔2秒，均NO_NEW_OBSERVATIONS，confirmed_observation_times准确回读用户确认的2026-10-19T23:12:32+08:00；无发送、无新增任务或正式绩效。仅可见历史文字去重，不是新消息、完整历史或15分钟SLA验收。
+- UNIT/MOCK：python -X utf8 -B -m unittest -q tests.test_process_restart tests.test_ego_process_restart tests.test_ack_before_generation tests.test_delivery_batches tests.test_delivery_tasks tests.test_question_session_isolation tests.test_performance_rules tests.test_performance_delivery_eligibility tests.test_operator_performance_exclusion tests.test_question_costs tests.test_teaching_bundle tests.test_teaching_routes：93项，92通过、1跳过、0失败，113.649秒。真实Python硬退出/同库恢复，外部服务为模拟。另定向确认symlink测试跳过原因为Filesystem cannot create symbolic links；Windows junction越界检查通过。跳过不算通过，不要求管理员运行。
+- REAL DATA：现有测试库成本报告显示3次有记录的DeepSeek教学生成，费用及调度调用账单仍UNVERIFIED；average/P50/P95/max均null，不能宣称满足0.50元/篇。当前完整任务仍1/20，NOT_READY。
+
 ## scan自动关联原时间证据（2026-10-20）
 
-后续去重修补：保留原内容基键和历史观察，不破坏性迁移；用已取得的月日时分秒辅助区分相同原文的不同发生时间，重复扫描/重启仍复用原观察。时间证据日期补零归一化，缺年份不补；同钟点但年份一方缺失或候选不唯一时停止，不能擅自合并跨年。观察仍不是平台消息，未改任务/绩效。匿名UNIT/MOCK相关87项通过、0失败/跳过，新增同文两时刻顺序1/1/0/0、重启去重、补零差异、非法日期/年份及不猜跨年；此轮无新真实消息、无桌面动作。用户对当前测试消息年份的确认仍待回复。
+后续去重修补：保留原内容基键和历史观察，不破坏性迁移；用已取得的月日时分秒辅助区分相同原文的不同发生时间，重复扫描/重启仍复用原观察。时间证据日期补零归一化，缺年份不补；同钟点但年份一方缺失或候选不唯一时停止，不能擅自合并跨年。观察仍不是平台消息，未改任务/绩效。匿名UNIT/MOCK相关87项通过、0失败/跳过，新增同文两时刻顺序1/1/0/0、重启去重、补零差异、非法日期/年份及不猜跨年；此轮无新真实消息、无桌面动作。该条年份已获用户确认并追加证据，见本文顶部；其他消息年份仍不推断。
 
 将已真实验证的悬停步骤接入现有scan，不增加工具或服务。需本机审核time_hover空白区域/点击点；清除选择后重新定位同一位置唯一气泡，悬停并局部OCR时间，再将后续复制绑定到当前气泡图像。首次实测因时间标签阴影改变上缘3个像素而停止；确认几何未变后，在尚未接受文字前重新核验唯一气泡并固定悬停后的当前哈希，后续复制仍做原内容区域/目标核验，未弱化发送守卫。
 
-REAL：一次scan自动返回原文及10/19 23:12:32、年份null、REQUIRES_YEAR_EVIDENCE及帧/裁剪证据；无需Agent另行悬停。原source_sent_at仍null，不填当前时间、不创建Ack/绩效。已向用户询问这条测试消息是否确认2026-10-19，仅限该条、待回复。原始观察不可覆盖，poll对后来取得的时间追加独立事件并按观察键+标签去重。
+REAL：一次scan自动返回原文及10/19 23:12:32、年份null、REQUIRES_YEAR_EVIDENCE及帧/裁剪证据；无需Agent另行悬停。原source_sent_at仍null，不填当前时间、不创建Ack/绩效。用户随后明确确认仅此条为2026-10-19，确认已追加到既有audit；原始时间观察不覆盖。原始观察不可覆盖，poll对后来取得的时间追加独立事件并按观察键+标签去重。
 
 UNIT/MOCK：相关84项通过、0失败/跳过。覆盖缺年份不补、标签缺失/歧义/无效/不一致、悬停后找不到同一气泡即停止、时间OCR不可用仍保留缺失及既有观察补时间不重计。控制台命令为python -X utf8 -B -m unittest -q tests.test_wecom_visible tests.test_wecom_tools tests.test_wecom_cli tests.test_wecom_native tests.test_wecom_control_ocr tests.test_collector_ack_native tests.test_collector_test_ack。未发送消息/调用DeepSeek，完整任务仍1/20，NOT_READY。
 
