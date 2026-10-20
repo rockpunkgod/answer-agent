@@ -1,5 +1,16 @@
 # 当前能力与缺口
 
+## 恢复桌面后的真实自动定位/复制/去重（2026-10-20）
+
+用户明确回复已停止使用，可以继续。原过期会话保留；重新激活主窗口并取得新快照，窗口/完整头部/头像与原审核值精确匹配后，建立本次新限时只读会话scan-resumed-readonly-session.json，未启用发送。
+
+REAL：scan自动定位来信气泡，通过局部Windows OCR定位复制菜单及剪贴板取得原文“老师能讲一下七选五和这篇阅读吗”，未预先指定消息位置或原文哈希。随后真实poll第一次OBSERVATIONS_SAVED/new=1，第二次NO_NEW_OBSERVATIONS/new=0；Outbox ID及状态前后完全一致，performance_units=0。此为单条既有历史文字，不是新消息SLA/持续群入口验收，不增加完整任务数。
+
+新增受限原生Move（不点击/键盘），只用于已审核消息悬停。选中状态下第一次悬停无标签；核验消息区空白后单次点击取消选择，再悬停来信灰色边缘，实际显示10/19 23:12:32。扩展现有本地OCR脚本TimeLabelOnly，仅输出严格匹配的时间标签，不输出学生正文；首次小裁剪匹配为空，扩大标签裁剪并规范空白/全角冒号后读到10 / 19 23 ： 12 ： 32。保留原始OCR及规范形式、帧/裁剪哈希并以WECOM_VISIBLE_TIME_OBSERVATION关联原观察，年份null，source_sent_at仍null，REQUIRES_YEAR_EVIDENCE，不补系统时间或计绩效。悬停时间仍为受控步骤，尚未接入每轮扫描。
+
+UNIT/MOCK：可见扫描/原生/业务CLI/复制OCR/测试Ack回归79项通过、0失败/跳过；新Move验证无点击或键盘及拒绝额外动作参数。未发消息、未调用DeepSeek、未计新完整答疑；NOT_READY。
+
+
 ## 可见来信气泡发现与扫描（2026-10-20）
 
 当前提交b9452e8已实际通过本机MCP 2.2.0的独立stdio进程initialize/list_tools，15个工具加载成功；scan/search对白名单外匿名目标均经真实协议调用返回UNAVAILABLE/CHAT_OUTSIDE_ALLOWLIST。使用临时数据库，无桌面输入。此为工具传输层真实验证，不替代企业微信原文复制验收；桌面使用状态问题仍待回复。

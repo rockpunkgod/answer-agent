@@ -3,10 +3,11 @@
     [string]$ImagePath,
     [string]$ExpectedText = '',
     [switch]$ProbeTextOnly,
-    [switch]$CopyControlOnly
+    [switch]$CopyControlOnly,
+    [switch]$TimeLabelOnly
 )
 
-# Read-only Windows.Media.Ocr probe. Never prints raw OCR text or a chat history.
+# Read-only Windows.Media.Ocr probe. Emits only scoped control/time metadata, never chat body text.
 $ErrorActionPreference = 'Stop'
 [Console]::OutputEncoding = New-Object System.Text.UTF8Encoding
 
@@ -80,6 +81,20 @@ try {
                 }
                 [pscustomobject]@{ available=$true; image_size=@($bitmap.PixelWidth,$bitmap.PixelHeight);
                     copy_control_boxes=@($matches); control='copy_menu'; authorizes_input=$false } | ConvertTo-Json -Compress -Depth 4
+                return
+            }
+            if ($TimeLabelOnly) {
+                $labels=@()
+                foreach($line in $ocr.Lines){
+                    $value=($line.Text -replace '\s','').Replace([string][char]0xff1a,':')
+                    if($value -match '^(?:(?<year>\d{4})[-/])?(?<month>\d{1,2})/(?<day>\d{1,2})\s*(?<hour>\d{2}):(?<minute>\d{2}):(?<second>\d{2})$'){
+                        $labels+=@{raw=$line.Text;normalized=$value;year=$Matches['year'];month=$Matches['month'];day=$Matches['day'];
+                            hour=$Matches['hour'];minute=$Matches['minute'];second=$Matches['second']}
+                    }
+                }
+                [pscustomobject]@{available=$true;time_labels=@($labels);
+                    image_size=@($bitmap.PixelWidth,$bitmap.PixelHeight);authorizes_statistics=$false} |
+                    ConvertTo-Json -Compress -Depth 4
                 return
             }
             if ($ProbeTextOnly) {

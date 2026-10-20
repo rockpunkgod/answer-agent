@@ -84,6 +84,13 @@ class NativeGuardTests(unittest.TestCase):
                 self.native.call('Scroll',args)
         self.native.user.mouse_event.assert_not_called()
 
+    def test_guarded_pointer_move_has_no_click_or_keyboard(self):
+        self.native.call('Move',{'loc':[150,150]})
+        self.native.user.SetCursorPos.assert_called_once_with(150,150)
+        self.native.user.mouse_event.assert_not_called()
+        with self.assertRaisesRegex(ValueError,'INVALID_POINTER_MOVE'):
+            self.native.call('Move',{'loc':[150,150],'clicks':1})
+
     def test_verified_click_records_native_backend_not_windows_mcp(self):
         result=self.native.call('Click',{'loc':[150,150]})
         self.assertEqual(result['backend'],'WECOM_NATIVE')

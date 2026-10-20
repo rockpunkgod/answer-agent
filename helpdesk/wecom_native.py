@@ -208,9 +208,13 @@ class NativeWeComTransport:
             bounds=','.join(map(str,region));index=self.pin['display_index']
             text=f'Selected Displays: {index}\nScreenshot Region: ({bounds})\nVisible Displays: {index}:{info.device} ({bounds})\nCapture Backend: WECOM_NATIVE'
             content=[{'type':'text','text':text},{'type':'image','path':str(output)}]
-        elif tool in ('Click','Clipboard','Shortcut','Type','Scroll'):
+        elif tool in ('Click','Clipboard','Shortcut','Type','Scroll','Move'):
             self._check_input(arguments.get('loc'))
-            if tool=='Scroll':
+            if tool=='Move':
+                if set(arguments)!={'loc'}:raise ValueError('INVALID_POINTER_MOVE')
+                if not self.user.SetCursorPos(*arguments['loc']):raise ValueError('POINTER_MOVE_FAILED')
+                content=[]
+            elif tool=='Scroll':
                 if set(arguments)!={'loc','direction'} or arguments['direction']!='up':
                     raise ValueError('HISTORY_SCROLL_OUTSIDE_ALLOWLIST')
                 if not self.user.SetCursorPos(*arguments['loc']):raise ValueError('POINTER_MOVE_FAILED')
