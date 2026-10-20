@@ -189,10 +189,13 @@ python -m tools.operator_task --database <原测试库> followup --parent-task <
 
 ```powershell
 .\run_current_demo.ps1 -AutomaticAnswerConfig 'data/private/automatic-answer.local.json' `
+  -SourceReviewManifest '<已生成并固定的 manifest.json 路径>' `
   -ReferenceLookupConfig 'data/private/reference-lookup.local.toml'
 ```
 
 原题检索沿用已批准Provider配置；未启用或不可用不能显示成没有命中。此选项使用本机桌面执行边界；已有服务不会热开启，需正常停止后重启。发送仍是独立的`-AutomaticDeliveryConfig`和原stage策略，开启网页执行不启用发送。
+
+ego-lite 使用同一个本地配置文件，只需 `enabled=true`、`backend="ego_lite"`、`ego_policy="MATCH_THEN_TEACH"`、实际 `space_id` 和 `page="p1"`，无需显示器、按钮或 preparation_controls。上面的 manifest 参数不能省略；先用 `tools.prepare_teaching_bundle` 生成受检包，再将输出的 manifest 路径填入。示例检索配置默认关闭，不能直接用于真实搜题验收；真实消息生产者与允许发送的目标也需使用已接通的本地配置，不能仅启动工作台就算已投入使用。
 
 **旧 Windows-MCP 通道说明（不属于 ego-lite 日常流程，不要叠加执行）：** 后台复用原队列的SESSION_CREATION/PREPARATION/GENERATION步骤：先完成本题有界检索，再新建会话一次。若首次提交前仍是空白主页，同一个持久化创建尝试可以上传学生原图及实际候选、提交一次正式 MATCH 请求；只有新快照中的已发消息包含完整原请求、唯一输入框已清空、唯一真实链接可核验时才绑定。会话归属与绑定证据在同一事务中保存，恢复时再次核验；仅有网址或输入框中的提示词不能当作提交成功。主页网址不存作会话身份，不发送占位请求；结果未知时不再提交。随后核验原结果、上传固定 ANSWER 并生成。普通追问仍复用原会话、核验和附件证据。每份草稿回到原run/Outbox，完整核验实际交付后才沿用原绩效。
 
