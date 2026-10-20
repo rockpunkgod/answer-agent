@@ -1063,3 +1063,45 @@ REAL 浏览器预检：原 ego TaskSpace 1 返回“task space not found”，�
 验证：`python -X utf8 -B -m unittest -q tests.test_answer_teaching tests.test_teaching_bundle tests.test_teaching_routes tests.test_lesson_checks`，57项执行，56通过、1 SKIPPED、0失败。单独复核 `tests.test_teaching_bundle.TeachingBundleTests.test_symbolic_link_dependency_is_rejected`，确因“Filesystem cannot create symbolic links”跳过，不算通过，不要求管理员运行或关闭系统安全。其余原路径和junction防护测试保留。新 SOURCE 兼容性检查是本机原脚本真实执行；教学/缓存回归仍以各 fixture 范围为准，不替代新版本 DeepSeek 教学质量验收。
 
 当前 ANSWER_COMMIT=1c388a0596b13935ae7c6a1af00834915a8efa33。浏览器重建确认尚未收到；新直接模式的真实队列、实际发送与绩效、成本和稳定性仍未验收，整体 NOT_READY。
+
+## 自动收到：信号唤醒基础（2026-10-20）
+
+用户要求收到新消息才启动处理，避免持续切群抢焦点。新增 CollectorSupervisor 的可选 SIGNAL 模式和本地固定 collector_wake 动作；默认 POLL 不变，不修改运行配置、业务数据库或教学流程。无信号不读取源，多信号合并，执行期间信号保留，分页继续处理，停止可立即解除等待。新信号不携带原消息或接收目标，不绕过 ACK/Outbox 来源核验。
+
+边界：未接入可用的企业微信通知监听，也未实现用户活动检测。当前客户端 UIA 只能看到顶层窗口与少量 Pane，尚不能据此读取会话新消息；现有 native_clipboard_archive 仍是文件增量导入。状态显式 notification_listener_connected=false，不把等待信号当作已连接聊天。未启动真实自动 ACK，没有群内外发。唤醒提示不持久化，重启后需再次唤醒，原消息/游标继续由原数据库保存；不得将本功能配置为可靠无人值守监听的替代品。
+
+MOCK：tests.test_collector_supervisor 共8项通过，含3项新增信号等待/停止、执行期间合并唤醒、分页测试；相关回归（collector_supervisor、collector_watch、delivery_tasks、automatic_delivery_workbench、collector_ack_native）共39项通过，0失败、0跳过。真实通知/桌面自动收到未验证，未因本次测试宣称上线。
+
+## 三个目标群的收到范围控制（2026-10-20）
+
+用户将本轮目标限定为搜索中发现的三个群：27S💡English【答疑2群】、27S🌟English答疑1群、28E🍊English答疑3群；只发送收到，不发答疑。它们是已观察到的名称，不是已经验证的平台 room_id 或发送配方。
+
+新增可选 collector.ack_room_names 精确名称限制，同时用于 ACK 入队与 AutomaticDeliveryRuntime 发送前的原来源复核。名称仅缩小范围，不授予群或学生身份；未配置保留原行为，空列表拒绝全部。其他群、大小写/空白变体、缺群名均不得通过已配置的范围。不改原时间、来源和接收目标校验。没有迁移数据库，没有放开苇中鹤测试发送工具，也没有将 PROGRESS/TEST_ANSWER 冒作正式群 ACK。
+
+REAL：本机只读 UIA 复核，企业微信5.0.12.6018、HWND1771226仅暴露2个顶层节点（窗口和标题栏），无消息、群头、输入框或发送按钮。当前原生业务发送仍限定苇中鹤；已存在的群发送适配依赖本机未暴露的控件。三个群尚未连接实时入库和真实发送，未启动监听或群自动收到，未外发。
+
+MOCK：python -X utf8 -B -m unittest -q tests.test_collector_watch tests.test_collector_supervisor tests.test_delivery_tasks tests.test_automatic_delivery_workbench tests.test_collector_ack_native：41项通过、0失败、0跳过；新增三群范围、其他群拦截、发送前撤销范围、空/非法范围测试。不能将这些测试计为真实群接通。
+
+## 开发/执行分离与原生群 ACK 适配（2026-10-20）
+
+最新分工：主 Agent 继续开发与修复，GPT-6 Luna low 负责日常执行。此前 Luna 单次发送因工具固定为苇中鹤而停止，没有操作窗口或外发。上一目标轮仅确认分工、未修改程序，属于无进展；本轮已实际新增群 ACK 适配并接入现有自动发送生命周期。
+
+新增 helpdesk/native_group_ack.py：仅接受真实 collector 来源校验通过、固定正文收到、数据库绑定与本机群/学生白名单一致的 ACK；复用 MCPGroupDesktop 的类型保护、Outbox、互斥锁和发送前 guard，不冒作测试联系人，也不以 PROGRESS/TEST_ANSWER 绕过。NativeWeComTransport 按当前前台窗口、视觉 pin、发送按钮状态及草稿回读执行。先保存发送意图，再执行一次发送；不确定保留 UNKNOWN，禁止重放。回执要求新增唯一右侧气泡、旧气泡序列保持、OCR 仅定位复制菜单、复制原文相符且编辑框为空。读取 UNKNOWN 只允许回读动作，不允许粘贴、快捷键或点击发送。
+
+automatic_delivery_runtime.py 增加显式 NATIVE_ACK 后端选择；delivery_tasks.py 按适配器能力仅挑选 ACK，不使等待中的答案失效。状态增加后端和允许目的；NATIVE_ACK 的真实通过数只取该方式的实际回执，其他历史回执不能证明新适配已验证。现有 WINDOWS_MCP 路径、collector 来源/原时间要求、ANSWER、版本、绩效及原测试联系人限制均保留。
+
+测试命令：python -X utf8 -B -m unittest -q tests.test_native_group_ack tests.test_mcp_group_delivery tests.test_automatic_delivery_workbench tests.test_delivery_tasks tests.test_collector_watch tests.test_collector_supervisor tests.test_collector_ack_native。69项通过，0失败、0跳过。13项新增测试为匿名 SQLite、脚本化传输和合成图像 MOCK：绑定/正文/来源、配置边界、失效 pin、草稿、一次提交超时、UNKNOWN 只读回查、像素身份变化、精确新增回执、缺原消息阻止输入、后端验证状态隔离、答案队列不变。最初发现 NotSubmitted 不接受新错误码，已改用现有 PRE_SUBMISSION_CHECK_FAILED 并回归通过。
+
+REAL：本轮没有操作桌面、没有发送、没有修改真实业务数据库或教学文件。此前 Windows Notification Listener 权限 Allowed，实际新群消息出现后仍返回企业微信通知空列表；因此不能将该接口用作已验证收题触发。本轮没有引入通知服务或启动后台群回复。
+
+仍待完成：三个群的真实视觉配置；自动切群/当前会话定位；可可靠定位原消息、学生与原始时间的实时读取；人工输入检测；Luna 真实发送及回读验收。原生适配器目前只处理已经打开且核验一致的目标群，不把以上缺项伪装成后台监听。未达到15分钟 ACK SLA、20任务稳定试运行、完整费用/恢复等最终门槛，整体 NOT_READY。最终目标保持不变。
+
+## Luna 固定命令与后台捕获预检（2026-10-20）
+
+原生群 ACK 已接入原 tools/wecom_cli.py：ack-status 只读查看，ack-tick 处理下一条合格 ACK。调用原 AutomaticDeliveryRuntime，不经过测试联系人 WeComTools，不接受收件人、正文或坐标。tick 仍须显式输入/发送开关、NATIVE_ACK 配置、匹配业务库的 ACK_ONLY 采集配置和可信原消息。status 使用 SQLite mode=ro，不创建新库或迁移旧库；仅输出最多20条未完成 ACK 的状态/目标，不输出原题或长答案。其他群的 ACK 与答案跳过而不改成 STALE；同群复用原生传输时，操作 guard 重新绑定当前 ACK，不残留第一条任务。
+
+UNIT/MOCK：python -X utf8 -B -m unittest -q tests.test_wecom_cli tests.test_native_group_ack tests.test_mcp_group_delivery tests.test_automatic_delivery_workbench tests.test_delivery_tasks tests.test_collector_watch tests.test_collector_supervisor tests.test_collector_ack_native：89项通过，0失败、0跳过。早先87项运行曾发生一次本地 HTTP ConnectionAbortedError（WinError10053）；随后该安全用例单独重跑通过，最终89项全回归通过，未删除断言或以重试改写测试。原因尚未确定，不把早先失败抹掉。另修正了新增测试中 sqlite3 上下文提交后未关闭连接造成的临时目录清理失败；测试显式关闭后通过。
+
+REAL：GPT-6 Luna low 执行只读预检，先核对脚本无输入/激活副作用，再运行 tools/probe_wecom.ps1 的默认 PrintWindow 模式（没有 CaptureVisible）。2026-10-20 16:41 北京时间，WXWork HWND1771226 不在前台且未最小化时，输出可读界面，含目标群红色未读角标1。私有证据 data/private/wecom-controls/luna-background-probe.png；本轮未发送、未修改真实业务数据库。一次额外前台查询碰到 PowerShell 只读变量 pid，未造成输入或状态修改；随后的独立只读查询确认前台进程非 WXWork。
+
+该证据仅证明一次后台可读，未证明最小化时可读或画面及时刷新；不能把截图或角标代替原消息、身份和原始时间。后续可据此实现轻量未读提示唤醒，仍须单独验证刷新/陈旧判断及真实读取入口。三个群尚未开启自动收到；整体 NOT_READY，完整最终验收目标不变。

@@ -9,6 +9,110 @@ from unittest.mock import Mock,patch
 from tools.wecom_cli import main
 
 
+class GroupAckCliTests(unittest.TestCase):
+    """Anonymous temp DBs and fake execution; never uses a real desktop."""
+    def setUp(self):
+        from helpdesk.storage import Store
+        from tests.test_native_group_ack import config
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.root = Path(self.tmp.name)
+        self.database = self.root / 'business.db'
+        Store(self.database).close()
+        self.delivery = self.root / 'delivery.json'
+        self.delivery.write_text(json.dumps({'enabled':True, 'desktop':config()}), encoding='utf-8')
+        self.collector = self.root / 'collector.toml'
+        self.collector.write_text('[collector]\nprocessing_mode="ACK_ONLY"\nbusiness_database='+json.dumps(self.database.as_posix())+
+                                  '\ndatabase='+json.dumps((self.root/'messages.db').as_posix())+'\n', encoding='utf-8')
+
+    def args(self):
+        return ['--database',str(self.database),'--delivery-config',str(self.delivery),
+                '--collector-config',str(self.collector)]
+
+    def run_cli(self, args):
+        with redirect_stdout(StringIO()) as output:
+            code = main(args)
+        return code, json.loads(output.getvalue())
+
+    def test_status_is_read_only_without_contact_tool_migration_or_desktop(self):
+        before = self.database.read_bytes()
+        with patch('tools.wecom_cli.WeComTools', side_effect=AssertionError('test-contact entry must not be used')), \
+                patch('helpdesk.storage.Store._migrate', side_effect=AssertionError('must not migrate')), \
+                patch('helpdesk.wecom_native.NativeWeComTransport', side_effect=AssertionError('must not touch desktop')):
+            code, result = self.run_cli(self.args()+['ack-status'])
+        self.assertEqual(code, 0)
+        self.assertEqual(result['scope'], 'EXISTING_OUTBOX_ONLY')
+        self.assertFalse(result['continuous_collection_verified'])
+        self.assertEqual(result['runtime']['allowed_purposes'], ['ACK'])
+        self.assertEqual(result['runtime']['live_validation'], 'NOT_VERIFIED')
+        self.assertEqual(self.database.read_bytes(), before)
+
+    def test_tick_requires_existing_input_and_send_flags(self):
+        with patch('helpdesk.automatic_delivery_runtime.AutomaticDeliveryRuntime.tick') as tick:
+            code, result = self.run_cli(self.args()+['ack-tick'])
+        self.assertEqual((code,result['reason']), (2,'SEND_DISABLED'))
+        tick.assert_not_called()
+
+    def test_unknown_is_not_success_or_retried(self):
+        with patch('helpdesk.automatic_delivery_runtime.AutomaticDeliveryRuntime.tick',
+                   return_value={'state':'SEND_UNKNOWN','task_id':'anonymous'}) as tick, \
+                patch('tools.wecom_cli.WeComTools', side_effect=AssertionError('must not use contact tool')):
+            code, result = self.run_cli(self.args()+['--enable-input','--enable-send','ack-tick'])
+        self.assertEqual(code, 2)
+        self.assertEqual(result['status'], 'SEND_UNKNOWN')
+        self.assertFalse(result['automatic_retry'])
+        tick.assert_called_once_with()
+
+    def test_missing_database_is_not_created(self):
+        missing = self.root/'missing.db'
+        code, result = self.run_cli(['--database',str(missing),'--delivery-config',str(self.delivery),'ack-status'])
+        self.assertEqual(code, 2)
+        self.assertFalse(missing.exists())
+
+    def test_old_schema_status_refuses_migration_and_remains_unchanged(self):
+        import sqlite3
+        from contextlib import closing
+        with closing(sqlite3.connect(self.database)) as db:
+            db.execute('DELETE FROM schema_migrations WHERE version=6')
+            db.commit()
+        before = self.database.read_bytes()
+        code, result = self.run_cli(self.args()+['ack-status'])
+        self.assertEqual((code,result['reason']), (2,'BACKUP_AND_MIGRATION_REQUIRED'))
+        self.assertEqual(self.database.read_bytes(), before)
+
+    def test_source_database_mismatch_rejects_before_tick(self):
+        self.collector.write_text('[collector]\nprocessing_mode="ACK_ONLY"\nbusiness_database="other.db"\n', encoding='utf-8')
+        with patch('helpdesk.automatic_delivery_runtime.AutomaticDeliveryRuntime.tick') as tick:
+            code, _ = self.run_cli(self.args()+['--enable-input','--enable-send','ack-tick'])
+        self.assertEqual(code, 2)
+        tick.assert_not_called()
+
+    def test_test_contact_session_cannot_be_reused_for_group_ack(self):
+        with patch('helpdesk.automatic_delivery_runtime.AutomaticDeliveryRuntime.tick') as tick:
+            code, _ = self.run_cli(self.args()+['--session','test-contact.json','--enable-input','--enable-send','ack-tick'])
+        self.assertEqual(code, 2)
+        tick.assert_not_called()
+
+    def test_status_caps_queue_and_omits_answer_and_original_body(self):
+        from contextlib import closing
+        from helpdesk.storage import Store
+        from helpdesk.service import Helpdesk, Incoming
+        with closing(Store(self.database)) as db:
+            app = Helpdesk(db)
+            binding = app.bind('room', 'student', '匿名学生', verified=True)
+            for i in range(26):
+                incoming = app.ingest(Incoming(binding, 'PRIVATE ORIGINAL '+str(i), platform_id='original-'+str(i)))
+            app._outbox(incoming.message_id, binding, 'ANSWER', 'PRIVATE ANSWER '+('x'*10000))
+        code, result = self.run_cli(self.args()+['ack-status'])
+        self.assertEqual(code, 0)
+        self.assertEqual(result['ack_task_count'], 26)
+        self.assertEqual(len(result['ack_tasks']), 20)
+        self.assertTrue(result['truncated'])
+        self.assertTrue(all(task['within_configured_targets'] for task in result['ack_tasks']))
+        self.assertNotIn('PRIVATE ANSWER', json.dumps(result))
+        self.assertNotIn('PRIVATE ORIGINAL', json.dumps(result))
+
+
 class CliTests(unittest.TestCase):
     def test_unverified_sends_and_unexpected_status_fail_without_replay(self):
         for status in ('SEND_UNKNOWN','SENDING','FAILED','CANCELLED','PENDING','UNEXPECTED'):

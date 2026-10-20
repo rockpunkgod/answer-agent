@@ -54,7 +54,8 @@ def run_live_iteration(store, source, settings):
     try:
         dispatcher = CollectorDispatcher(store, business, processing_mode="ACK_ONLY",
             self_sender_ids=settings.get("self_sender_ids", ()),
-            teacher_sender_ids=settings.get("teacher_sender_ids", ()))
+            teacher_sender_ids=settings.get("teacher_sender_ids", ()),
+            ack_room_names=settings.get("ack_room_names"))
         result["events_processed"] = dispatcher.drain(limit=settings.get("drain_limit", 1000))
         result["pending_ack_count"] = business.one("SELECT COUNT(*) FROM outbox o JOIN messages m ON m.id=o.message_id WHERE o.purpose='ACK' AND o.state='PENDING' AND m.source LIKE 'collector:%'")[0]
         result["drain_enabled"] = True
@@ -93,7 +94,8 @@ def main(argv=None):
             dispatcher = CollectorDispatcher(store, business,
                 processing_mode=settings.get("processing_mode", "ACK_ONLY"),
                 self_sender_ids=settings.get("self_sender_ids", ()),
-                teacher_sender_ids=settings.get("teacher_sender_ids", ()))
+                teacher_sender_ids=settings.get("teacher_sender_ids", ()),
+            ack_room_names=settings.get("ack_room_names"))
             result = {"events_processed": dispatcher.drain(), "tasks": dispatcher.pending()}
         finally:
             business.close()

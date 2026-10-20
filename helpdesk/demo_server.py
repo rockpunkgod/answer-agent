@@ -1190,12 +1190,13 @@ class DemoHandler(BaseHTTPRequestHandler):
                         'pause' if payload['action'] == 'stop' else 'resume')
                 self._json(200, {'result': result})
                 return
-            if self.server.automatic_delivery.enabled and payload['action'] not in ('collector_start', 'collector_stop'):
+            if self.server.automatic_delivery.enabled and payload['action'] not in ('collector_start', 'collector_stop', 'collector_wake'):
                 self._json(403, {'error': '自动发送只处理已有可信任务；请使用收到与答案发送入口'})
                 return
-            if self.server.processing_mode == "ACK_ONLY" and payload["action"] in {"collector_start", "collector_stop"}:
+            if self.server.processing_mode == "ACK_ONLY" and payload["action"] in {"collector_start", "collector_stop", "collector_wake"}:
                 supervisor = self.server.collector_supervisor
-                result = supervisor.start() if payload["action"] == "collector_start" else supervisor.stop()
+                result = (supervisor.start() if payload["action"] == "collector_start" else
+                          supervisor.request_sync() if payload["action"] == "collector_wake" else supervisor.stop())
                 response = {"result": result}
                 if result["state"] == "BLOCKED":
                     response["error"] = "采集未启动：授权或消息源配置仍待完成，请查看采集状态"

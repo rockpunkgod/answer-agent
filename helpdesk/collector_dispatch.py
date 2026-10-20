@@ -13,6 +13,16 @@ from .storage import encode, now
 from .message_sources import NormalizedMessage
 
 
+def ack_room_scope(names):
+    """Optional exact-name narrowing; never substitutes for verified room IDs."""
+    if names is None:
+        return None
+    if (not isinstance(names, (list, tuple, frozenset)) or
+            any(not isinstance(n, str) or not n.strip() or "\n" in n or "\r" in n for n in names)):
+        raise ValueError("ack_room_names must be a list of exact nonempty names")
+    return frozenset(names)
+
+
 class HistoryHelpdesk(Helpdesk):
     def _outbox(self, *args, **kwargs):
         self._audit("BACKFILL_REPLY_SUPPRESSED", details={"message_id": args[0], "purpose": args[2]})
@@ -21,9 +31,10 @@ class HistoryHelpdesk(Helpdesk):
 
 class CollectorDispatcher:
     def __init__(self, collector_store, business_store, *, processing_mode="ACK_ONLY",
-                 question_detector=None, self_sender_ids=(), teacher_sender_ids=()):
+                 question_detector=None, self_sender_ids=(), teacher_sender_ids=(), ack_room_names=None):
         if processing_mode not in {"ACK_ONLY", "CASE_RESOLUTION"}:
             raise ValueError("processing_mode must be ACK_ONLY or CASE_RESOLUTION")
+        self.ack_room_names = ack_room_scope(ack_room_names)
         self.collector = collector_store
         self.business = business_store
         self.processing_mode = processing_mode
@@ -78,6 +89,8 @@ class CollectorDispatcher:
         reason = None
         if str(mode) != "LIVE":
             reason = "BACKFILL_ACK_FORBIDDEN"
+        elif self.ack_room_names is not None and message.room_name not in self.ack_room_names:
+            reason = "GROUP_OUTSIDE_ACK_SCOPE"
         elif message.sender_id in self.self_sender_ids or raw.get("is_self") is True:
             reason = "SELF_MESSAGE_ACK_FORBIDDEN"
         elif message.sender_id in self.teacher_sender_ids or role in {"teacher", "staff", "老师", "教师"}:

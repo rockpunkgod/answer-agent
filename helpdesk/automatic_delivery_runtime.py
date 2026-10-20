@@ -9,6 +9,7 @@ from types import SimpleNamespace
 from .delivery_tasks import AutomaticDelivery, RetryPolicy, collector_ack_validator
 from .mcp_group_delivery import MCPGroupDesktop
 from .storage import Store
+from .native_group_ack import NativeGroupAckDesktop
 
 
 class _Connection:
@@ -40,7 +41,11 @@ class AutomaticDeliveryRuntime:
         self.policy = RetryPolicy(**value.get('retry', {}))
         self.desktop_config = value.get('desktop')
         if self.enabled:
-            MCPGroupDesktop.validate_config(self.desktop_config)
+            backend = (self.desktop_config or {}).get("backend", "WINDOWS_MCP")
+            if backend not in ("WINDOWS_MCP", "NATIVE_ACK"):
+                raise ValueError("Unknown group delivery backend")
+            adapter = NativeGroupAckDesktop if backend == "NATIVE_ACK" else MCPGroupDesktop
+            adapter.validate_config(self.desktop_config)
         self.database = Path(database)
         self.workspace = Path(__file__).resolve().parents[1]
         self.collector_config = deepcopy(collector_config or {})
@@ -63,7 +68,8 @@ class AutomaticDeliveryRuntime:
             collector.path = Path(source)
             return collector_ack_validator(collector,
                 self_sender_ids=settings.get('self_sender_ids', ()),
-                teacher_sender_ids=settings.get('teacher_sender_ids', ()))(store, row)
+                teacher_sender_ids=settings.get('teacher_sender_ids', ()),
+                ack_room_names=settings.get('ack_room_names'))(store, row)
         return validate
 
     def _engine(self, store, connection):
@@ -71,6 +77,8 @@ class AutomaticDeliveryRuntime:
             desktop = self.desktop_factory()
             if desktop.simulated is not True:
                 raise ValueError('Injected automatic sender is for simulation only')
+        elif (self.desktop_config or {}).get("backend") == "NATIVE_ACK":
+            desktop = NativeGroupAckDesktop(self.desktop_config, self.workspace, store, self._validator())
         else:
             desktop = MCPGroupDesktop(connection, self.desktop_config, self.workspace)
         return AutomaticDelivery(store, desktop, policy=self.policy,
@@ -83,9 +91,14 @@ class AutomaticDeliveryRuntime:
         groups = {row['group_key']: row['header_name'] for row in (self.desktop_config or {}).get('groups', [])}
         for task in view['ack_tasks'] + view['answer_tasks']:
             task['group_name'] = groups.get(task['group_key'], task['group_key'])
+        backend = (self.desktop_config or {}).get("backend", "WINDOWS_MCP")
         real_count = store.one("""SELECT COUNT(*) FROM outbox WHERE simulated=0 AND state='SENT_UI_CONFIRMED'
-            AND id IN (SELECT outbox_id FROM audit WHERE event='TASK_SEND_CONFIRMED')""")[0]
+            AND id IN (SELECT outbox_id FROM audit WHERE event='TASK_SEND_CONFIRMED')
+            AND (? != 'NATIVE_ACK' OR id IN (SELECT outbox_id FROM delivery_checks
+                WHERE status='SENT_UI_CONFIRMED' AND json_extract(evidence,'$.transport')='NATIVE_ACK'))""", (backend,))[0]
         return dict(view, enabled=self.enabled, simulation=bool(self.desktop_factory),
+                    desktop_backend=backend,
+                    allowed_purposes=["ACK"] if backend == "NATIVE_ACK" else ["ACK", "ANSWER", "CORRECTION"],
                     paused=self.pause_requested.is_set() or view_pause(store),
                     last_result=self.last_result, error_type=self.error_type,
                     real_confirmed_tasks=real_count,

@@ -56,6 +56,63 @@ class CollectorSupervisorTests(unittest.TestCase):
             time.sleep(.01)
         self.fail("Supervisor did not reach " + expected + ": " + str(supervisor.snapshot()))
 
+    def test_signal_mode_waits_without_source_reads_then_stops_promptly(self):
+        self.config["collector"]["trigger_mode"] = "SIGNAL"
+        source = ControlledSource()
+        supervisor = self.supervisor(lambda config: source)
+        supervisor.start()
+        self.wait_state(supervisor, "WAITING")
+        self.assertFalse(supervisor.snapshot()["notification_listener_connected"])
+        self.assertEqual(source.calls, [])
+        supervisor.stop(wait_seconds=2)
+        self.assertEqual(supervisor.snapshot()["state"], "STOPPED")
+        self.assertTrue(source.closed)
+        self.assertFalse(supervisor.request_sync()["wake_accepted"])
+
+    def test_signal_during_work_is_retained_and_repeated_hints_coalesce(self):
+        self.config["collector"]["trigger_mode"] = "SIGNAL"
+        entered, release, second = Event(), Event(), Event()
+        calls = []
+        def runner(store, source, settings):
+            calls.append(True)
+            if len(calls) == 1:
+                entered.set()
+                self.assertTrue(release.wait(3))
+            else:
+                second.set()
+            return {"sync": {"inserted_count": 0, "has_more": False}, "events_processed": 0}
+        supervisor = CollectorSupervisor(self.config, source_factory=lambda config: ControlledSource(), runner=runner)
+        self.supervisors.append(supervisor)
+        supervisor.start()
+        self.wait_state(supervisor, "WAITING")
+        self.assertTrue(supervisor.request_sync()["wake_accepted"])
+        self.assertTrue(entered.wait(2))
+        for _ in range(20):
+            supervisor.request_sync()
+        release.set()
+        self.assertTrue(second.wait(2))
+        self.wait_state(supervisor, "WAITING")
+        supervisor.stop(wait_seconds=2)
+        self.assertEqual(len(calls), 2)
+
+    def test_signal_drains_paged_backlog_without_another_hint(self):
+        self.config["collector"]["trigger_mode"] = "SIGNAL"
+        done = Event()
+        calls = []
+        def runner(store, source, settings):
+            calls.append(True)
+            if len(calls) == 2:
+                done.set()
+            return {"sync": {"inserted_count": 0, "has_more": len(calls) == 1}, "events_processed": 0}
+        supervisor = CollectorSupervisor(self.config, source_factory=lambda config: ControlledSource(), runner=runner)
+        self.supervisors.append(supervisor)
+        supervisor.start()
+        self.wait_state(supervisor, "WAITING")
+        supervisor.request_sync()
+        self.assertTrue(done.wait(2))
+        supervisor.stop(wait_seconds=2)
+        self.assertEqual(len(calls), 2)
+
     def test_missing_authorization_blocks_without_fake_running_or_secret_leak(self):
         def factory(config):
             raise ArchiveNotConfigured("SECRET TOKEN MUST NOT LEAK")

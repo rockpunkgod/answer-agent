@@ -57,6 +57,41 @@ class CollectorWatchTests(unittest.TestCase):
         finally:
             business.close()
 
+    def test_three_group_scope_queues_only_exact_names_and_rechecks_before_send(self):
+        from helpdesk.delivery_tasks import collector_ack_validator
+        names = ["English-A", "English-B", "English-C"]
+        self.settings["ack_room_names"] = names
+        messages = tuple(replace(self.message, message_id="msg-" + str(i),
+            source_message_id="source-" + str(i), room_name=name)
+            for i, name in enumerate(names + ["English-D", "english-a", "", "English-A "]))
+        run_live_iteration(self.store, Source([MessageBatch(messages, "7")]), self.settings)
+        business = Store(self.business_path)
+        try:
+            rows = business.all("SELECT * FROM outbox")
+            self.assertEqual(len(rows), 3)
+            self.assertTrue(all(row["purpose"] == "ACK" and row["body"] == "收到" for row in rows))
+            self.assertEqual(business.one("SELECT COUNT(*) FROM collector_answer_tasks WHERE reason='GROUP_OUTSIDE_ACK_SCOPE'")[0], 4)
+            for row in rows:
+                self.assertTrue(collector_ack_validator(self.store, ack_room_names=names)(business, row))
+                with self.assertRaisesRegex(ValueError, "GROUP_OUTSIDE_ACK_SCOPE"):
+                    collector_ack_validator(self.store, ack_room_names=[])(business, row)
+            self.assertEqual(business.one("SELECT COUNT(*) FROM runs")[0], 0)
+        finally:
+            business.close()
+
+    def test_empty_group_scope_denies_all_and_invalid_scope_rejected(self):
+        self.settings["ack_room_names"] = []
+        run_live_iteration(self.store, Source([MessageBatch((self.message,), "1")]), self.settings)
+        business = Store(self.business_path)
+        try:
+            self.assertEqual(business.one("SELECT COUNT(*) FROM outbox")[0], 0)
+        finally:
+            business.close()
+        from helpdesk.collector_dispatch import ack_room_scope
+        for value in ("English-A", [""], ["English-A\nother"], [None]):
+            with self.assertRaises(ValueError):
+                ack_room_scope(value)
+
     def test_single_iteration_syncs_and_queues_one_received_only(self):
         result = run_live_iteration(self.store, Source([MessageBatch((self.message,), "1")]), self.settings)
         self.assertEqual((result["sync"]["inserted_count"], result["events_processed"], result["pending_ack_count"]), (1, 1, 1))

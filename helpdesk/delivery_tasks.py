@@ -152,6 +152,11 @@ class AutomaticDelivery:
         for row in self.store.all("""SELECT * FROM outbox WHERE state IN ('PENDING','FAILED')
                 AND purpose IN ('ACK','ANSWER','CORRECTION')
                 ORDER BY CASE WHEN purpose='ACK' THEN 0 ELSE 1 END,created_at,rowid"""):
+            if row['purpose'] not in getattr(self.flow.desktop, 'allowed_purposes', ('ACK', 'ANSWER', 'CORRECTION')):
+                continue
+            accepts = getattr(self.flow.desktop, 'accepts_task', None)
+            if callable(accepts) and not accepts(row):
+                continue
             if self.flow._delivery_mode(row) != 'AUTO':
                 continue
             if row['purpose'] != 'ACK' and self.flow._answer_review_required() and row['review_status'] != 'APPROVED':
@@ -264,8 +269,10 @@ class AutomaticDelivery:
             return {'state': 'DISPATCHER_BUSY'}
 
 
-def collector_ack_validator(collector, *, self_sender_ids=(), teacher_sender_ids=()):
+def collector_ack_validator(collector, *, self_sender_ids=(), teacher_sender_ids=(), ack_room_names=None):
     """ACK admission is independent of question clarity and teaching readiness."""
+    from .collector_dispatch import ack_room_scope
+    allowed_names = ack_room_scope(ack_room_names)
     def validate(store, outbox):
         from .collector_dispatch import CollectorDispatcher
         reader = CollectorDispatcher.__new__(CollectorDispatcher)
@@ -278,6 +285,8 @@ def collector_ack_validator(collector, *, self_sender_ids=(), teacher_sender_ids
             raise ValueError('Verified LIVE original ACK receipt required')
         with collector.connect() as db:
             source = reader._checked_source(db, task, reader._receipt_transport(receipt), promotion=not task['incoming_json'])
+        if allowed_names is not None and source["room_name"] not in allowed_names:
+            raise ValueError("GROUP_OUTSIDE_ACK_SCOPE")
         raw = json.loads(source['raw_payload'])
         return not (isinstance(raw, dict) and (raw.get('simulated') is True or raw.get('fixture') is True))
     return validate

@@ -3,6 +3,9 @@ database = "data/messages.db"
 business_database = "data/helpdesk.db"
 business_timezone = "Asia/Shanghai"
 processing_mode = "ACK_ONLY"
+# Optional exact-name narrowing, in addition to verified room/student identities.
+# Omitted keeps existing scope; [] denies all ACKs. Names never grant identity.
+# ack_room_names = ["English-A", "English-B", "English-C"]
 self_sender_ids = []
 teacher_sender_ids = []
 page_size = 1000

@@ -36,6 +36,7 @@ class CollectorSupervisor:
         self.runner = runner or run_live_iteration
         self.lock = Lock()
         self.stop_event = Event()
+        self.wake_event = Event()
         self.thread = None
         self.state = "IDLE"
         self.health = "NEVER_SYNCED"
@@ -47,10 +48,13 @@ class CollectorSupervisor:
     def _snapshot(self):
         alive = bool(self.thread and self.thread.is_alive())
         return {"state": self.state, "health": self.health,
-            "running": alive and self.state == "RUNNING", "worker_alive": alive,
+            "running": alive and self.state in ("RUNNING", "WAITING"), "worker_alive": alive,
             "last_success_at": self.last_success_at, "last_result": deepcopy(self.last_result),
             "error_type": self.error_type, "logs": list(self.logs),
-            "processing_mode": "ACK_ONLY", "sync_mode": "LIVE", "student_send_enabled": False}
+            "processing_mode": "ACK_ONLY", "sync_mode": "LIVE", "student_send_enabled": False,
+            "trigger_mode": (self.config or {}).get("collector", {}).get("trigger_mode", "POLL"),
+            "wake_pending": self.wake_event.is_set(),
+            "notification_listener_connected": False}
 
     def snapshot(self):
         with self.lock:
@@ -68,6 +72,10 @@ class CollectorSupervisor:
                 self._log("START_BLOCKED", health=self.health, error_type=self.error_type)
                 return self._snapshot()
             settings = self.config["collector"]
+            trigger_mode = settings.get("trigger_mode", "POLL")
+            if trigger_mode not in ("POLL", "SIGNAL"):
+                self.state, self.health, self.error_type = "BLOCKED", "SOURCE_UNAVAILABLE", "InvalidTriggerMode"
+                return self._snapshot()
             interval = settings.get("poll_seconds", 10)
             if isinstance(interval, bool) or not isinstance(interval, (int, float)) or not 1 <= interval <= 3600:
                 self.state, self.health, self.error_type = "BLOCKED", "SOURCE_UNAVAILABLE", "InvalidPollInterval"
@@ -80,6 +88,7 @@ class CollectorSupervisor:
                 self._log("START_BLOCKED", health=self.health, error_type=self.error_type)
                 return self._snapshot()
             self.stop_event.clear()
+            self.wake_event.clear()
             self.state, self.health, self.error_type = "STARTING", "WAITING_FOR_FIRST_SYNC", None
             self._log("LOOP_STARTING")
             tick_settings = deepcopy(settings)
@@ -89,10 +98,34 @@ class CollectorSupervisor:
             self.thread.start()
             return self._snapshot()
 
+    def request_sync(self):
+        """Coalesce hints only; caller cannot supply messages, targets or commands.
+
+        A wake does not assert a new message exists or authorize desktop input.
+        The configured source and existing ACK gates remain authoritative.
+        """
+        with self.lock:
+            if not self.thread or not self.thread.is_alive() or self.stop_event.is_set():
+                return {**self._snapshot(), "wake_accepted": False}
+            self.wake_event.set()
+            return {**self._snapshot(), "wake_accepted": True}
+
     def _work(self, source, settings, interval):
         try:
             store = CollectorStore(Path(settings.get("database", "data/messages.db")))
+            signal_mode = settings.get("trigger_mode", "POLL") == "SIGNAL"
+            if signal_mode:
+                with self.lock:
+                    self.state, self.health = "WAITING", "WAITING_FOR_SIGNAL"
             while not self.stop_event.is_set():
+                if signal_mode:
+                    self.wake_event.wait()
+                    if self.stop_event.is_set():
+                        break
+                # Clear before work, so a signal arriving during the bounded
+                # source call is retained for a subsequent iteration.
+                self.wake_event.clear()
+                failed = False
                 try:
                     result = self.runner(store, source, settings)
                     with self.lock:
@@ -103,6 +136,7 @@ class CollectorSupervisor:
                         self._log("LIVE_SYNC_AND_ACK_DRAIN_COMMITTED", inserted_count=result["sync"]["inserted_count"],
                             events_processed=result["events_processed"])
                 except Exception as error:
+                    failed = True
                     fatal = isinstance(error, (ArchiveNotConfigured, ArchiveProtocolError, CursorExpired))
                     with self.lock:
                         self.state = "BLOCKED" if fatal else "DEGRADED"
@@ -113,9 +147,19 @@ class CollectorSupervisor:
                         break
                 # Continue a paged backlog immediately, but always pass through
                 # the stop check after one committed page and its short drain.
-                wait_seconds = 0 if self.last_result and self.last_result.get("sync", {}).get("has_more") and self.state == "RUNNING" else interval
-                if self.stop_event.wait(wait_seconds):
-                    break
+                has_more = not failed and bool(self.last_result and self.last_result.get("sync", {}).get("has_more"))
+                if signal_mode:
+                    if has_more:
+                        self.wake_event.set()
+                    if failed and self.stop_event.wait(interval):
+                        break  # Bound retry rate even when hints are noisy.
+                    with self.lock:
+                        if not failed and not self.stop_event.is_set():
+                            self.state = "WAITING"
+                    continue
+                if not has_more:
+                    self.wake_event.wait(interval)
+
         except Exception as error:
             with self.lock:
                 self.state, self.health, self.error_type = "BLOCKED", "SOURCE_UNAVAILABLE", type(error).__name__
@@ -138,6 +182,7 @@ class CollectorSupervisor:
     def stop(self, *, wait_seconds=0.2):
         with self.lock:
             self.stop_event.set()
+            self.wake_event.set()
             if self.thread and self.thread.is_alive():
                 self.state = "STOPPING"
             elif self.state != "BLOCKED":
