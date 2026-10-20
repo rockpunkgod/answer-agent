@@ -19,6 +19,7 @@ SUCCESS_STATUSES={
     'watch':{'OBSERVATIONS_SAVED','NO_NEW_OBSERVATIONS'},
     'history':{'HISTORY_VIEW_CHANGED','HISTORY_VIEW_UNCHANGED'},
     'save-image':{'ORIGINAL_SAVED'},
+    'search':{'OPENED_VERIFIED'},
 }
 
 
@@ -37,6 +38,7 @@ def main(argv=None):
     sub.add_parser('poll').add_argument('chat_id')
     sub.add_parser('history').add_argument('chat_id')
     sub.add_parser('save-image').add_argument('message_id')
+    sub.add_parser('search').add_argument('chat_id')
     watch=sub.add_parser('watch',help='Bounded reviewed-visible observations only; never sends')
     watch.add_argument('chat_id')
     watch.add_argument('--iterations',type=int,default=10)
@@ -49,7 +51,8 @@ def main(argv=None):
     operation={'state':'get_chat_state','controls':'inspect_controls','chats':'list_chats',
         'open':'open_chat','messages':'get_messages','image':'open_image',
         'attachment':'download_attachment','prepare':'prepare_reply','send':'send_reply','receipt':'verify_reply',
-        'poll':'poll_messages','watch':'poll_messages','history':'history_page','save-image':'save_open_image'}[args.operation]
+        'poll':'poll_messages','watch':'poll_messages','history':'history_page','save-image':'save_open_image',
+        'search':'search_chat'}[args.operation]
     try:
         session=json.loads(args.session.read_text(encoding='utf-8-sig')) if args.session else None
         service=WeComTools(args.database,session=session,allow_input=args.enable_input,allow_send=args.enable_send)

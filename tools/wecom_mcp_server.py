@@ -31,6 +31,11 @@ def build_server(service):
         return service.call('open_chat',chat_id=chat_id)
 
     @mcp.tool()
+    def wecom_search_chat(chat_id: str) -> dict:
+        """Search the approved contact with fixed session name, then verify the selected chat. Never sends."""
+        return service.call('search_chat',chat_id=chat_id)
+
+    @mcp.tool()
     def wecom_get_messages(chat_id: str) -> dict:
         """Copy reviewed visible text records; never substitutes collection time for sent time."""
         return service.call('get_messages',chat_id=chat_id)

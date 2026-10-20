@@ -202,6 +202,67 @@ class WeComTools:
             raise ValueError('MESSAGE_RECIPE_NOT_UNIQUE')
         return matches[0]
 
+    def search_chat(self,chat_id):
+        """Search only the session-bound contact, using reviewed local controls."""
+        if chat_id!=self.session.get('target_key'):
+            raise ValueError('CHAT_OUTSIDE_ALLOWLIST')
+        search=self.session.get('search') or {}
+        if self.backend!='NATIVE' or search.get('reviewed') is not True or not search.get('result'):
+            raise ValueError('SEARCH_CONTROLS_NOT_REVIEWED')
+        self._require_input()
+        with self._desktop() as (desktop,pin):
+            bounds=pin.get('display_bounds')
+            if not bounds or len(bounds)!=4 or bounds[2]<=bounds[0] or bounds[3]<=bounds[1]:
+                raise ValueError('SEARCH_DISPLAY_BOUNDS_REQUIRED')
+            for spec,box in ((search['editor'],search['editor'].get('input_box')),
+                             (search['result'],search['result']['region_box'])):
+                if not box or len(box)!=4:raise ValueError('SEARCH_CONTROL_BOUNDS_REQUIRED')
+                x=(spec['point'][0]-bounds[0])*pin['image_size'][0]/(bounds[2]-bounds[0])
+                y=(spec['point'][1]-bounds[1])*pin['image_size'][1]/(bounds[3]-bounds[1])
+                if not (box[0]<=x<box[2] and box[1]<=y<box[3]):
+                    raise ValueError('SEARCH_POINT_OUTSIDE_CONTROL')
+            def window_frame():
+                before=parse_foreground(desktop._call('PowerShell',command=FOREGROUND_COMMAND,timeout=10))
+                if before.get('process')!='WXWork' or [before['width'],before['height'],before['handle']]!=pin['window_geometry_handle']:
+                    raise ValueError('SEARCH_MAIN_WINDOW_CHANGED')
+                record=desktop._call('Screenshot')
+                if before!=parse_foreground(desktop._call('PowerShell',command=FOREGROUND_COMMAND,timeout=10)):
+                    raise ValueError('WINDOW_CHANGED_DURING_OBSERVATION')
+                return record
+            try:
+                record=window_frame()
+            except ValueError as exc:
+                if str(exc)!='WECOM_NOT_FOREGROUND':raise
+                desktop.transport.activate()
+                record=window_frame()
+            try:
+                self._checked_region(record,search['editor'])
+            except ValueError:
+                variants=[search[k] for k in ('query_region_hash','closed_region_hash') if search.get(k)]
+                for digest in variants:
+                    try:
+                        self._checked_region(record,{**search['editor'],'region_hash':digest})
+                        break
+                    except ValueError:
+                        continue
+                else:
+                    raise ValueError('SEARCH_CONTROL_LAYOUT_CHANGED')
+            desktop._call('Click',loc=search['editor']['point'])
+            desktop._call('Clipboard',mode='set',text=self.session['display_name'])
+            desktop._call('Shortcut',shortcut='ctrl+a');desktop._call('Shortcut',shortcut='ctrl+v')
+            desktop._call('Shortcut',shortcut='ctrl+a');desktop._call('Shortcut',shortcut='ctrl+c')
+            if not same_clipboard_body(desktop._clipboard_text(),self.session['display_name']):
+                raise ValueError('SEARCH_QUERY_READBACK_MISMATCH')
+            desktop._call('Shortcut',shortcut='right')
+            time.sleep(.5)
+            record=window_frame();self._checked_region(record,search['result'])
+            desktop._call('Click',loc=search['result']['point'])
+            time.sleep(.3)
+            _,frame=self._frame(desktop,pin)
+        self._audit('search_chat','OPENED_VERIFIED',controls=['chat_search','chat_result','chat_header'],
+                    evidence={'frame_sha256':frame['sha256']})
+        return {'status':'OPENED_VERIFIED','chat_id':chat_id,'navigation_performed':True,'sent':False}
+
     def _require_input(self):
         if not self.allow_input:
             raise ValueError('INPUT_DISABLED')
@@ -527,7 +588,7 @@ class WeComTools:
     def call(self,operation,**arguments):
         try:
             if operation not in {'inspect_controls','get_chat_state','list_chats','open_chat','get_messages',
-                                 'open_image','prepare_reply','send_reply','verify_reply','download_attachment','poll_messages','history_page','save_open_image'}:
+                                 'open_image','prepare_reply','send_reply','verify_reply','download_attachment','poll_messages','history_page','save_open_image','search_chat'}:
                 raise ValueError('OPERATION_OUTSIDE_ALLOWLIST')
             return getattr(self,operation)(**arguments)
         except Exception as exc:

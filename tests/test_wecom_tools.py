@@ -148,6 +148,55 @@ class WeComToolTests(unittest.TestCase):
             self.assertEqual(db.one('SELECT count(*) FROM performance_units')[0],0)
             self.assertEqual(db.one('SELECT count(*) FROM outbox')[0],0)
 
+    def _review_search(self):
+        self.pin['display_bounds']=[0,0,200,100]
+        self.session['search']={'reviewed':True,
+            'editor':{'region_box':[0,0,10,10],'region_hash':self.pin['avatar_hash'],
+                      'input_box':[0,0,20,20],'point':[5,5]},
+            'result':{'region_box':[20,20,30,30],'region_hash':self.pin['avatar_hash'],'point':[25,25]}}
+
+    def test_search_uses_fixed_contact_and_verifies_final_chat_without_send(self):
+        self._review_search()
+        with patch('helpdesk.wecom_tools.time.sleep'):
+            result=self.service.call('search_chat',chat_id=self.target)
+        self.assertEqual(result['status'],'OPENED_VERIFIED')
+        self.assertFalse(result['sent'])
+        self.assertEqual([a['text'] for t,a in self.transport.calls if t=='Clipboard' and a['mode']=='set'],['苇中鹤'])
+        self.assertEqual([a['loc'] for t,a in self.transport.calls if t=='Click'],[[5,5],[25,25]])
+        with closing(Store(self.db_path)) as db:
+            self.assertEqual(db.one("SELECT state FROM outbox WHERE id='reply'")[0],'PENDING')
+
+    def test_search_can_activate_reviewed_main_window_before_query(self):
+        from unittest.mock import Mock
+        self._review_search();self.transport.process='OtherApp'
+        self.transport.activate=Mock(side_effect=lambda:setattr(self.transport,'process','WXWork'))
+        with patch('helpdesk.wecom_tools.time.sleep'):
+            result=self.service.call('search_chat',chat_id=self.target)
+        self.assertEqual(result['status'],'OPENED_VERIFIED')
+        self.transport.activate.assert_called_once()
+
+    def test_search_wrong_result_stops_before_selection_and_no_fallback_click(self):
+        self._review_search();self.session['search']['result']['region_hash']='0'*64
+        with patch('helpdesk.wecom_tools.time.sleep'):
+            result=self.service.call('search_chat',chat_id=self.target)
+        self.assertEqual(result['status'],'UNAVAILABLE')
+        self.assertEqual([a['loc'] for t,a in self.transport.calls if t=='Click'],[[5,5]])
+
+    def test_search_rejects_unreviewed_target_and_control_point(self):
+        self.assertEqual(self.service.call('search_chat',chat_id=self.target)['reason'],'SEARCH_CONTROLS_NOT_REVIEWED')
+        self._review_search()
+        self.assertEqual(self.service.call('search_chat',chat_id='other')['reason'],'CHAT_OUTSIDE_ALLOWLIST')
+        self.session['search']['editor']['point']=[100,85]
+        self.assertEqual(self.service.call('search_chat',chat_id=self.target)['reason'],'SEARCH_POINT_OUTSIDE_CONTROL')
+        self.assertEqual(self.transport.calls,[])
+
+    def test_search_only_accepts_explicitly_reviewed_editor_variants(self):
+        self._review_search();self.session['search']['editor']['region_hash']='0'*64
+        with patch('helpdesk.wecom_tools.time.sleep'):
+            self.assertEqual(self.service.call('search_chat',chat_id=self.target)['reason'],'SEARCH_CONTROL_LAYOUT_CHANGED')
+            self.session['search']['closed_region_hash']=self.pin['avatar_hash']
+            self.assertEqual(self.service.call('search_chat',chat_id=self.target)['status'],'OPENED_VERIFIED')
+
     def test_failed_poll_never_consumes_observations(self):
         with patch.object(self.service,'get_messages',side_effect=ValueError('WINDOW_CHANGED')):
             result=self.service.call('poll_messages',chat_id=self.target)
