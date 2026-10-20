@@ -197,6 +197,35 @@ class WeComToolTests(unittest.TestCase):
             self.session['search']['closed_region_hash']=self.pin['avatar_hash']
             self.assertEqual(self.service.call('search_chat',chat_id=self.target)['status'],'OPENED_VERIFIED')
 
+    def test_scan_requires_review_and_empty_candidates_do_not_mean_empty_chat(self):
+        self.assertEqual(self.service.call('scan_messages',chat_id=self.target)['reason'],'INCOMING_DISCOVERY_NOT_REVIEWED')
+        self.pin['display_bounds']=[0,0,200,100]
+        self.session['incoming_discovery']={'reviewed':True,'viewport':[20,20,180,70],
+            'incoming_left':25,'bubble_color':[228,231,235],'copy_menu_search_box':[20,20,180,70]}
+        result=self.service.call('scan_messages',chat_id=self.target)
+        self.assertEqual(result['status'],'NO_VISIBLE_TEXT_CANDIDATES')
+        self.assertIsNone(result['chat_empty'])
+        self.assertFalse(any(t in ('Click','Clipboard','Shortcut') for t,a in self.transport.calls))
+
+    def test_scan_copies_new_candidate_without_mutating_original_recipe(self):
+        self.pin['display_bounds']=[0,0,200,100]
+        self.session['incoming_discovery']={'reviewed':True,'copy_menu_search_box':[20,20,180,70]}
+        def read(reader,chat_id):
+            recipe=reader.session['messages'][0]
+            self.assertTrue(recipe['copy_menu']['ocr_only'])
+            self.assertNotIn('text_sha256',recipe)
+            return {'status':'OK','messages':[{'id':recipe['id'],'text':'new raw question',
+                    'source_sent_at':None,'observed_at':now()}],'continuous_listener':False}
+        with patch('helpdesk.wecom_visible.incoming_bubbles',return_value=[[20,20,80,50]]), \
+                patch.object(WeComTools,'get_messages',autospec=True,side_effect=read):
+            result=self.service.scan_messages(self.target)
+        self.assertEqual(result['messages'][0]['text'],'new raw question')
+        self.assertIsNone(result['messages'][0]['source_sent_at'])
+        self.assertFalse(result['automatic_ack_eligible'])
+        self.assertNotIn('messages',self.session)
+        with closing(Store(self.db_path)) as db:
+            self.assertEqual(db.one('SELECT count(*) FROM outbox')[0],1)
+
     def test_failed_poll_never_consumes_observations(self):
         with patch.object(self.service,'get_messages',side_effect=ValueError('WINDOW_CHANGED')):
             result=self.service.call('poll_messages',chat_id=self.target)

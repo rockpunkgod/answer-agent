@@ -36,6 +36,11 @@ def build_server(service):
         return service.call('search_chat',chat_id=chat_id)
 
     @mcp.tool()
+    def wecom_scan_messages(chat_id: str) -> dict:
+        """Discover calibrated visible incoming text bubbles and copy raw text; no sender/time/ACK inference."""
+        return service.call('scan_messages',chat_id=chat_id)
+
+    @mcp.tool()
     def wecom_get_messages(chat_id: str) -> dict:
         """Copy reviewed visible text records; never substitutes collection time for sent time."""
         return service.call('get_messages',chat_id=chat_id)

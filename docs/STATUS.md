@@ -1,5 +1,14 @@
 # 当前能力与缺口
 
+## 可见来信气泡发现与扫描（2026-10-20）
+
+新增helpdesk/wecom_visible.py、scan/wecom_scan_messages，并让明确配置的poll/watch复用扫描。使用本机审核消息视口/左侧位置/颜色的连通区域定位，选中文本覆盖大面积背景时要求四边完整框；最多20候选，超限停止。没有LLM、学生文字OCR、任意点击参数或新消息通道。候选仅在原窗口/区域守卫后复制原文；复制菜单可显式仅用限定区域本地OCR。临时reader复制会话，不修改原消息配方。观察按联系人+原文去重，不冒充平台唯一消息、不补原时间、不创建Ack/绩效。无候选不等于空聊天。
+
+REAL存留像素：实际WeCom图像772476...识别出[306,751,507,782]；蓝色选中文本图fa151...初次被密度条件漏掉，改为四边框核验后同一区域识别。真实CLI第一次无候选（未声称没有消息）；后续复制在首个Clipboard之前发现前台切回ChatGPT，返回NATIVE_FOREGROUND_OR_LAYOUT_CHANGED，未计完整读取通过。已询问用户当前是否使用鼠标键盘，待回复；不自动反复激活重试。搜索在激活后补充一次有限渲染等待，未知控件状态仍停止。
+
+UNIT/MOCK：python -X utf8 -B -m unittest -q tests.test_wecom_visible tests.test_wecom_tools tests.test_wecom_cli tests.test_wecom_native tests.test_collector_ack_native tests.test_collector_test_ack，75项通过、0失败/跳过。新增未预定义气泡/选中/外发和零散像素/限额/不修改原配方及不创建Outbox。首次测试缺显示器fixture导致1失败，补齐测试前提后回归通过，未删关键断言。当前未取得可靠原始时间/平台身份，未通过新消息持续采集、15分钟Ack或完整真实新题闭环；NOT_READY。
+
+
 ## 固定联系人搜索CLI真实验证（2026-10-20）
 
 新增search/wecom_search_chat。复用原生串行桌面、固定会话联系人名及本机审核搜索框/结果项，不接受任意搜索文字；核验原生主窗口和显示器范围、输入点和结果点范围、查询复制回读、精确结果项及最终目标会话。焦点在其他应用时只激活已审核主窗口，再重新核验；不输入Enter、不发送。

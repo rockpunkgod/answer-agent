@@ -234,6 +234,7 @@ class WeComTools:
             except ValueError as exc:
                 if str(exc)!='WECOM_NOT_FOREGROUND':raise
                 desktop.transport.activate()
+                time.sleep(.2)
                 record=window_frame()
             try:
                 self._checked_region(record,search['editor'])
@@ -286,6 +287,8 @@ class WeComTools:
 
     def _copy_point(self,record,recipe,pin):
         try:
+            if recipe.get('ocr_only') is True:
+                raise ValueError('EXPLICIT_LOCAL_COPY_OCR')
             self._checked_region(record,recipe)
             return recipe['point']
         except ValueError:
@@ -398,13 +401,53 @@ class WeComTools:
         return {'status':status,'messages_imported':0,'complete_history':False,
                 'history_exhausted':False,'automatic_retry':False}
 
+    def scan_messages(self,chat_id):
+        """Locate visible incoming text candidates, then copy actual text."""
+        if chat_id!=self.session.get('target_key'):
+            raise ValueError('CHAT_OUTSIDE_ALLOWLIST')
+        config=self.session.get('incoming_discovery') or {}
+        if self.backend!='NATIVE' or config.get('reviewed') is not True:
+            raise ValueError('INCOMING_DISCOVERY_NOT_REVIEWED')
+        self._require_input()
+        from PIL import Image
+        from .wecom_visible import incoming_bubbles
+        with self._desktop() as (desktop,pin):
+            record,_=self._frame(desktop,pin)
+            path=next(c['path'] for c in record['content'] if c.get('type')=='image')
+            with Image.open(path) as image:
+                boxes=incoming_bubbles(image,config)
+                recipes=[]
+                bounds=pin['display_bounds'];width,height=pin['image_size']
+                for box in boxes:
+                    digest=pixel_hash(image,box)
+                    recipes.append({'id':'visible-region:'+digest,'kind':'text',
+                        'region_box':box,'region_hash':digest,
+                        'point':[bounds[0]+int((box[0]+box[2])*(bounds[2]-bounds[0])/(2*width)),
+                                 bounds[1]+int((box[1]+box[3])*(bounds[3]-bounds[1])/(2*height))],
+                        'copy_menu':{'ocr_only':True,'region_box':config['copy_menu_search_box'],
+                                     'ocr_search_box':config['copy_menu_search_box']}})
+        if not recipes:
+            return {'status':'NO_VISIBLE_TEXT_CANDIDATES','messages':[],
+                    'scope':'REVIEWED_VISIBLE_INCOMING_LANE_ONLY','chat_empty':None,'chat_empty_verified':False,
+                    'continuous_listener':False,'automatic_ack_eligible':False}
+        reader=WeComTools(self.database,root=self.root,session={**self.session,'messages':recipes},
+            transport_factory=self.transport_factory,allow_input=self.allow_input,allow_send=False)
+        result=reader.get_messages(chat_id)
+        for message in result['messages']:
+            message['visible_locator']=message['id']
+            # This key deduplicates observations, not two identical messages.
+            message['id']='visible-text:'+sha256(encode([chat_id,message['text']]).encode()).hexdigest()
+        return {**result,'scope':'DISCOVERED_VISIBLE_INCOMING_TEXT_ONLY',
+                'platform_identity_verified':False,'automatic_ack_eligible':False}
+
     def poll_messages(self, chat_id):
         """Persist reviewed observations, not verified new platform messages.
 
         Identity includes recipe ID and text. Identical platform messages cannot
         be distinguished by this fallback and must never trigger automatic ACKs.
         """
-        result=self.get_messages(chat_id)
+        result=(self.scan_messages(chat_id) if self.session.get('incoming_discovery',{}).get('reviewed') is True
+                else self.get_messages(chat_id))
         if result.get('status')!='OK':
             return result
         fresh=[]
@@ -588,7 +631,7 @@ class WeComTools:
     def call(self,operation,**arguments):
         try:
             if operation not in {'inspect_controls','get_chat_state','list_chats','open_chat','get_messages',
-                                 'open_image','prepare_reply','send_reply','verify_reply','download_attachment','poll_messages','history_page','save_open_image','search_chat'}:
+                                 'open_image','prepare_reply','send_reply','verify_reply','download_attachment','poll_messages','history_page','save_open_image','search_chat','scan_messages'}:
                 raise ValueError('OPERATION_OUTSIDE_ALLOWLIST')
             return getattr(self,operation)(**arguments)
         except Exception as exc:
