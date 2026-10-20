@@ -474,4 +474,4 @@ python -m tools.test_youdao_apis --image "data/private/youdao/test-images/synthe
 
 预算使用人工审核的单次上限作预留，与真实扣费分开。同一学生材料范围内的各题、版本和追问共用现有审计计算；其他调用费用未核实且无预留时停止，不能当零。默认每篇上限0.50元，1.00元预警可独立配置；独立CLI仅能控制单图，不声称已核实每篇成本。真实金额只能用原账单确认入口登记，未取得凭证时 `amount_cny=null`。价格参考[擦除计费](https://ai.youdao.com/DOCSIRMA/html/learn/price/sjsxtcc/index.html)、[搜题计费](https://ai.youdao.com/DOCSIRMA/html/learn/price/jptk/index.html)，体验金、资源包与有效/无效检索计费不同，不硬编码为已付金额。
 
-本轮仅离线HTTP模拟和本地 dry-run；真实API请求为0。用户提供的两个应用标识仅保存于忽略的本机凭据文件，对应 AppSecret 与指定匿名图的真实调用授权仍待配置/确认。新 Provider 保持关闭，未修改 ANSWER、发送权限或绩效规则。
+2026-10-21 已按用户明确授权完成整篇阅读单图真实测试：去手写、搜题各请求1次，均返回业务错误108（应用ID无效），没有取得擦除图或候选。不是成功验收；不自动重试。两组凭据仅保存在忽略的本机文件，实际扣费未核实。新 Provider 仍默认关闭，未修改 ANSWER、发送权限或绩效规则；详见现有 docs/STATUS.md。
