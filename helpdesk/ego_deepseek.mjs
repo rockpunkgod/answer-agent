@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto';
 
 const editor = 'textarea[name="search"]';
 const answers = '.ds-assistant-message-main-content';
+const sendButton = '.aaff8b8f .ds-button--primary.ds-button--circle[role="button"]';
 const digest = bytes => createHash('sha256').update(bytes).digest('hex');
 
 export function attachmentsReady(names) {
@@ -35,6 +36,13 @@ export function readReply({selector,token,baseline}) {
     return key !== null && !baseline.includes(key) && text.length > 0;
   });
   return nodes.length === 1 ? nodes[0].innerText.trim() : null;
+}
+
+export function sendControlReady(selector) {
+  const visible=[...document.querySelectorAll(selector)].filter(node=>
+    node.getBoundingClientRect().width>0 && node.getBoundingClientRect().height>0);
+  return visible.length===1 && visible[0].getAttribute('aria-disabled')!=='true'
+    && !visible[0].classList.contains('ds-button--disabled');
 }
 
 async function saveState(request, values) {
@@ -94,8 +102,10 @@ export async function run(request, {resumeStaged=false}={}) {
     const baseline=await page.evaluate(selector=>[...document.querySelectorAll(selector)].map(
       node=>node.closest('[data-virtual-list-item-key]')?.getAttribute('data-virtual-list-item-key')),answers);
     if(baseline.some(key=>key === null || key === undefined)) throw new Error('ANSWER_IDENTITY_UNAVAILABLE');
-    await saveState(request,{phase:'SUBMISSION_INTENT',baseline_answer_keys:baseline}); // Persist before Enter.
-    await page.press(editor,'Enter');
+    await page.waitForFunction(sendControlReady,sendButton,{timeout:15_000});
+    await saveState(request,{phase:'SUBMISSION_INTENT',baseline_answer_keys:baseline,
+      submission_gesture:'SEMANTIC_SEND_BUTTON'}); // Persist before one side effect.
+    await page.click(sendButton,{label:'Submit current reviewed question'});
     if(request.new_session) {
       await page.waitForFunction(()=>/^https:\/\/chat\.deepseek\.com\/a\/chat\/s\/[A-Za-z0-9-]+$/.test(location.href),null,{timeout:15_000});
       const created=await page.url();

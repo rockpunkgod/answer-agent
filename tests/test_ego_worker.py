@@ -19,4 +19,4 @@ class EgoWorkerTests(unittest.TestCase):
         script=Path(__file__).with_name('ego_deepseek_worker.test.mjs')
         result=subprocess.run([node,'--test',str(script)],capture_output=True,text=True,encoding='utf-8',timeout=30)
         self.assertEqual(result.returncode,0,result.stdout+result.stderr)
-        self.assertIn('tests 12',result.stdout)
+        self.assertRegex(result.stdout,r'\bfail 0\b')

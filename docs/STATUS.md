@@ -1,5 +1,14 @@
 # 当前能力与缺口
 
+## 第6题原图网页练习及发送按钮修正（2026-10-20）
+
+用户明确交回ego空间8并要求继续原请求第6题。实际takeOver后在同空间新建p2，保留p1第5题历史；复用原照片、材料/选项及固定ANSWER，原任务858a10e03c97457a88dd80d866cc9b19冻结为独立run 8ab5bdfae4c54ec9b9464d2a226ab289，SOURCE_READY，未补发收到。已备份原库，仍OPERATOR_TEST不计正式绩效。
+
+REAL：上传原图与teaching-input.md、填第6题后原脚本Enter未在15秒取得新URL，停在SUBMISSION_INTENT，调用记UNKNOWN。只读观察首页保留原提示词/附件，未见当前助手消息、发送按钮可用，但不据此断言原请求未提交。未再按Enter/点击/重传；已询问用户核验原提交状态，并handOff同空间供检查。无新答案或外发，未计完整任务。
+
+修复未尝试请求的提交方式：先检查唯一可见、非禁用发送按钮，保存提交意图及SEMANTIC_SEND_BUTTON后只点击一次，保留原UNKNOWN只读恢复约束；不因版本更新重放已有意图。UNIT/MOCK：`python -X utf8 -B -m unittest -q tests.test_ego_worker tests.test_ego_browser tests.test_ego_generation tests.test_ego_revision`，26项通过、0失败/跳过；其中JS实际13个匿名场景，包括禁用/歧义不提交、未知按钮结果只读恢复。首次Python包装断言误用了Node的另一种输出格式，已改为不依赖固定测试数/输出前缀的失败数断言。新按钮路径本轮仍未真实重提第6题，不能报告网页生成成功；整体NOT_READY，1/20。
+
+
 ## 真实来源测试Ack入口接原生后端（2026-10-20）
 
 补充原生输入边界：激活/每次输入前检测用户按住Shift/Ctrl/Alt/Windows键即停止，不释放用户按键；脚本自己的快捷键释放失败时仍尝试释放其他已注入键，并报告KEY_RELEASE_UNCONFIRMED，避免失败残留Ctrl影响后续动作。UNIT/MOCK：原生、CLI、OCR、测试Ack、来源/发送回归合计93项通过、0失败/跳过，覆盖5类修饰键、释放失败继续清理及keydown失败只清理已注入键。REAL READONLY仅验证Win32修饰键查询可执行，观测当时无按住键；未真实注入按键故障或执行发送，不把Mock算真实接管验收。没有模型/Windows-MCP调用。完整答疑交付仍NOT_READY。

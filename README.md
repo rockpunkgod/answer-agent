@@ -37,6 +37,8 @@ python tools/wecom_cli.py --database <已有数据库> --session <审核会话�
 
 `receipt <原Outbox_ID>` 仅重新回读已是 `SENT_UI_CONFIRMED` 的历史回复，需要 `--enable-input` 执行右键复制，但不需要启用发送。它不更新Outbox、不确认未知发送、不计新交付或绩效。成功返回 `HISTORICAL_TEXT_VERIFIED`；详细证据存私有目录，命令只返回状态和证据路径/哈希。新原生发送需完整审核发送、回读及复制控件；没有发送前回读区域基线或未观察到变化时不确认新发送，重启丢失该基线需人工核验。
 
+ego网页提交现在先核验唯一、可用的发送按钮，再持久化提交意图并点击一次；不依赖Enter快捷键。原先已进入SUBMISSION_INTENT的请求仍保留未知状态，更新代码不会自动重提。需要核验原页面或人工明确确认未提交，不能因为首页还显示草稿就自行再发。
+
 ### 检查器拒绝后的单次修订
 
 `python -m tools.run_ego_answer` 增加 `--revise-rejected`：`--run` 指定原被教学检查拒绝的run，其他参数沿用原已审核教学包及网页绑定。只处理明确的 `ANSWER_DRAFT_CHECK_REQUIRES_REVIEW`，创建一个关联修订run，原拒绝记录不变；复用原问题、版本和网页会话，不重传原图及教学文件，直接转交检查器提示和原稿片段。最多一次修订，仍走原ANSWER检查和Outbox，不自动发送；再次拒绝进入已有人工处理入口。重复调用返回原修订，不重复提交。已提交但结果未知仍只能捕获原请求。
