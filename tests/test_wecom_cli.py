@@ -1,5 +1,5 @@
 from contextlib import redirect_stdout
-from io import StringIO
+from io import StringIO, BytesIO, TextIOWrapper
 import json
 from pathlib import Path
 import tempfile
@@ -33,6 +33,19 @@ class GroupAckCliTests(unittest.TestCase):
         with redirect_stdout(StringIO()) as output:
             code = main(args)
         return code, json.loads(output.getvalue())
+
+    def test_redirected_windows_encoding_preserves_emoji_result_without_retry(self):
+        buffer=BytesIO()
+        output=TextIOWrapper(buffer,encoding='gbk')
+        self.addCleanup(output.close)
+        result={'status':'VERIFIED_CURRENT_CHAT','display_name':'anonymous English \U0001f4a1 group'}
+        with redirect_stdout(output), patch('tools.wecom_cli.WeComTools') as tools:
+            tools.return_value.call.return_value=result
+            code=main(['--database',str(self.database),'state'])
+            output.flush()
+        self.assertEqual(code,0)
+        self.assertEqual(json.loads(buffer.getvalue().decode('utf-8')),result)
+        tools.return_value.call.assert_called_once_with('get_chat_state')
 
     def test_status_is_read_only_without_contact_tool_migration_or_desktop(self):
         before = self.database.read_bytes()

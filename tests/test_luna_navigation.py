@@ -149,7 +149,7 @@ class LunaNavigationTests(unittest.TestCase):
         args, kwargs = runner.call_args
         command = args[0]
         self.assertEqual(command[command.index('--model') + 1], 'gpt-6-luna')
-        self.assertIn('model_reasoning_effort="medium"', command)
+        self.assertIn('model_reasoning_effort="low"', command)
         for feature in navigation._DISABLED:
             self.assertIn(feature, command)
         self.assertIn('--ignore-user-config', command)
@@ -168,7 +168,7 @@ class LunaNavigationTests(unittest.TestCase):
         runner.return_value.stdout='\n'.join(json.dumps(e) for e in events)
         result=self.suggest(runner)
         self.assertEqual(result['call_usage'],{'source':'codex_cli_turn_completed',
-            'model':navigation.MODEL,'reasoning_effort':'medium',
+            'model':navigation.MODEL,'reasoning_effort':'low',
             'input_tokens':120,'cached_input_tokens':80,'output_tokens':9})
         self.assertNotIn('amount_cny',result['call_usage'])
         runner.assert_called_once()

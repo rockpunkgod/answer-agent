@@ -18,7 +18,7 @@ from .native_intake import _json
 
 ROOT = Path(__file__).resolve().parents[1]
 MODEL = 'gpt-6-luna'
-EFFORT = 'medium'
+EFFORT = 'low'
 ACTIONS = frozenset({'ACTIVATE_WECOM', 'OPEN_ORIGINAL_IMAGE', 'SAVE_ICON',
                      'FILENAME_FIELD', 'SAVE_BUTTON', 'DEEPSEEK_NEW_CHAT',
                      'DEEPSEEK_COMPOSER', 'WECOM_COMPOSER', 'WECOM_SEND',
@@ -123,7 +123,7 @@ def suggest(record_path, instruction, allowed_actions, *, display_index=1, runne
         schema_path = task_root / 'schema.json'
         schema_path.write_text(json.dumps(schema), encoding='utf-8')
         argv = [executable, 'exec', '--ignore-user-config', '--ephemeral', '--skip-git-repo-check',
-                '--sandbox', 'read-only', '--model', MODEL, '-c', 'model_reasoning_effort="medium"',
+                '--sandbox', 'read-only', '--model', MODEL, '-c', f'model_reasoning_effort="{EFFORT}"',
                 '-c', 'web_search="disabled"', '--json', '--output-schema', str(schema_path),
                 '-C', str(task_root), '--image', str(image)]
         for feature in _DISABLED:

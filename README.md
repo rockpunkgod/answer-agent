@@ -179,7 +179,7 @@ python -m tools.operator_task --database <原测试库> followup --parent-task <
 
 ## 已审核题目的本地网页执行
 
-[网页执行示例](config/automatic-answer.example.json)默认关闭，复制到忽略的`data/private/automatic-answer.local.json`后，先核对实际显示器和控件名。需要已批准、可生成的`source_review_manifest`，有效原消息题面审核，以及真实核验的首次ACK。只执行原SOURCE_MESSAGE任务；Luna固定为`gpt-6-luna / medium`，仅定位控件，教学继续使用DeepSeek及原ANSWER。缺工具、额度或教学依赖时不换模型。
+[网页执行示例](config/automatic-answer.example.json)默认关闭，复制到忽略的`data/private/automatic-answer.local.json`后，先核对实际显示器和控件名。需要已批准、可生成的`source_review_manifest`，有效原消息题面审核，以及真实核验的首次ACK。只执行原SOURCE_MESSAGE任务；Luna固定为`gpt-6-luna / low`，仅定位控件，教学继续使用DeepSeek及原ANSWER。缺工具、额度或教学依赖时不换模型。
 
 ```powershell
 .\run_current_demo.ps1 -AutomaticAnswerConfig 'data/private/automatic-answer.local.json' `
