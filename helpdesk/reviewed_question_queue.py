@@ -440,6 +440,12 @@ def advance(store, task_id, *, executor=None, session_creator=None, preparer=Non
         try:
             task, snapshot, stage = _authoritative_result(store, task_id)
         except Exception as exc:
+            if isinstance(exc, ValueError) and str(exc) == 'MATCH_REQUIRES_REVIEW':
+                for attempt in get(store, task_id)['attempts']:
+                    if attempt['state'] == 'STARTED':
+                        _attempt_finish(store, attempt['id'], 'REQUIRES_REVIEW', 'MATCH_REQUIRES_REVIEW')
+                _phase(store, task_id, 'NEEDS_ATTENTION', reason='MATCH_REQUIRES_REVIEW')
+                return get(store, task_id)
             _phase(store, task_id, 'NEEDS_ATTENTION', reason='QUEUE_EVIDENCE_INVALID:' + type(exc).__name__)
             return get(store, task_id)
         if stage in ('GENERATED', 'NEEDS_ATTENTION'):
@@ -492,6 +498,10 @@ def advance(store, task_id, *, executor=None, session_creator=None, preparer=Non
                 _require(authoritative_stage == 'GENERATED', 'GENERATOR_DID_NOT_PERSIST_VALID_ANSWER')
             _attempt_finish(store, attempt_id, 'SUCCEEDED')
         except Exception as exc:
+            if isinstance(exc, ValueError) and str(exc) == 'MATCH_REQUIRES_REVIEW':
+                _attempt_finish(store, attempt_id, 'REQUIRES_REVIEW', 'MATCH_REQUIRES_REVIEW')
+                _phase(store, task_id, 'NEEDS_ATTENTION', reason='MATCH_REQUIRES_REVIEW')
+                return get(store, task_id)
             reason = stage + '_UNCERTAIN:' + type(exc).__name__
             _attempt_finish(store, attempt_id, 'UNCERTAIN', reason)
             _phase(store, task_id, 'EXECUTION_UNCERTAIN', reason=reason)

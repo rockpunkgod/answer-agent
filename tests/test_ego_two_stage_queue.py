@@ -147,10 +147,20 @@ class EgoTwoStageQueueTests(unittest.TestCase):
     def test_unresolved_matching_result_stops_before_teaching(self):
         self.model = dict(STUDENT_ONLY, match_status='UNRESOLVED', unresolved_fields=['unclear original'])
         self.admit()
-        self.assertEqual(self.runtime.tick()['state'], 'EXECUTION_UNCERTAIN')
+        self.assertEqual(self.runtime.tick()['state'], 'NEEDS_ATTENTION')
+        queued = get(self.db, self.fx.task['id'])
+        self.assertEqual(queued['last_error'], 'MATCH_REQUIRES_REVIEW')
+        self.assertEqual(queued['attempts'][0]['state'], 'REQUIRES_REVIEW')
         self.runtime.tick()
+        restarted = AutomaticAnswerRuntime(self.db.path, self.config, manifest=self.fx.fx.manifest_path)
+        restarted.tick()
+        from helpdesk.reviewed_question_queue import advance
+        resumed = advance(self.db, self.fx.task['id'])
+        self.assertEqual(resumed['phase'], 'NEEDS_ATTENTION')
+        self.assertEqual(resumed['last_error'], 'MATCH_REQUIRES_REVIEW')
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(self.db.one("SELECT COUNT(*) FROM outbox WHERE purpose='ANSWER'")[0], 0)
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM performance_units')[0], 0)
 
     def test_correction_after_matching_stops_old_teaching(self):
         self.admit()
@@ -162,6 +172,22 @@ class EgoTwoStageQueueTests(unittest.TestCase):
         self.assertEqual(queued['last_error'], 'AUTHORITATIVE_RUN_STALE')
         self.assertEqual(len(self.calls), 1)
         self.assertEqual(self.db.one("SELECT COUNT(*) FROM outbox WHERE purpose='ANSWER'")[0], 0)
+
+    def test_saved_unresolved_capture_becomes_review_after_interruption(self):
+        self.model = dict(STUDENT_ONLY, match_status='UNRESOLVED', unresolved_fields=['candidate_conflict'])
+        self.admit()
+        self.failure = 'after_capture'
+        self.assertEqual(self.runtime.tick()['state'], 'EXECUTION_UNCERTAIN')
+        self.failure = None
+        restarted = AutomaticAnswerRuntime(self.db.path, self.config, manifest=self.fx.fx.manifest_path)
+        restarted.tick()
+        queued = get(self.db, self.fx.task['id'])
+        self.assertEqual(queued['phase'], 'NEEDS_ATTENTION')
+        self.assertEqual(queued['last_error'], 'MATCH_REQUIRES_REVIEW')
+        restarted.tick()
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.db.one("SELECT COUNT(*) FROM outbox WHERE purpose IN ('ANSWER','REQUEST_IMAGE')")[0], 0)
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM performance_units')[0], 0)
 
     def correct_original(self):
         task = self.fx.fx.tasks.get_task(self.fx.task['id'])
