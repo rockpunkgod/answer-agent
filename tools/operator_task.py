@@ -38,6 +38,8 @@ def main():
     freeze.add_argument('--preparation', required=True)
     freeze.add_argument('--evidence-dir', required=True)
     freeze.add_argument('--ego-space', type=int, help='Freeze for an existing ego TaskSpace instead of the old browser backend')
+    freeze.add_argument('--ego-policy', choices=('DIRECT_ORIGINAL', 'MATCH_THEN_TEACH'), default='DIRECT_ORIGINAL',
+                        help='Freeze the native browser policy; use MATCH_THEN_TEACH for new two-stage acceptance tasks')
     freeze.add_argument('--ego-page', default='p1')
     commands.add_parser('list')
     args = parser.parse_args()
@@ -59,7 +61,7 @@ def main():
         elif args.command == 'freeze':
             result = intake.freeze(args.task, teaching_manifest=args.manifest,
                                    preparation_path=args.preparation, evidence_dir=args.evidence_dir,
-                                   ego_space=args.ego_space, ego_page=args.ego_page)
+                                   ego_space=args.ego_space, ego_page=args.ego_page, ego_policy=args.ego_policy)
         else:
             result = {'label': 'OPERATOR_TEST', 'drafts': intake.list_drafts(), 'tasks': intake.list_tasks()}
         print(json.dumps(result, ensure_ascii=False, indent=2))

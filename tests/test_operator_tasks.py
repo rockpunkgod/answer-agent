@@ -302,6 +302,29 @@ class OperatorTaskTests(unittest.TestCase):
         self.assertEqual(self.db.one('SELECT COUNT(*) FROM answers')[0],0)
         self.assertFalse((self.base/'future-evidence').exists())
 
+    def test_cli_freezes_explicit_two_stage_policy_without_browser_execution(self):
+        from tools.operator_task import main
+        manifest = build_bundle(question_type='阅读理解', skill_root=self.skill_root, output_root=self.base/'bundles')
+        task = self.review(self.intake.create_draft(self.payload))
+        original_outbox = self.db.one('SELECT COUNT(*) FROM outbox')[0]
+        argv = ['operator_task', '--database', str(self.db.path), 'freeze', '--task', task['id'],
+                '--manifest', str(manifest), '--preparation', str(self.base/'future-preparation.json'),
+                '--evidence-dir', str(self.base/'future-evidence'), '--ego-space', '7',
+                '--ego-page', 'p2', '--ego-policy', 'MATCH_THEN_TEACH']
+        with patch.object(sys, 'argv', argv), patch('builtins.print'), patch(
+                'helpdesk.ego_generation.EgoDeepSeekGenerator.match', side_effect=AssertionError('must not submit')):
+            main()
+        row = self.db.one('SELECT input_json FROM runs')
+        snapshot = json.loads(row[0])
+        self.assertEqual(snapshot['ego_policy'], 'MATCH_THEN_TEACH')
+        self.assertEqual(snapshot['ego_browser']['policy'], 'MATCH_THEN_TEACH')
+        self.assertEqual(snapshot['ego_browser']['space_id'], 7)
+        self.assertEqual(snapshot['ego_browser']['page'], 'p2')
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM runs')[0], 1)
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM answers')[0], 0)
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM outbox')[0], original_outbox)
+        self.assertFalse((self.base/'future-evidence').exists())
+
     def test_old_frozen_run_cannot_be_relabelled_as_ego(self):
         manifest=build_bundle(question_type='阅读理解',skill_root=self.skill_root,output_root=self.base/'bundles')
         task=self.review(self.intake.create_draft(self.payload))

@@ -4,7 +4,7 @@
 
 项目入口：`python -m tools.run_ego_deepseek --help`。Python 会从 PATH 或本机 `.local/share/ego/active_version_dir/ego-browser.exe` 找已安装 CLI；无需重装或修改系统 PATH。
 
-执行端固定当前 run 的已绑定会话 URL、request-id、TaskSpace/Page 和私有结果目录。上传只用原图及冻结 ANSWER 原文，文字直接用 `--question "第34题"` 或学生原话；也可从 `--prompt-file`原样读取。不上传内部 JSON，不要求 JSON 输出，不加 BEGIN/END 或其他机器标记。只向明确批准的本地文件授予上传能力，教学不能改成这份操作说明。
+执行端固定当前 run 的已绑定会话 URL、request-id、TaskSpace/Page 和私有结果目录。正常两阶段任务由现有自动答疑队列调度，不手工拆成两个无关联的 CLI 请求。第一阶段程序构造原图、实际候选及结构化核验提示；第二阶段上传冻结 ANSWER 原文，使用学生原话/题号和核验结果，输出自然语言教学稿。只向明确批准的本地文件授予上传能力，教学不能改成这份操作说明。
 
 程序用当前页面已验证的 `textarea[name="search"]`、`input[type="file"]`、`.ds-assistant-message-main-content` 操作：核验会话和空编辑器 → 哈希核对附件 → 直接上传并等解析完成 → 填入原话、逐字核对 → 保存已有回复身份和提交意图 → Enter 一次 → 等唯一新回复及其“朗读”完成控件 → 保存自然语言原文。旧回复不会当作本次答案。DOM 变化、附件失败、登录或控制权丢失时停止；不要猜新选择器或改用盲点。
 
@@ -18,9 +18,9 @@
 
 已有 ego 冻结 run、原消息清晰度确认及本机版本校验齐全时，可用 `python -m tools.run_ego_answer --help` 回流原 Workflow/Outbox。不得把旧 MCP run 改名为 ego；新任务在首次生成后绑定真实会话链接；后台须显式选择 ego_lite，生产默认配置本轮未更改。原始捕获与 ANSWER 检查不通过时停下，不把草稿计作实际交付。
 
-本地已审核任务可经 `tools.operator_task freeze --ego-space <编号> --ego-page p1` 冻结为 ego run；空间、页面和结果目录之后不可换，旧 MCP run 不可改名。冻结不打开网页；原队列可直接上传和生成，不再等待旧 MATCH/PREPARATION；不把“冻结成功”当作网页完成。
+本地已审核的新验收任务可经 `tools.operator_task --database <原库> freeze <原有参数> --ego-space <编号> --ego-page p1 --ego-policy MATCH_THEN_TEACH` 冻结；具体参数用该命令的 `--help` 查询。自动入口配置 `backend=ego_lite, ego_policy=MATCH_THEN_TEACH, space_id=<已有空间>, page=p1`，复用原 ReferenceLookupConfig 和 AutomaticAnswerConfig。空间、页面、策略和结果目录随后不可换。冻结不打开网页，不能当作网页完成。
 
-2026-10-19 用户确认：默认原图＋ANSWER原文、题号/学生原话，一次自然语言取答。新 ego run 固定 DIRECT_ORIGINAL；取消旧网页 MATCH、上下文 JSON 上传和标记协议依赖，保留本机原消息审核、版本、选项、教学检查和原 Outbox。不要为了符合旧两阶段文档恢复多一次模型调用。
+最新冻结验收标准覆盖2026-10-19的一次取答约定：新验收使用 MATCH_THEN_TEACH，首次独立问题必须核验后教学；旧 DIRECT_ORIGINAL 保持原冻结策略，仅用于原任务恢复，不能当成两阶段验收证据。两阶段都沿用原 queue/run/receipt/Outbox，无需旧 Windows-MCP 的 PREPARATION 或标记协议。捕获后中断由原队列恢复，SUBMITTED/UNKNOWN 不重复提交。
 
 新会话 Enter 后先记录真实 URL，再等待正文；若首次 Enter 未确认且没有 URL 记录，停在 NEW_SESSION_IDENTITY_REQUIRES_MANUAL_CHECK，不从当前页面猜学生归属。已记录 URL 的原请求可只读恢复，禁止回首页重发。
 
