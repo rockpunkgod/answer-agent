@@ -121,6 +121,44 @@ class MatchingTests(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, 'BIJECTION'):
                     matching.validate_result(changed, wrong)
 
+    def test_seven_five_mapping_requires_all_seven_unique_student_labels(self):
+        cid = self.candidate()
+        frozen = matching.prepare_input(self.db, self.run, self.lookup([cid]))
+        texts = ('We walked through the forest.', 'The museum closes at noon.',
+                 'Her brother repairs bicycles.', 'Rain delayed our flight.',
+                 'They grow vegetables in winter.', 'Music helps him concentrate.',
+                 'You should charge your phone.')
+        student = replace(Question.from_dict(frozen['student_question']), kind='seven_five_blank',
+            options=tuple(Option.confirmed(label, text, i, 'SELF_AUTHORED_TEST')
+                          for i, (label, text) in enumerate(zip('ABCDEFG', texts))))
+        for order in (tuple(range(7)), tuple(reversed(range(7))), (1, 2, 3, 4, 5, 6, 0)):
+            changed = copy.deepcopy(frozen)
+            changed['student_question'] = student.to_dict()
+            reference = replace(student, options=tuple(
+                Option.confirmed(label, texts[index], i, 'SELF_AUTHORED_TEST')
+                for i, (label, index) in enumerate(zip('ABCDEFG', order))))
+            changed['question_match_input']['candidates'][0]['reference_question'] = reference.to_dict()
+            reordered = order != tuple(range(7))
+            model = dict(match_status='MATCH', selected_candidate=cid,
+                relation=['SAME_CONTENT'] + (['OPTION_REORDER'] if reordered else []),
+                differences=['OPTION_ORDER'] if reordered else ['FORMATTING_ONLY'],
+                option_mapping={label: 'ABCDEFG'[index] for label, index in zip('ABCDEFG', order)},
+                unresolved_fields=[])
+            with self.subTest(order=order):
+                self.assertEqual(matching.validate_result(changed, model)['status'], 'VERIFIED_REFERENCE')
+                for invalid in ('missing', 'duplicate'):
+                    wrong = copy.deepcopy(model)
+                    if invalid == 'missing':
+                        wrong['option_mapping'].pop('G')
+                    else:
+                        wrong['option_mapping']['G'] = wrong['option_mapping']['A']
+                    with self.assertRaisesRegex(ValueError, 'BIJECTION'):
+                        matching.validate_result(changed, wrong)
+                incomplete = copy.deepcopy(changed)
+                incomplete['student_question']['options'] = incomplete['student_question']['options'][:-1]
+                with self.assertRaisesRegex(ValueError, 'STUDENT_SOURCE_INCOMPLETE'):
+                    matching.validate_result(incomplete, model)
+
     def test_negation_conditions_missing_options_and_unresolved_cannot_claim_match(self):
         cid = self.candidate()
         frozen = matching.prepare_input(self.db, self.run, self.lookup([cid]))

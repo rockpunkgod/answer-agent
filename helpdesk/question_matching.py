@@ -164,7 +164,8 @@ def validate_result(snapshot, result):
     ref_options = {o.id: o.label for o in reference.options}
     stu_options = {o.id: o.label for o in student.options}
     expected = {ref_options[r]: stu_options[s] for r, s in comparison.option_mapping}
-    _require(len(expected) == 4 and len(set(expected.values())) == 4 and result['option_mapping'] == expected,
+    option_count = len(student.option_labels)
+    _require(len(expected) == option_count and len(set(expected.values())) == option_count and result['option_mapping'] == expected,
              'MATCH_OPTION_BIJECTION_INVALID')
     _require(len(result['relation']) == len(set(result['relation']))
              and set(result['relation']) == set(comparison.relation)
