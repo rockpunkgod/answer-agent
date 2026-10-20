@@ -1,5 +1,14 @@
 # 当前能力与缺口
 
+## scan自动关联原时间证据（2026-10-20）
+
+将已真实验证的悬停步骤接入现有scan，不增加工具或服务。需本机审核time_hover空白区域/点击点；清除选择后重新定位同一位置唯一气泡，悬停并局部OCR时间，再将后续复制绑定到当前气泡图像。首次实测因时间标签阴影改变上缘3个像素而停止；确认几何未变后，在尚未接受文字前重新核验唯一气泡并固定悬停后的当前哈希，后续复制仍做原内容区域/目标核验，未弱化发送守卫。
+
+REAL：一次scan自动返回原文及10/19 23:12:32、年份null、REQUIRES_YEAR_EVIDENCE及帧/裁剪证据；无需Agent另行悬停。原source_sent_at仍null，不填当前时间、不创建Ack/绩效。已向用户询问这条测试消息是否确认2026-10-19，仅限该条、待回复。原始观察不可覆盖，poll对后来取得的时间追加独立事件并按观察键+标签去重。
+
+UNIT/MOCK：相关84项通过、0失败/跳过。覆盖缺年份不补、标签缺失/歧义/无效/不一致、悬停后找不到同一气泡即停止、时间OCR不可用仍保留缺失及既有观察补时间不重计。控制台命令为python -X utf8 -B -m unittest -q tests.test_wecom_visible tests.test_wecom_tools tests.test_wecom_cli tests.test_wecom_native tests.test_wecom_control_ocr tests.test_collector_ack_native tests.test_collector_test_ack。未发送消息/调用DeepSeek，完整任务仍1/20，NOT_READY。
+
+
 ## 恢复桌面后的真实自动定位/复制/去重（2026-10-20）
 
 用户明确回复已停止使用，可以继续。原过期会话保留；重新激活主窗口并取得新快照，窗口/完整头部/头像与原审核值精确匹配后，建立本次新限时只读会话scan-resumed-readonly-session.json，未启用发送。

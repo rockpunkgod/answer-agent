@@ -10,6 +10,28 @@ from helpdesk import wecom_control_ocr as controls
 
 
 class ControlOcrTests(unittest.TestCase):
+    def time_runner(self,labels):
+        return Mock(return_value=SimpleNamespace(returncode=0,stdout=json.dumps({
+            'available':True,'image_size':[160,80],'time_labels':labels}).encode()))
+
+    def time_label(self):
+        return {'raw':'10 / 19 23 ： 12 ： 32','normalized':'10/1923:12:32','year':None,
+                'month':'10','day':'19','hour':'23','minute':'12','second':'32'}
+
+    def test_time_label_keeps_missing_year_and_never_uses_collection_time(self):
+        result=controls.read_time_label('record',[10,20,50,40],runner=self.time_runner([self.time_label()]))
+        self.assertEqual(result['time_status'],'REQUIRES_YEAR_EVIDENCE')
+        self.assertIsNone(result['source_sent_at'])
+        self.assertIsNone(result['components']['year'])
+        self.assertFalse(result['formal_statistics_eligible'])
+        self.assertTrue(Path(result['crop_path']).is_file())
+
+    def test_time_label_missing_ambiguous_invalid_or_inconsistent_stops(self):
+        label=self.time_label()
+        for labels in ([],[label,label],[{**label,'month':'13'}],[{**label,'normalized':'10/1924:12:32'}]):
+            with self.assertRaisesRegex(ValueError,'TIME_LABEL_NOT_UNIQUE_OR_UNAVAILABLE'):
+                controls.read_time_label('record',[10,20,50,40],runner=self.time_runner(labels))
+
     def setUp(self):
         from PIL import Image
         temp=tempfile.TemporaryDirectory();self.addCleanup(temp.cleanup)

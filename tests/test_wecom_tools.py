@@ -226,6 +226,51 @@ class WeComToolTests(unittest.TestCase):
         with closing(Store(self.db_path)) as db:
             self.assertEqual(db.one('SELECT count(*) FROM outbox')[0],1)
 
+    def test_hover_time_stops_if_same_incoming_bubble_cannot_be_located(self):
+        from unittest.mock import Mock
+        self.pin['display_bounds']=[0,0,200,100]
+        record={'attempt_id':'anonymous','content':[{'type':'image','path':str(self.image)}]}
+        recipe={'region_box':[20,20,80,50],'time_hover':{'blank':{
+            'region_box':[0,0,10,10],'region_hash':self.pin['avatar_hash'],'point':[5,5]}}}
+        desktop=Mock()
+        with patch.object(self.service,'_frame',return_value=(record,{})), \
+                patch('helpdesk.wecom_visible.incoming_bubbles',return_value=[]), \
+                patch('helpdesk.wecom_control_ocr.read_time_label') as read, \
+                patch('helpdesk.wecom_tools.time.sleep'):
+            with self.assertRaisesRegex(ValueError,'TIME_MESSAGE_GEOMETRY_CHANGED'):
+                self.service._hover_time(desktop,self.pin,record,recipe)
+        read.assert_not_called()
+        self.assertFalse(any(call.args[0]=='Clipboard' for call in desktop._call.call_args_list))
+
+    def test_hover_time_unavailable_keeps_original_time_missing(self):
+        from unittest.mock import Mock
+        self.pin['display_bounds']=[0,0,200,100]
+        record={'attempt_id':'anonymous','content':[{'type':'image','path':str(self.image)}]}
+        recipe={'region_box':[20,20,80,50],'time_hover':{'blank':{
+            'region_box':[0,0,10,10],'region_hash':self.pin['avatar_hash'],'point':[5,5]}}}
+        with patch.object(self.service,'_frame',return_value=(record,{})), \
+                patch('helpdesk.wecom_visible.incoming_bubbles',return_value=[[20,20,80,50]]), \
+                patch('helpdesk.wecom_control_ocr.read_time_label',side_effect=ValueError('TIME_LABEL_NOT_UNIQUE_OR_UNAVAILABLE')), \
+                patch('helpdesk.wecom_tools.time.sleep'):
+            _,_,evidence=self.service._hover_time(Mock(),self.pin,record,recipe)
+        self.assertIsNone(evidence['source_sent_at'])
+        self.assertEqual(evidence['time_status'],'REQUIRES_ORIGINAL_TIME_EVIDENCE')
+        self.assertFalse(evidence['formal_statistics_eligible'])
+
+    def test_new_time_evidence_enriches_existing_observation_without_recount(self):
+        message={'id':'same-record','text':'raw original','source_sent_at':None}
+        with patch.object(self.service,'get_messages',return_value={'status':'OK','messages':[message]}):
+            self.assertEqual(self.service.poll_messages(self.target)['new_observation_count'],1)
+            message['source_time_evidence']={'normalized_original_time_label':'10/1923:12:32',
+                'time_status':'REQUIRES_YEAR_EVIDENCE','components':{'year':None}}
+            second=self.service.poll_messages(self.target);third=self.service.poll_messages(self.target)
+        self.assertEqual(second['new_observation_count'],0)
+        self.assertEqual(second['new_time_evidence_count'],1)
+        self.assertEqual(third['new_time_evidence_count'],0)
+        with closing(Store(self.db_path)) as db:
+            self.assertEqual(db.one("SELECT count(*) FROM audit WHERE event='WECOM_VISIBLE_OBSERVATION'")[0],1)
+            self.assertEqual(db.one('SELECT count(*) FROM outbox')[0],1)
+
     def test_failed_poll_never_consumes_observations(self):
         with patch.object(self.service,'get_messages',side_effect=ValueError('WINDOW_CHANGED')):
             result=self.service.call('poll_messages',chat_id=self.target)

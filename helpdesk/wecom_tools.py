@@ -329,8 +329,12 @@ class WeComTools:
         self._require_input()
         messages=[]
         with self._desktop() as (desktop,pin):
-            for recipe in recipes:
+            for original_recipe in recipes:
+                recipe=dict(original_recipe)
                 record=self._message_frame(desktop,pin,recipe)
+                time_evidence=None
+                if recipe.get('time_hover',{}).get('reviewed') is True:
+                    record,recipe,time_evidence=self._hover_time(desktop,pin,record,recipe)
                 nonce='wecom-read-pending-'+str(time.time_ns())
                 desktop._call('Clipboard',mode='set',text=nonce)
                 desktop._call('Click',loc=recipe['point'],button='right')
@@ -358,10 +362,51 @@ class WeComTools:
                 messages.append({'id':recipe['id'],'text':text,'platform_message_id':None,
                     'source_sent_at':None,'time_status':'REQUIRES_ORIGINAL_TIME_EVIDENCE',
                     'observed_at':now(),'evidence_attempt':result.get('attempt_id')})
+                if time_evidence:
+                    messages[-1]['source_time_evidence']=time_evidence
+                    messages[-1]['time_status']=time_evidence.get('time_status','REQUIRES_ORIGINAL_TIME_EVIDENCE')
         self._audit('get_messages','VISIBLE_RECORDS_READ',controls=['message_list','copy_menu'],
                     evidence={'count':len(messages)})
         return {'status':'OK','messages':messages,'scope':'REVIEWED_VISIBLE_RECORDS_ONLY',
                 'continuous_listener':False,'complete_history':False}
+
+    def _hover_time(self,desktop,pin,record,recipe):
+        from PIL import Image
+        config=recipe['time_hover'];blank=config['blank'];bounds=pin['display_bounds']
+        x=(blank['point'][0]-bounds[0])*pin['image_size'][0]/(bounds[2]-bounds[0])
+        y=(blank['point'][1]-bounds[1])*pin['image_size'][1]/(bounds[3]-bounds[1])
+        box=blank['region_box']
+        if not box[0]<=x<box[2] or not box[1]<=y<box[3]:raise ValueError('TIME_CLEAR_POINT_OUTSIDE_REGION')
+        self._checked_region(record,blank)
+        desktop._call('Click',loc=blank['point'])
+        record,_=self._frame(desktop,pin)
+        path=next(c['path'] for c in record['content'] if c.get('type')=='image')
+        with Image.open(path) as image:
+            recipe={**recipe,'region_hash':pixel_hash(image,recipe['region_box'])}
+        body=recipe['region_box']
+        point=[bounds[0]+int((body[0]+5)*(bounds[2]-bounds[0])/pin['image_size'][0]),
+               bounds[1]+int((body[1]+body[3])*(bounds[3]-bounds[1])/(2*pin['image_size'][1]))]
+        desktop._call('Move',loc=point);time.sleep(1.2)
+        record,_=self._frame(desktop,pin)
+        # The timestamp's shadow can change the bubble's upper edge. At this
+        # point no text has been accepted yet: bind the upcoming clipboard read
+        # to the current, uniquely located bubble rather than its pre-hover paint.
+        path=next(c['path'] for c in record['content'] if c.get('type')=='image')
+        from .wecom_visible import incoming_bubbles
+        with Image.open(path) as image:
+            boxes=incoming_bubbles(image,self.session.get('incoming_discovery',{}))
+            if boxes.count(body)!=1:raise ValueError('TIME_MESSAGE_GEOMETRY_CHANGED')
+            recipe={**recipe,'region_hash':pixel_hash(image,body)}
+        from .wecom_control_ocr import read_time_label
+        crop=[body[0]-6,body[1]-23,body[0]+344,body[1]+9]
+        try:
+            evidence=read_time_label(self.root/'data/private/wecom-native'/(record['attempt_id']+'.json'),
+                                     crop,display_index=pin['display_index'])
+        except ValueError as exc:
+            evidence={'time_status':'REQUIRES_ORIGINAL_TIME_EVIDENCE','reason':str(exc),
+                      'source_sent_at':None,'formal_statistics_eligible':False}
+        current,_=self._frame(desktop,pin);self._checked_region(current,recipe)
+        return current,recipe,evidence
 
     def history_page(self, chat_id):
         """One reviewed native upward scroll; never claims a history import."""
@@ -426,6 +471,8 @@ class WeComTools:
                                  bounds[1]+int((box[1]+box[3])*(bounds[3]-bounds[1])/(2*height))],
                         'copy_menu':{'ocr_only':True,'region_box':config['copy_menu_search_box'],
                                      'ocr_search_box':config['copy_menu_search_box']}})
+                    if config.get('time_hover',{}).get('reviewed') is True:
+                        recipes[-1]['time_hover']=config['time_hover']
         if not recipes:
             return {'status':'NO_VISIBLE_TEXT_CANDIDATES','messages':[],
                     'scope':'REVIEWED_VISIBLE_INCOMING_LANE_ONLY','chat_empty':None,'chat_empty_verified':False,
@@ -450,12 +497,20 @@ class WeComTools:
                 else self.get_messages(chat_id))
         if result.get('status')!='OK':
             return result
-        fresh=[]
+        fresh=[];new_time_evidence=0
         with closing(Store(self.database)) as db, db.transaction():
             for message in result['messages']:
                 key=sha256(encode([chat_id,message['id'],message['text']]).encode()).hexdigest()
                 exists=db.one("SELECT 1 FROM audit WHERE event='WECOM_VISIBLE_OBSERVATION' "
                               "AND json_extract(details,'$.observation_key')=? LIMIT 1",(key,))
+                evidence=message.get('source_time_evidence') or {}
+                label=evidence.get('normalized_original_time_label')
+                if label and not db.one("SELECT 1 FROM audit WHERE event='WECOM_VISIBLE_TIME_OBSERVATION' "
+                        "AND json_extract(details,'$.observation_key')=? "
+                        "AND json_extract(details,'$.normalized_original_time_label')=? LIMIT 1",(key,label)):
+                    Workflow(db)._event('WECOM_VISIBLE_TIME_OBSERVATION',details={**evidence,
+                        'observation_key':key,'source_sent_at':None,'formal_statistics_eligible':False})
+                    new_time_evidence+=1
                 if exists:
                     continue
                 Workflow(db)._event('WECOM_VISIBLE_OBSERVATION',details={
@@ -464,6 +519,7 @@ class WeComTools:
                 fresh.append(message)
         return {**result,'status':'OBSERVATIONS_SAVED' if fresh else 'NO_NEW_OBSERVATIONS',
                 'messages':fresh,'new_observation_count':len(fresh),
+                'new_time_evidence_count':new_time_evidence,
                 'automatic_ack_eligible':False,'platform_identity_verified':False}
 
     def open_image(self,message_id):
