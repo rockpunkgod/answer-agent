@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 import tempfile
+import time
 from types import SimpleNamespace
 import unittest
 from unittest.mock import Mock,patch
@@ -89,6 +90,28 @@ class NativeGuardTests(unittest.TestCase):
         self.assertEqual(result['backend'],'WECOM_NATIVE')
         self.native.user.mouse_event.assert_called_once_with(0x0800,0,0,360,0)
         self.assertEqual(self.native.foreground.call_count,2)
+
+    def test_owned_popup_requires_recent_review_exact_geometry_and_live_owner(self):
+        popup=dict(self.current,handle=2,left=290,top=100,width=100,height=100)
+        self.native.pin={'reviewed_popup':dict(window=dict(popup),owner_handle=1,reviewed_at=time.time())}
+        self.native.foreground=Mock(side_effect=lambda handle=None:dict(popup if handle==2 else self.current))
+        self.native.user.GetWindow=Mock(return_value=1)
+        self.native.call('Click',{'loc':[350,150]})
+        self.assertEqual(self.native.user.mouse_event.call_count,2)
+        for change in ('owner','layout','process','expired','future','outside','unreviewed'):
+            with self.subTest(change=change):
+                self.native.user.mouse_event.reset_mock()
+                self.native.user.SetCursorPos.reset_mock()
+                self.native.user.GetWindow.return_value=3 if change=='owner' else 1
+                popup['left']=291 if change=='layout' else 290
+                popup['process']='OtherApp' if change=='process' else 'WXWork'
+                review=self.native.pin['reviewed_popup']
+                review['reviewed_at']=time.time()+60 if change=='future' else time.time()-31 if change=='expired' else time.time()
+                if change=='unreviewed':self.native.pin={}
+                with self.assertRaises(ValueError):
+                    self.native.call('Click',{'loc':[500,150] if change=='outside' else [350,150]})
+                self.native.user.mouse_event.assert_not_called()
+                self.native.user.SetCursorPos.assert_not_called()
 
     def test_scroll_rejects_arbitrary_direction_and_extra_steps(self):
         for args in ({'loc':[150,150],'direction':'down'},

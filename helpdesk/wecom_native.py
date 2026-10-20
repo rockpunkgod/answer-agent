@@ -7,6 +7,7 @@ import ctypes
 from ctypes import wintypes as w
 from datetime import datetime,timezone
 import json
+import math
 import os
 from pathlib import Path
 import time
@@ -32,6 +33,7 @@ class NativeWeComTransport:
         self.user.IsWindow.argtypes=[w.HWND]
         self.user.IsIconic.argtypes=[w.HWND]
         self.user.GetWindowRect.argtypes=[w.HWND,ctypes.POINTER(w.RECT)]
+        self.user.GetWindow.argtypes=[w.HWND,w.UINT];self.user.GetWindow.restype=w.HWND
         self.user.GetCursorPos.argtypes=[ctypes.POINTER(w.POINT)]
         self.user.GetWindowThreadProcessId.argtypes=[w.HWND,ctypes.POINTER(w.DWORD)]
         self.user.GetWindowTextW.argtypes=[w.HWND,w.LPWSTR,ctypes.c_int]
@@ -122,7 +124,28 @@ class NativeWeComTransport:
         if point is not None:
             x,y=point
             if not(current['left']<=x<current['left']+current['width'] and current['top']<=y<current['top']+current['height']):
-                raise ValueError('POINT_OUTSIDE_VERIFIED_WINDOW')
+                self._check_owned_popup(point,current)
+
+    def _check_owned_popup(self,point,current):
+        # A date picker can extend beyond its search window. Accept only one
+        # explicitly reviewed, short-lived popup with a live direct owner link.
+        reviewed=getattr(self,'pin',{}).get('reviewed_popup')
+        if not isinstance(reviewed,dict):raise ValueError('POINT_OUTSIDE_VERIFIED_WINDOW')
+        stamp=reviewed.get('reviewed_at');expected=reviewed.get('window')
+        if (type(stamp) not in (int,float) or not math.isfinite(stamp)
+                or not 0<=time.time()-stamp<=30 or not isinstance(expected,dict)
+                or set(expected)!=set(current) or expected.get('process')!='WXWork'
+                or any(type(expected.get(k)) is not int for k in ('handle','left','top','width','height'))
+                or expected['handle']<=0 or expected['width']<=0 or expected['height']<=0
+                or reviewed.get('owner_handle')!=current['handle']):
+            raise ValueError('REVIEWED_POPUP_INVALID_OR_EXPIRED')
+        popup=self.foreground(expected['handle'])
+        owner=int(self.user.GetWindow(expected['handle'],4) or 0)
+        x,y=point
+        if (popup!=expected or owner!=current['handle'] or self.foreground()!=current
+                or not(popup['left']<=x<popup['left']+popup['width']
+                       and popup['top']<=y<popup['top']+popup['height'])):
+            raise ValueError('REVIEWED_POPUP_CHANGED')
 
     def _check_modifiers(self):
         # Do not combine our literal paste/click with a user's held shortcut.
