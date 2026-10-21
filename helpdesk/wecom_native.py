@@ -70,6 +70,54 @@ class NativeWeComTransport:
             raise ValueError('NATIVE_POINTER_UNAVAILABLE')
         return [point.x,point.y]
 
+    def input_tick(self):
+        class LastInput(ctypes.Structure):
+            _fields_=[('size',w.UINT),('tick',w.DWORD)]
+        info=LastInput();info.size=ctypes.sizeof(info)
+        if not self.user.GetLastInputInfo(ctypes.byref(info)):
+            raise ValueError('INPUT_STATE_UNAVAILABLE')
+        return int(info.tick)
+
+    def idle_seconds(self):
+        self.kernel.GetTickCount.restype=w.DWORD
+        return ((int(self.kernel.GetTickCount())-self.input_tick())&0xffffffff)/1000
+
+    def activate_personal_read_window(self,handle,process_id):
+        """One scoped restore/activation for an explicitly authorized read action."""
+        self.guard();self._check_modifiers();self._interactive_desktop()
+        target=self.focus_window(handle)
+        if target['process']!='Weixin' or target['process_id']!=process_id:
+            raise ValueError('PERSONAL_READ_WINDOW_IDENTITY_CHANGED')
+        self.user.ShowWindow.argtypes=[w.HWND,ctypes.c_int]
+        if self.user.IsIconic(handle):self.user.ShowWindow(handle,9)
+        if self.user.GetForegroundWindow()!=handle:self.user.SetForegroundWindow(handle)
+        deadline=time.monotonic()+1
+        while self.user.GetForegroundWindow()!=handle and time.monotonic()<deadline:time.sleep(.05)
+        if self.user.GetForegroundWindow()!=handle:raise ValueError('FOREGROUND_READ_ACTIVATION_UNCONFIRMED')
+        return self.focus_window(handle)
+
+    def focus_window(self,handle=None):
+        value=self.foreground(handle)
+        pid=w.DWORD();self.user.GetWindowThreadProcessId(value['handle'],ctypes.byref(pid))
+        title=ctypes.create_unicode_buffer(512)
+        self.user.GetWindowTextW(value['handle'],title,len(title))
+        return {**value,'process_id':int(pid.value),'title':title.value}
+
+    def restore_focus(self,original,target):
+        """One conditional restoration; never reclaims a user's changed foreground."""
+        if self.focus_window()!=target:
+            return 'SKIPPED_FOREGROUND_CHANGED'
+        if original==target:
+            return 'ORIGINAL_ALREADY_FOREGROUND'
+        if (not self.user.IsWindow(original['handle']) or self.user.IsIconic(original['handle'])
+                or self.focus_window(original['handle'])!=original):
+            return 'SKIPPED_ORIGINAL_CHANGED'
+        if self.focus_window()!=target:
+            return 'SKIPPED_FOREGROUND_CHANGED'
+        self.guard()
+        self.user.SetForegroundWindow(original['handle'])
+        return 'RESTORED' if self.focus_window()==original else 'RESTORE_UNCONFIRMED'
+
     def activate(self):
         self.guard()
         self._check_modifiers()

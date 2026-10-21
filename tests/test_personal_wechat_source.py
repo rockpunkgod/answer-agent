@@ -240,8 +240,9 @@ class ReplicaSafetyTests(unittest.TestCase):
             media.download_image.assert_not_called()
             from hashlib import sha256
             def local_image(*args,**kwargs):
-                file=Path(kwargs['save_dir'])/'anonymous-fixture.jpg'
-                file.write_bytes(b'anonymous simulated media bytes')
+                from PIL import Image
+                file=Path(kwargs['save_dir'])/'anonymous-fixture.png'
+                Image.new('RGB',(12,16),'white').save(file)
                 return str(file)
             media.download_image.side_effect=local_image
             media.image_status.return_value={'tiers':{'original':3000,'mid':1000},'available':True,'reason':'ok'}
@@ -252,6 +253,16 @@ class ReplicaSafetyTests(unittest.TestCase):
             self.assertEqual(saved['sha256'],sha256(Path(saved['path']).read_bytes()).hexdigest())
             derivative=reader.read_image(message,media,root,tier='mid')
             self.assertFalse(derivative['original_attachment']);self.assertEqual(derivative['status'],'LOCAL_DERIVATIVE_READ')
+            self.assertEqual(saved['image'],{'format':'PNG','width':12,'height':16})
+            def corrupt_image(*args,**kwargs):
+                file=Path(kwargs['save_dir'])/'incomplete.jpg'
+                file.write_bytes(b'\xff\xd8truncated anonymous media')
+                return str(file)
+            media.download_image.side_effect=corrupt_image
+            corrupt=reader.original_image(message,media,root)
+            self.assertEqual(corrupt['status'],'MEDIA_READ_UNVERIFIED')
+            self.assertEqual(corrupt['reason'],'LOCAL_IMAGE_DECODE_FAILED')
+            self.assertTrue(Path(corrupt['path']).exists())
             with tempfile.NamedTemporaryFile(delete=False) as stream:
                 stream.write(b'anonymous');outside=Path(stream.name)
             self.addCleanup(outside.unlink)

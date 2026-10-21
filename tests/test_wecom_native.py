@@ -31,6 +31,35 @@ class NativeGuardTests(unittest.TestCase):
         self.native.user.SetCursorPos.side_effect=move
         self.native.user.GetCursorPos=Mock(side_effect=position)
 
+    def test_focus_release_never_reclaims_changed_foreground(self):
+        original={'handle':2,'process':'Original'}
+        target={'handle':1,'process':'Weixin'}
+        self.native.focus_window=Mock(return_value={'handle':3,'process':'UserApp'})
+        self.native.user.SetForegroundWindow=Mock()
+        self.assertEqual(self.native.restore_focus(original,target),'SKIPPED_FOREGROUND_CHANGED')
+        self.native.user.SetForegroundWindow.assert_not_called()
+
+    def test_focus_release_checks_original_identity_and_restores_once(self):
+        original={'handle':2,'process':'Original'}
+        target={'handle':1,'process':'Weixin'}
+        self.native.user.IsWindow=Mock(return_value=True)
+        self.native.user.IsIconic=Mock(return_value=False)
+        self.native.user.SetForegroundWindow=Mock()
+        self.native.focus_window=Mock(side_effect=[target,original,target,original])
+        self.assertEqual(self.native.restore_focus(original,target),'RESTORED')
+        self.native.user.SetForegroundWindow.assert_called_once_with(2)
+        self.native.focus_window=Mock(side_effect=[target,{'handle':2,'process':'Different'}])
+        self.native.user.SetForegroundWindow.reset_mock()
+        self.assertEqual(self.native.restore_focus(original,target),'SKIPPED_ORIGINAL_CHANGED')
+        self.native.user.SetForegroundWindow.assert_not_called()
+
+    def test_personal_read_activation_rejects_wrong_process_before_activation(self):
+        self.native.focus_window=Mock(return_value={'process':'WXWork','process_id':7})
+        self.native.user.SetForegroundWindow=Mock()
+        with self.assertRaisesRegex(ValueError,'IDENTITY_CHANGED'):
+            self.native.activate_personal_read_window(1,7)
+        self.native.user.SetForegroundWindow.assert_not_called()
+
     def test_pointer_moved_after_positioning_stops_before_click_scroll_or_paste(self):
         self.native.pointer=Mock(return_value=[1595,1416])
         self.native._clipboard=Mock()

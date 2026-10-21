@@ -15,6 +15,23 @@ HASHES={'db.py':'9d4eba69e868dea8000d8acdbaed723149cf8732c52e097f23fb3b07fa5ddc5
         'media.py':'ef2c2943e0b9f3a707900ee7eb08b58839a1d1e1d8eddf87a7942869bc4da221'}
 
 
+def verify_local_image(file):
+    """Decode the saved copy before treating cached media as usable evidence."""
+    import warnings
+    from PIL import Image
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter('error',Image.DecompressionBombWarning)
+            with Image.open(file) as image:
+                image.verify()
+            # JPEG verify() alone does not decode scan data or detect truncation.
+            with Image.open(file) as image:
+                image.load()
+                return {'format':image.format,'width':image.width,'height':image.height}
+    except (OSError,ValueError,SyntaxError,Image.DecompressionBombWarning,Image.DecompressionBombError):
+        return None
+
+
 class StrictReadLogger:
     def debug(self,*args,**kwargs):pass
     def info(self,*args,**kwargs):pass
@@ -157,7 +174,13 @@ class ReplicaSnapshotReader:
         file=Path(path).resolve(strict=True)
         if not file.is_relative_to(root) or file.stat().st_size>25_000_000:
             raise ValueError('MEDIA_PATH_OR_SIZE_NOT_ALLOWED')
+        image=verify_local_image(file)
+        if image is None:
+            return {'status':'MEDIA_READ_UNVERIFIED','message_id':message.message_id,'tier':tier,
+                    'reason':'LOCAL_IMAGE_DECODE_FAILED','path':str(file),
+                    'sha256':sha256(file.read_bytes()).hexdigest()}
         self.guard()
         return {'status':'LOCAL_ORIGINAL_READ' if tier=='original' else 'LOCAL_DERIVATIVE_READ',
                 'message_id':message.message_id,'source_locator':locator,'tier':tier,'original_attachment':tier=='original',
-                'path':str(file),'sha256':sha256(file.read_bytes()).hexdigest(),'size':file.stat().st_size}
+                'path':str(file),'sha256':sha256(file.read_bytes()).hexdigest(),'size':file.stat().st_size,
+                'image':image}
