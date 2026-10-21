@@ -25,6 +25,15 @@ if ($null -ne $ExistingState) {
         throw "Another service is using port $Port; select a different port."
     }
     # Opening the workbench must not undo a deliberate pause or retry a blocked source.
+    if ($PSBoundParameters.ContainsKey('CollectorConfig')) {
+        if (-not (Test-Path -LiteralPath $CollectorConfig -PathType Leaf)) {
+            throw 'The requested collector config does not exist; the running service was not changed.'
+        }
+        $RequestedCollectorHash = (Get-FileHash -LiteralPath $CollectorConfig -Algorithm SHA256).Hash.ToLowerInvariant()
+        if ($ExistingState.collector.configuration_sha256 -ne $RequestedCollectorHash) {
+            throw 'The running workbench uses a different collector config. Stop it or choose another port; no source was switched.'
+        }
+    }
     if ($SourceReviewManifest -and -not $ExistingState.source_review_enabled) {
         throw 'The existing workbench has source review disabled. Stop that service before enabling the reviewed teaching manifest; no duplicate was started.'
     }

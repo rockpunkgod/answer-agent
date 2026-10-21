@@ -1,3 +1,11 @@
+### 2026-10-21：个人微信采集接入现有工作台（未运行真实账号）
+
+复用 CollectorSupervisor 的原线程和控制入口，个人来源每轮调用隔离 poll 子进程，继续写原 CollectorStore，不跑 ACK drain、不新建业务完成台账。工作台显示 PERSONAL_WECHAT_LOCAL，只读原文区展示本库消息、发送人和原始时间；不标为官方存档，不用假定0条替代未知统计。失败或超时停止，配置改变要求重启；JSON/TOML同库校验保留。启动脚本显式指定不同采集配置时拒绝复用旧服务，避免误用旧来源。
+
+私有 collector.local.toml 已建立且仅离线核对路径，未覆盖已有配置，未开启轮询。启动方式：`./run_current_demo.ps1 -Port 8768 -CollectorConfig data/private/replica-runtime/collector.local.toml -NoAutoCollect`，在工作台点击启动；去掉 NoAutoCollect 可自动启动。先完成历史基线，不要同时另开独立 watch。范围仍为只读采集/入库/展示，个人来源至 AnswerTask、ACK、教学、发送和正式绩效的原限制不解除。
+
+UNIT/MOCK及匿名HTTP/Windows启动器回归：`python -X utf8 -B -m unittest -q tests.test_personal_wechat_polling tests.test_collector_supervisor tests.test_personal_wechat_collect tests.test_personal_wechat_source tests.test_current_demo_launcher tests.test_demo_http`，64项通过、0失败/跳过，24.541秒；JS语法检查通过。初次新增回归1失败1错误：测试命令下标误期望，以及GET中原后置sqlite3局部导入造成原文分支错误；均修正后完整回归通过。不是Mock替代真实账号；本轮无真实采集/外发，无正式绩效修改。真实持续新到达、原图补下载和下游全链路保持待验收。
+
 ### 2026-10-21：独立采集入口（未启用生产）
 
 新增 tools/personal_wechat_collect.py：history / poll / watch，脱离答疑主程序运行，复用原 CollectorStore 与持久化游标。watch 为持续增量轮询，每轮隔离子进程，失败/超时即停；不复用上游失败后仍推进水位的 Listener。采集模式只加载 db.py，不加载媒体、UIA、桌面传输、答疑或发送模块；历史不 ACK，个人来源生产守卫不解除。原媒体和诊断命令保留，不为精简重写已稳定内核。

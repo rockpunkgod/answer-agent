@@ -6,6 +6,7 @@ question ID, or free-form instruction. Each request opens its own Store.
 from __future__ import annotations
 
 import argparse
+from hashlib import sha256
 from contextlib import closing
 from dataclasses import asdict, replace
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -403,7 +404,9 @@ class DemoHTTPServer(ThreadingHTTPServer):
         self.worker_api_token = os.environ.get(worker_token_env, '')
         if any(c in self.worker_api_token for c in ('\r','\n','\x00')):
             raise ValueError('Invalid Worker environment token')
-        self.collector_config = tomllib.loads(Path(collector_config).resolve().read_text(encoding="utf-8")) if collector_config else None
+        collector_bytes=Path(collector_config).resolve().read_bytes() if collector_config else None
+        self.collector_config = tomllib.loads(collector_bytes.decode('utf-8')) if collector_bytes is not None else None
+        self.collector_config_sha256=sha256(collector_bytes).hexdigest() if collector_bytes is not None else None
         stage = (self.collector_config or {}).get("stage")
         if stage is not None and not isinstance(stage, dict):
             raise ValueError("stage must be a configuration table")
@@ -582,13 +585,14 @@ class DemoHTTPServer(ThreadingHTTPServer):
         archive = config.get("archive", {})
         source = config.get("source", {})
         native_import = source.get("kind") == "native_clipboard_archive"
+        personal_local = source.get('kind') == 'personal_wechat_local'
         account_configured = bool(source.get("factory") and all(archive.get(key) is True
             for key in ("enabled", "admin_authorized", "member_scope_verified", "consent_verified"))
             and archive.get("evidence_reference") and archive.get("bridge_command"))
         metrics = {"health": "NEVER_SYNCED", "current_cursor": None,
                    "last_successful_sync_at": None, "messages_received_today": 0, "events_pending": 0}
         database = Path(settings.get("database", "data/messages.db")).resolve()
-        if self.collector_config and database.is_file():
+        if self.collector_config and database.is_file() and not personal_local:
             from .collector_storage import CollectorStore
             from .collector_cli import status
             # Read existing data without schema creation or pretending to start a listener.
@@ -609,13 +613,20 @@ class DemoHTTPServer(ThreadingHTTPServer):
         if isinstance(metrics.get("state"), dict) and metrics["state"].get("last_error"):
             metrics["state"]["last_error"] = "SYNC_ERROR"
         control = self.collector_supervisor.snapshot() if self.collector_supervisor else None
+        if personal_local:
+            metrics={'health':(control or {}).get('health','NEVER_SYNCED'),
+                     'last_successful_sync_at':(control or {}).get('last_success_at'),
+                     'messages_received_today':None,'events_pending':None,
+                     'last_poll':(control or {}).get('last_result')}
         return {"configured": self.collector_config is not None,
+            "configuration_sha256":self.collector_config_sha256,
             "processing_mode": "ACK_ONLY", "metrics": metrics, "pending_ack_count": pending,
-            "held_ack_count": held, "account_status": "NOT_APPLICABLE" if native_import else "NEEDS_MANUAL_VERIFICATION" if account_configured else "NOT_CONFIGURED",
-            "collection_kind": "NATIVE_CLIPBOARD_IMPORT" if native_import else "OFFICIAL_ARCHIVE",
+            "held_ack_count": held, "account_status": "LOCAL_CONFIG_REQUIRES_RUNTIME_VERIFICATION" if personal_local else "NOT_APPLICABLE" if native_import else "NEEDS_MANUAL_VERIFICATION" if account_configured else "NOT_CONFIGURED",
+            "collection_kind": "PERSONAL_WECHAT_LOCAL" if personal_local else "NATIVE_CLIPBOARD_IMPORT" if native_import else "OFFICIAL_ARCHIVE",
+            "collection_only": personal_local,
             "desktop_listener_live_verified": False,
             "source_polling_started_by_workbench": bool(control and control["worker_alive"]),
-            "account_live_verified": False, "listener_started_by_workbench": bool(not native_import and control and control["worker_alive"]),
+            "account_live_verified": False, "listener_started_by_workbench": bool(not native_import and not personal_local and control and control["worker_alive"]),
             "control": control,
             "student_send_enabled": False, "teaching_enabled": False}
 
@@ -932,7 +943,19 @@ class DemoHandler(BaseHTTPRequestHandler):
             from .native_intake import list_staged_records
             config = self.server.collector_config or {}
             source = config.get("source", {})
-            if source.get("kind") == "native_clipboard_archive":
+            if source.get('kind')=='personal_wechat_local':
+                records=[]
+                path=Path(config['collector']['database']).resolve()
+                if path.is_file():
+                    with closing(sqlite3.connect(path.as_uri()+'?mode=ro',uri=True)) as connection:
+                        connection.row_factory=sqlite3.Row
+                        rows=connection.execute("SELECT message_id,room_name,sender_display_name,message_type,raw_content,sent_at_local,time_confidence,fingerprint,media_hash FROM messages WHERE source_type='personal_wechat_local' ORDER BY ingested_at DESC,message_id LIMIT 250").fetchall()
+                    records=[dict(acquisition_id=row['message_id'],observed_group_label=row['room_name'],
+                        original_text=row['raw_content'],sender=row['sender_display_name'],
+                        original_message_time=row['sent_at_local'],reliable_timestamp=row['time_confidence']=='high',
+                        message_type=row['message_type'],raw_text_sha256=sha256((row['raw_content'] or '').encode('utf-8')).hexdigest(),media_hash=row['media_hash'],
+                        source_kind='PERSONAL_WECHAT_LOCAL',formal_statistics_eligible=False) for row in rows]
+            elif source.get("kind") == "native_clipboard_archive":
                 records = []
                 path = Path(config.get("collector", {}).get("database", "data/native-messages.db")).resolve()
                 if path.is_file():
@@ -957,7 +980,6 @@ class DemoHandler(BaseHTTPRequestHandler):
             return
         if route == '/api/manual-delivery-replies':
             from .manual_delivery import ManualDeliveries
-            import sqlite3
             query = parse_qs(urlsplit(self.path).query, keep_blank_values=True)
             if (set(query) not in ({'original_outbox_id'}, {'turn_id'})
                     or any(len(values) != 1 or not 0 < len(values[0]) <= 128 for values in query.values())):

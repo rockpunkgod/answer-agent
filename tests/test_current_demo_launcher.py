@@ -25,13 +25,15 @@ class CurrentDemoLauncherTests(unittest.TestCase):
         shutil.copyfile(ROOT / 'run_current_demo.ps1', self.launcher)
         self.arguments = self.root / 'python-arguments.json'
         self.harness = self.root / 'harness.ps1'
-        self.harness.write_text('''param([string]$Launcher, [int]$Port, [string]$RecordFile, [string]$SourceReviewManifest, [switch]$NoAutoCollect, [string]$AutomaticDeliveryConfig)
+        self.harness.write_text('''param([string]$Launcher, [int]$Port, [string]$RecordFile, [string]$SourceReviewManifest, [switch]$NoAutoCollect, [string]$AutomaticDeliveryConfig, [string]$CollectorConfig)
 $ErrorActionPreference = 'Stop'
 function global:python {
     ConvertTo-Json -InputObject @($args) -Compress | Set-Content -LiteralPath $RecordFile -Encoding UTF8
     $global:LASTEXITCODE = 0
 }
-& $Launcher -Port $Port -SourceReviewManifest $SourceReviewManifest -NoAutoCollect:$NoAutoCollect -AutomaticDeliveryConfig $AutomaticDeliveryConfig
+$LaunchParams = @{Port=$Port; SourceReviewManifest=$SourceReviewManifest; NoAutoCollect=$NoAutoCollect; AutomaticDeliveryConfig=$AutomaticDeliveryConfig}
+if ($CollectorConfig) { $LaunchParams.CollectorConfig=$CollectorConfig }
+& $Launcher @LaunchParams
 ''', encoding='ascii')
         self.posts = []
 
@@ -60,18 +62,27 @@ function global:python {
         self.addCleanup(cleanup)
         return server.server_port
 
-    def invoke(self, port, *, no_auto_collect=False, manifest=None, automatic_config=None):
+    def invoke(self, port, *, no_auto_collect=False, manifest=None, automatic_config=None, collector_config=None):
         command = [POWERSHELL, '-NoProfile', '-NonInteractive', '-File', str(self.harness),
                    '-Launcher', str(self.launcher), '-Port', str(port), '-RecordFile', str(self.arguments)]
         if no_auto_collect: command.append('-NoAutoCollect')
         if manifest: command += ['-SourceReviewManifest', str(manifest)]
         if automatic_config: command += ['-AutomaticDeliveryConfig', str(automatic_config)]
+        if collector_config: command += ['-CollectorConfig',str(collector_config)]
         return subprocess.run(command, capture_output=True, text=True, encoding='utf-8', errors='replace', timeout=20)
 
     def free_port(self):
         with socket.socket() as candidate:
             candidate.bind(('127.0.0.1', 0))
             return candidate.getsockname()[1]
+
+    def test_explicit_personal_source_cannot_silently_reuse_different_running_source(self):
+        config=self.root/'personal.toml';config.write_text('[source]\nkind="personal_wechat_local"')
+        port=self.serve({'application':'wecom-english-helpdesk','processing_mode':'ACK_ONLY',
+                         'collector':{'configuration_sha256':'different'}})
+        result=self.invoke(port,collector_config=config)
+        self.assertNotEqual(result.returncode,0)
+        self.assertEqual(self.posts,[]);self.assertFalse(self.arguments.exists())
 
     def test_local_automatic_configuration_is_forwarded_without_worker_boundary(self):
         config = self.root / 'automatic.local.json'

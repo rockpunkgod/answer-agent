@@ -13,6 +13,7 @@ from .collector_storage import CollectorStore
 from .message_sources import CursorExpired
 from .wecom_archive import ArchiveNotConfigured, ArchiveProtocolError
 from .unread_wakeup import UnreadWakeMonitor
+from .personal_wechat_polling import PersonalWeChatPoller,run_personal_collection
 
 
 def stamp():
@@ -33,8 +34,9 @@ def failure_health(error, config):
 class CollectorSupervisor:
     def __init__(self, config, *, source_factory=None, runner=None):
         self.config = deepcopy(config) if config is not None else None
-        self.factory = source_factory or load_source
-        self.runner = runner or run_live_iteration
+        self.collection_only = (self.config or {}).get('source',{}).get('kind')=='personal_wechat_local'
+        self.factory = source_factory or (PersonalWeChatPoller if self.collection_only else load_source)
+        self.runner = runner or (run_personal_collection if self.collection_only else run_live_iteration)
         self.lock = Lock()
         self.stop_event = Event()
         self.wake_event = Event()
@@ -54,6 +56,7 @@ class CollectorSupervisor:
             "last_success_at": self.last_success_at, "last_result": deepcopy(self.last_result),
             "error_type": self.error_type, "logs": list(self.logs),
             "processing_mode": "ACK_ONLY", "sync_mode": "LIVE", "student_send_enabled": False,
+            "collection_only": self.collection_only,
             "trigger_mode": (self.config or {}).get("collector", {}).get("trigger_mode", "POLL"),
             "wake_pending": self.wake_event.is_set() and not self.stop_event.is_set(),
             "unread_wakeup": self.unread_monitor.snapshot() if self.unread_monitor else None,
@@ -145,11 +148,11 @@ class CollectorSupervisor:
                         self.last_success_at = stamp()
                         self.state = "STOPPING" if self.stop_event.is_set() else "RUNNING"
                         self.health, self.error_type = "HEALTHY", None
-                        self._log("LIVE_SYNC_AND_ACK_DRAIN_COMMITTED", inserted_count=result["sync"]["inserted_count"],
+                        self._log("LIVE_COLLECTION_COMMITTED" if self.collection_only else "LIVE_SYNC_AND_ACK_DRAIN_COMMITTED", inserted_count=result["sync"]["inserted_count"],
                             events_processed=result["events_processed"])
                 except Exception as error:
                     failed = True
-                    fatal = isinstance(error, (ArchiveNotConfigured, ArchiveProtocolError, CursorExpired))
+                    fatal = self.collection_only or isinstance(error, (ArchiveNotConfigured, ArchiveProtocolError, CursorExpired))
                     with self.lock:
                         self.state = "BLOCKED" if fatal else "DEGRADED"
                         self.health = failure_health(error, self.config) if fatal else "FAILED"

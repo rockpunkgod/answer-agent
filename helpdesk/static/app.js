@@ -158,8 +158,8 @@ document.getElementById("native-refresh").addEventListener("click",async()=>{
   if(!data.records.length)target.append(el("p","","尚未暂存原生文字记录。"));
   for(const record of data.records){
    const item=el("details","entry");
-   item.append(el("summary","",`${record.observed_group_label} · 原始时间待核验`));
-   item.append(el("p","","待核验：发送人、原始发送时间、群身份、题目归并、附件和解答完成证据。"));
+   item.append(el("summary","",`${record.observed_group_label} · ${record.reliable_timestamp?record.original_message_time:'原始时间待核验'}`));
+   item.append(el("p","",record.source_kind==='PERSONAL_WECHAT_LOCAL'?`个人微信只读记录 · ${record.sender||'发送人待核验'} · ${record.message_type} · 未进入答疑、发送或正式绩效。`:"待核验：发送人、原始发送时间、群身份、题目归并、附件和解答完成证据。"));
    const text=el("pre","native-text",record.original_text);item.append(text);
    item.append(el("p","",`采集编号 ${shortId(record.acquisition_id)} · 原文校验 ${record.raw_text_sha256}`));
    target.append(item);
@@ -252,6 +252,15 @@ function configureMode(data){
   document.querySelector('.board-head h2').textContent="采集消息与待收到";
   const target=document.getElementById('collector-status');target.replaceChildren();
   const nativeImport=collectorStatus?.collection_kind==="NATIVE_CLIPBOARD_IMPORT";
+  const personalLocal=collectorStatus?.collection_kind==='PERSONAL_WECHAT_LOCAL';
+  if(personalLocal){
+   document.title='英语答疑 · 个人微信采集';
+   document.getElementById('mode-label').textContent='个人微信 · 只读采集';
+   document.getElementById('mode-description').textContent='后台按已确认群增量入库，不切换窗口。不排队收到、不生成答疑、不发送或计正式绩效。可在原文记录中查看采集结果。';
+   document.getElementById('mode-footer').textContent='只读采集 · 历史基线与持久游标 · 答疑及发送门禁保留';
+   document.getElementById('health').textContent=`个人微信只读采集 · ${collectorStatus?.control?.health||'尚未启动'} · 不发送`;
+   document.querySelector('.board-head h2').textContent='个人微信采集记录';
+  }
   const metrics=collectorStatus?.metrics||{};
   const control=collectorStatus?.control||{};
   document.querySelector('button[data-action="collector_start"]').textContent=nativeImport?'启动原文导入':'启动采集';
@@ -260,7 +269,7 @@ function configureMode(data){
   target.append(el('p','',`${nativeImport?'原文导入':'采集'}控制：${controlLabels[control.state]||control.state||'未知'}`));
   const labels={NEVER_SYNCED:'尚未读取到聊天记录',HEALTHY:'最近同步成功',FAILED:'同步失败',STALE:'同步已超时'};
   target.append(el('p','',`${nativeImport?'原文导入':'采集'}状态：${nativeImport&&metrics.health==='HEALTHY'?'已成功导入原文':labels[metrics.health]||metrics.health||'状态未知'}`));
-  target.append(el('p','',nativeImport?'当前使用本机原生复制记录，无需存档账号。原文导入运行不代表桌面自动监听已经接通。':collectorStatus?.account_status==='NOT_CONFIGURED'?'缺少企业存档账号配置：请管理员在本机配置企业ID、存档凭据和解密私钥，并确认答疑群覆盖范围。':'接入配置已填写，真实账号能力仍待验证。'));
+  target.append(el('p','',personalLocal?'本地只读采集，无需企业存档。首次需完成历史基线；登录或群身份异常时停止，不自动重建游标。':nativeImport?'当前使用本机原生复制记录，无需存档账号。原文导入运行不代表桌面自动监听已经接通。':collectorStatus?.account_status==='NOT_CONFIGURED'?'缺少企业存档账号配置：请管理员在本机配置企业ID、存档凭据和解密私钥，并确认答疑群覆盖范围。':'接入配置已填写，真实账号能力仍待验证。'));
   target.append(el('p','',`待收到 ${collectorStatus?.pending_ack_count??0} 条 · 待核验 ${collectorStatus?.held_ack_count??0} 条 · 今日采集 ${metrics.messages_received_today??'未知'} 条`));
   target.append(el('p','',`最后成功同步：${metrics.last_successful_sync_at||'无'} · 未消费事件：${metrics.events_pending??0}`));
   const unread=control.unread_wakeup;
@@ -271,6 +280,7 @@ function configureMode(data){
   if(control.error_type)target.append(el('p','',control.error_type==='ArchiveNotConfigured'?'聊天尚未接通：重新点击启动不能补齐账号配置。':`采集遇到问题：${control.error_type}，请检查接入配置。`));
   document.getElementById('collector-control-note').textContent=control.trigger_mode==='SIGNAL'?(unread?'后台提示只负责唤醒已配置的消息入口；实际消息和发送结果仍分别核验。':
    '当前等待唤醒，尚未配置自动未读提示。'):nativeImport?'新增的Windows-MCP原文归档会增量导入；此入口的状态不用于判定桌面监听或群内收到的发送结果。原文核验与发送方式分别处理，以当前阶段配置为准。':control.worker_alive?'采集正在进行，仅保存消息并排队收到。停止会等待当前有界调用完成，保留已确认进度；发送方式以当前阶段配置为准。':'工作台已打开，聊天采集未启动。完成消息入口配置后再点击启动采集；发送方式以当前阶段配置为准。';
+  if(personalLocal)document.getElementById('collector-control-note').textContent='启动/停止使用原采集控制入口；只启动隔离读取子进程，失败或超时停下。停止等待本轮有界读取完成，保留已提交游标。';
  }else if(realMode){
   document.title="英语答疑 · 真实已准备任务";
   document.getElementById("mode-label").textContent=questionAutoContinue?"题面确认后排队":"REAL · 已准备教学会话";

@@ -4,6 +4,8 @@
 
 仅采集可运行 `tools/personal_wechat_collect.py`：`history` 导入历史，`poll` 读取一次增量，`watch` 持续轮询。沿用私有配置和原 CollectorStore，不加载桌面传输、媒体驱动或发送模块。具体启动命令及限制见上述说明。
 
+也可接入现有工作台：`./run_current_demo.ps1 -Port 8768 -CollectorConfig data/private/replica-runtime/collector.local.toml -NoAutoCollect`，再点击“启动采集”。去掉 `-NoAutoCollect` 则随工作台启动轮询。私有 TOML 参考 [配置示例](config/collector.personal-wechat.example.toml)，须关联已经核验的 JSON 和同一消息库，并先完成历史基线；不启用个人微信 ACK、答疑、发送或绩效。旧服务使用不同采集配置时会拒绝静默复用。
+
 已确认语义归属的可信来源可自动创建原 AnswerTask：在已有 ego 两阶段配置中显式开启 `admit_confirmed_sources`，同时沿用已配置的 CollectorStore。无需再逐题点击题面确认；原始消息、完整题面、版本、媒体哈希和共享计量归属仍须通过现有检查。ACK 未核验时进入原有持久化等待，确认后由原队列继续。默认关闭；这不提供语义分类模型，也不解除个人微信原型的只读限制，不代表未确认消息能直接进入教学或发送。
 
 个人自用的 Windows 本机工作台：保存消息原文和附件、核对学生题面、查看 DeepSeek 网页生成的讲解，并按天导出绩效草稿。核心使用 Python 标准库、SQLite 和本地文件，不要求部署 Worker 集群、消息中间件或额外数据库。

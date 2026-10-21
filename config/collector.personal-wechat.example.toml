@@ -1,0 +1,17 @@
+# Copy to a private local config, then use run_current_demo.ps1 -CollectorConfig.
+# This controls collection only. No business dispatch, ACK, teaching or sending.
+[collector]
+processing_mode = "ACK_ONLY" # Existing workbench control mode; no ACK drain for this source.
+database = "data/private/replica-runtime/prototype-collector.sqlite"
+poll_seconds = 5
+trigger_mode = "POLL"
+
+[source]
+kind = "personal_wechat_local"
+replica_config = "data/private/replica-runtime/source.local.json"
+poll_timeout_seconds = 120
+
+# The JSON must already contain manually confirmed room IDs, pinned account/PID,
+# prototype_only=true and exactly the same collector_database as above.
+# A complete BACKFILL baseline is required before starting workbench collection.
+# The Python interpreter is fixed to private_root/venv/Scripts/python.exe.

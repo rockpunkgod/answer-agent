@@ -20,7 +20,25 @@
 
 ## 运行
 
-### 仅采集独立入口
+### 接入项目工作台
+
+现有 CollectorSupervisor 根据 `source.kind = "personal_wechat_local"` 调用隔离采集子进程，复用工作台的启动、停止、唤醒和关闭管理；不另建守护服务。每轮使用 `poll` 接续原始消息库的已有游标，不调用原 ACK Dispatcher，也不创建另一份业务完成台账。
+
+TOML 示例为 `config/collector.personal-wechat.example.toml`；本机已按现有 JSON 路径建立私有 `data/private/replica-runtime/collector.local.toml` 并离线核对同库路径，未启动账号读取。JSON 内容发生变化后停止并要求重新启动，不能在运行中默默更换账号、群或数据库。缺完整历史基线仍由原来源检查拒绝。
+
+```powershell
+# 先打开现有工作台；“启动采集”后开始后台读取。
+./run_current_demo.ps1 -Port 8768 -CollectorConfig data/private/replica-runtime/collector.local.toml -NoAutoCollect
+# 若明确需要随工作台自动采集，去掉 -NoAutoCollect。
+```
+
+不用同时运行独立 `watch`。工作台显示“个人微信只读采集”，原文区复用 `/api/native-records` 展示最多250条本库个人微信记录，包括之前授权但已停用的测试群历史；这不表示继续采集停用群。原始时间可靠时直接显示原值，缺时间不补当前时间。原文记录不等于答疑题数或已完成交付，图像仍可只有媒体引用。账号未实测时不显示“已验证”；状态不再误标企业存档。旧工作台若使用不同采集配置，启动器会拒绝静默复用，需换端口或先关闭旧服务。
+
+接线范围：后台采集 → 原 CollectorStore → 工作台只读展示与暂停/恢复控制。个人微信原型到语义归属、AnswerTask、ACK、DeepSeek、Outbox及正式绩效的晋升限制保持，本轮没有将其切为完整生产来源。真实原图自动补下载和下游全链路仍未验收。
+
+本批回归：`python -X utf8 -B -m unittest -q tests.test_personal_wechat_polling tests.test_collector_supervisor tests.test_personal_wechat_collect tests.test_personal_wechat_source tests.test_current_demo_launcher tests.test_demo_http`，64项通过、0失败/跳过（24.541秒）。包含匿名本地HTTP展示、模拟子进程、原采集控制与Windows启动脚本；不是账号真实验收。`node --check helpdesk/static/app.js` 通过。初次发现原GET方法内后置 sqlite3 导入使原文分支出现局部变量错误，已删除重复局部导入并复用原模块导入；同时修正新增测试的命令索引误期望，未删断言。本轮未执行真实采集或外发。
+
+### 独立命令
 
 新增 `tools/personal_wechat_collect.py`，可脱离答疑主程序单独运行，但仍复用仓库已有的 MessageSource、CollectorStore 和 SyncEngine；不是另建数据库或发布完整上游 fork。默认只加载固定哈希的 db.py，不加载 media.py、UIA、原生桌面传输、上游包初始化或业务 Dispatcher。最低采集第三方运行依赖为现有隔离环境中的 cryptography、psutil、zstandard；不需要 Pillow、numpy、uiautomation、Playwright 或 Windows-MCP。数据库解密所需的只读进程访问和私有明文缓存边界仍然存在，不等于官方接口。
 
