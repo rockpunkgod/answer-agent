@@ -82,17 +82,41 @@ def validate_manual_package(store, row, evidence):
     return dict(last)
 
 
-def completion_for_turn(store, turn_id):
-    """Read the original task's verified package for its existing workbench card."""
+def completion_for_turn(store, turn_id, *, outbox_id=None):
+    """Read verified delivery facts, never infer completion from an outbox flag."""
+    current = store.one('SELECT q.current_version,q.context_revision FROM questions q JOIN turns t ON t.question_id=q.id WHERE t.id=?', (turn_id,))
+    from .delivery_batches import read_plan,validate_complete,_receipt_valid
+    for actual in store.all("SELECT * FROM outbox WHERE turn_id=? AND purpose IN ('ANSWER','CORRECTION') AND state='SENT_UI_CONFIRMED' AND simulated=0 ORDER BY rowid DESC", (turn_id,)):
+        if outbox_id is not None and actual['id']!=outbox_id:continue
+        try:
+            owner=store.one('SELECT t.*,m.binding_id FROM turns t JOIN messages m ON m.id=t.message_id WHERE t.id=?',(turn_id,))
+            if not owner or any(actual[key]!=owner[key] for key in ('message_id','case_id','binding_id','question_version','context_revision')):
+                continue
+            check=store.one('SELECT status,evidence FROM delivery_checks WHERE outbox_id=? ORDER BY rowid DESC LIMIT 1',(actual['id'],))
+            if not check or check['status']!='SENT_UI_CONFIRMED':continue
+            proof=json.loads(check['evidence'])
+            if not isinstance(proof,dict):continue
+            if timestamp(proof.get('confirmed_at'))!=timestamp(actual['sent_at']):continue
+            if read_plan(store,actual):
+                validate_complete(store,actual,proof)
+            elif not _receipt_valid(store,actual,{'transport_id':actual['id'],'body_hash':sha256(actual['body'].encode()).hexdigest()},proof):
+                continue
+            return {'outbox_id':actual['id'],'original_outbox_id':actual['id'],'completed_at':actual['sent_at'],
+                    'question_version':actual['question_version'],'context_revision':actual['context_revision'],
+                    'verification_method':proof.get('verification_method','UI_READBACK'),
+                    'stale':not current or tuple(current)!=(actual['question_version'],actual['context_revision'])}
+        except (ValueError,TypeError,KeyError):
+            continue
     for origin in store.all("SELECT * FROM outbox WHERE turn_id=? AND state='CANCELLED' AND last_error='MANUALLY_DELIVERED'", (turn_id,)):
+        if outbox_id is not None and origin['id']!=outbox_id:continue
         parts = _part_rows(store, origin['id'])
         try:
             last = max(parts, key=lambda p: (timestamp(p['sent_at']), json.loads(p['evidence'])['part_number']))
             actual = validate_manual_package(store, last, json.loads(last['evidence']))
-            current = store.one('SELECT q.current_version FROM questions q JOIN turns t ON t.question_id=q.id WHERE t.id=?', (turn_id,))
             return {'outbox_id': actual['id'], 'completed_at': actual['sent_at'],
+                    'original_outbox_id':origin['id'],'context_revision':actual['context_revision'],
                     'question_version': actual['question_version'], 'verification_method': METHOD,
-                    'stale': not current or current['current_version'] != actual['question_version']}
+                    'stale': not current or tuple(current)!=(actual['question_version'],actual['context_revision'])}
         except (ValueError, TypeError, KeyError):
             continue
     return None

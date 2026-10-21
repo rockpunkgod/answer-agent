@@ -1,3 +1,13 @@
+### 2026-10-21：原任务展示自动交付事实
+
+已修复上轮发现的回流展示缺口。复用 completion_for_turn、原 Outbox/delivery_checks/分段计划，在任务卡和原队列只读投影自动交付；不创建新台账、服务、状态迁移或发送动作。必须有完整、匹配任务/版本/目标/正文/完成时间的原回执；分段复用原 validate_complete，单段回读复用原回执校验。模拟、草稿、部分成功、UNKNOWN及缺少/损坏回执不显示已完成。指定原Outbox时不会借用同轮其他任务的回执。
+
+reviewed_question_queue原执行phase保持原义，student_delivered只反映已验证的历史交付事实；新增只读delivery_status区分VERIFIED_COMPLETE与DELIVERED_STALE。交付后版本或上下文变化仍保留历史事实并标旧，不当成当前题目已解决。人工登记原路径继续使用原验证方法；界面区分人工核验与实际发送回读，不伪造平台ID或已读。重复查看不写发送/绩效记录。
+
+UNIT/MOCK：`python -X utf8 -B -m unittest -q tests.test_delivery_batches tests.test_shared_source_delivery_integration tests.test_manual_delivery_registration tests.test_manual_delivery_reconciliation tests.test_source_question_tasks`，83项通过、0失败/跳过，26.233秒。新增四项覆盖完整后才回显、UNKNOWN拒绝、交付后更正保留旧事实、回执丢失不报完成；重复读取未增加outbox/check/audit/performance_events。JS语法检查和diff检查通过。模拟原生协议不等于真实发送，本轮未操作客户端、读取真实新消息、提交网页、外发或修改正式绩效。
+
+完整目标仍NOT_READY。前一目标轮属于进展（轻量化已提交5faceda）；本轮修补实际业务回流展示，不以此替代真实ACK、自动题面归属、原图补下载、Reference准入、两阶段全链路、20任务/恢复/成本验收。当前用户仍要求后台开发，真实桌面待可用时验证。
+
 ### 2026-10-21：轻量化首批清理
 
 当前默认入口为既有工作台控制采集；history/poll/watch 独立命令保留用于首次基线、单独运行或维护，不要求同时开两套循环。采集 CLI 移除未取得原图的 probe-accessibility / locate-image 实验接线，并在加载账号前拒绝旧命令；不再加载原生桌面传输、读取前台窗口元数据或依赖 observe_foreground 开关。移除无活跃调用者的个人微信激活/idle方法及该停用方法的专用测试；通用焦点释放与用户接管保护及测试保留。UIA诊断代码、其保护测试、原失败/UNKNOWN证据仍保留，不是当前启动步骤。

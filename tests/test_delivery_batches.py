@@ -235,6 +235,69 @@ class NativeBatchIntegrationTests(unittest.TestCase):
         self.limit.start()
         self.addCleanup(self.limit.stop)
 
+    def test_verified_batch_projects_back_to_original_card_and_queue_only_after_completion(self):
+        from helpdesk.manual_delivery import completion_for_turn
+        from helpdesk.reviewed_question_queue import get
+        task_id=self.fx.fx.fx.task['id'];turn_id=self.fx.row['turn_id']
+        self.assertIsNone(completion_for_turn(self.db,turn_id))
+        self.assertFalse(get(self.db,task_id)['student_delivered'])
+        self.assertEqual(self.fx.engine.tick()['state'],'PART_DELIVERED')
+        total=len(read_plan(self.db,self.fx.row)['parts'])
+        self.assertIsNone(completion_for_turn(self.db,turn_id))
+        self.assertFalse(get(self.db,task_id)['student_delivered'])
+        for _ in range(total-1):self.fx.engine.tick()
+        before={name:self.db.one('SELECT COUNT(*) FROM '+name)[0] for name in
+                ('outbox','delivery_checks','audit','performance_events')}
+        for _ in range(2):
+            queue=get(self.db,task_id)
+            self.assertTrue(queue['student_delivered'])
+            self.assertEqual(queue['delivery_status'],'VERIFIED_COMPLETE')
+            self.assertEqual(queue['actual_delivery']['outbox_id'],self.oid)
+            card=self.fx.fx.fx.tasks.get_task(task_id)
+            self.assertEqual(card['actual_delivery']['outbox_id'],self.oid)
+            self.assertFalse(card['actual_delivery']['stale'])
+        self.assertEqual(before,{name:self.db.one('SELECT COUNT(*) FROM '+name)[0] for name in before})
+        self.assertIsNone(completion_for_turn(self.db,turn_id,outbox_id='different-task'))
+
+    def test_unknown_or_missing_part_evidence_never_projects_completion(self):
+        from helpdesk.manual_delivery import completion_for_turn
+        from helpdesk.reviewed_question_queue import get
+        self.fx.native.hide_new=True
+        self.assertEqual(self.fx.engine.tick()['state'],'SEND_UNKNOWN')
+        self.assertIsNone(completion_for_turn(self.db,self.fx.row['turn_id']))
+        self.assertFalse(get(self.db,self.fx.fx.fx.task['id'])['student_delivered'])
+        # Even a corrupted flag cannot replace the required per-part evidence.
+        self.db.execute("UPDATE outbox SET state='SENT_UI_CONFIRMED' WHERE id=?",(self.oid,))
+        self.assertIsNone(completion_for_turn(self.db,self.fx.row['turn_id']))
+
+    def test_post_delivery_context_correction_preserves_fact_but_marks_it_stale(self):
+        from helpdesk.manual_delivery import completion_for_turn
+        from helpdesk.reviewed_question_queue import get
+        self.fx.engine.tick()
+        total=len(read_plan(self.db,self.fx.row)['parts'])
+        for _ in range(total-1):self.fx.engine.tick()
+        task_id=self.fx.fx.fx.task['id']
+        question=self.db.one('SELECT * FROM questions WHERE id=?',(self.fx.fx.fx.outcome.question_id,))
+        Helpdesk(self.db).correct_material(question['material_id'],self.fx.row['message_id'],
+            'Anonymous corrected passage','Anonymous corrected passage')
+        actual=completion_for_turn(self.db,self.fx.row['turn_id'])
+        self.assertTrue(actual['stale'])
+        self.assertEqual(actual['outbox_id'],self.oid)
+        queue=get(self.db,task_id)
+        self.assertTrue(queue['student_delivered'])
+        self.assertEqual(queue['delivery_status'],'DELIVERED_STALE')
+
+    def test_lost_part_receipt_removes_completion_projection_without_replaying_send(self):
+        from helpdesk.manual_delivery import completion_for_turn
+        self.fx.engine.tick()
+        total=len(read_plan(self.db,self.fx.row)['parts'])
+        for _ in range(total-1):self.fx.engine.tick()
+        self.assertIsNotNone(completion_for_turn(self.db,self.fx.row['turn_id']))
+        submitted=self.fx.native.submissions
+        self.db.execute("DELETE FROM delivery_checks WHERE outbox_id=? AND status='PART_UI_CONFIRMED' AND json_extract(evidence,'$.part_number')=2",(self.oid,))
+        self.assertIsNone(completion_for_turn(self.db,self.fx.row['turn_id']))
+        self.assertEqual(self.fx.native.submissions,submitted)
+
     def test_partial_not_counted_then_complete_counts_one_night_piece(self):
         self.assertEqual(self.fx.engine.tick()['state'], 'PART_DELIVERED')
         total = len(read_plan(self.db, self.fx.row)['parts'])

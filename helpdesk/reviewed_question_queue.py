@@ -56,7 +56,7 @@ def get(store, task_id):
     value['formal_statistics_eligible'] = False
     value['desktop_executor'] = 'LUNA'
     value['source_review_required_again'] = False
-    value['student_delivered'] = False  # This queue never records delivery.
+    value['student_delivered'] = False  # Readback below; this queue never writes delivery.
     value['stored_phase'] = value['phase']
     run = store.one('SELECT state FROM runs WHERE id=?', (value['run_id'],))
     value['authoritative_run_state'] = run[0] if run else None
@@ -73,6 +73,14 @@ def get(store, task_id):
             value['outbox_id'], value['outbox_state'] = answer['id'], answer['state']
     elif value['phase'] == 'GENERATED':
         value['phase'], value['last_error'] = 'NEEDS_ATTENTION', 'QUEUE_PHASE_WITHOUT_GENERATED_RUN'
+    from .manual_delivery import completion_for_turn
+    for origin in store.all("SELECT id,turn_id FROM outbox WHERE run_id=? AND purpose IN ('ANSWER','CORRECTION') ORDER BY rowid DESC",(value['run_id'],)):
+        delivery=completion_for_turn(store,origin['turn_id'],outbox_id=origin['id'])
+        if delivery:
+            value['actual_delivery']=delivery
+            value['student_delivered']=True
+            value['delivery_status']='DELIVERED_STALE' if delivery['stale'] else 'VERIFIED_COMPLETE'
+            break
     return value
 
 
