@@ -1,3 +1,17 @@
+### 2026-10-21：原测试Outbox接入个人微信交付适配器
+
+新增 `PersonalWeChatTestRecipient`，个人微信测试目标的稳定键同时绑定账号和群ID；仅名称“测试”不够。复用原 `test_answer_copies` 字段保存冻结目标证据及原Outbox，不新增表或完成台账。`queue_test_answer`、发送前校验及UNKNOWN回读现在支持这类明确目标；原企业微信“苇中鹤”的TestRecipient限制不变。源答案仍须真实生成、当前版本、完整证据和原审核；被拒绝/未形成Outbox的B篇不能进入此入口。
+
+新增 `PersonalWeChatTestDesktop`，复用现有原生Win32输入与测试交付流程，按当前截图核对窗口/群视觉绑定和控件，提交前精确回读草稿并持久化原生提交意图。回读同时要求新增且唯一的本人气泡、该新气泡内的复制位置、精确复制正文和空输入框；历史同文气泡不能算本次成功。结果回到原测试Outbox和delivery_checks，UNKNOWN仅回读，不能粘贴或点击发送。冻结账号/群、当前版本、暂停及实际账号/会话核验守卫在输入前重查。测试副本成功不完成原学生任务，不进入正式绩效，不伪造服务器回执或学生已读。
+
+适配器必须由调用方提供实际账号/当前会话核验守卫，不接受无守卫运行；当前尚无通过真实验证的守卫实现，也未接入自动运行配置或公开CLI。长稿分段、个人微信源任务桥和ACK仍未贯通，不能把测试副本适配器当作整个业务闭环。原有默认企业微信截图检查仍拒绝Weixin；只有显式个人微信原生截图与有效测试配置才允许专用核验。
+
+UNIT/MOCK：`python -X utf8 -B -m unittest -q tests.test_personal_wechat_test_delivery tests.test_personal_wechat_test_transport tests.test_live_generation tests.test_mcp_test_delivery tests.test_routing tests.test_wecom_native tests.test_native_group_ack tests.test_demo_real_http tests.test_delivery_batches tests.test_workflow`，144项通过/28.149秒，0失败/跳过。随后新增独立Python子进程UNKNOWN恢复测试；`tests.test_personal_wechat_test_delivery`最终15项通过/1.798秒，0失败/跳过，验证零重发、零正式绩效。两次覆盖重叠，不相加作为独立测试数。首轮发现个人回执沿用原始群ID而非账号+群稳定键，导致两项模拟成功路径被判UNKNOWN；修正回执目标引用后通过，未放宽确认断言。后续一项测试预期的错误名称与既有“Stale turn”不符，校正为实际错误，保留旧版本停止断言。
+
+REAL只读探测：隔离环境检查原固定进程/窗口，再用普通UIA读取当前测试群锚点，不开启Qt gate、不激活、不输入、不查询四群新消息。结果 `CURRENT_TEST_CHAT_UIA_UNAVAILABLE / ACCESSIBILITY_CHAT_ANCHORS_NOT_UNIQUE`，0.081秒；前后前台句柄一致，active_account_verified=false，发送0。私有证据 `data/private/replica-runtime/test-send-uia-preflight.local.json`。首次脚本因模块搜索路径错误在导入阶段终止，修正路径后才执行该探测；不隐藏失败，也不把无控件当作无消息。
+
+当前实际发送仍未验证，B篇仍BLOCKED_DRAFT_CHECK，三个English群仍只读。唯一下一步：复用现有GUI能力取得可验证的当前账号/测试群绑定，完成该适配器的真实只读预检；不以恒真回调、名称匹配或Mock补足身份缺口。取得合格原任务和控件证据后才进行已授权测试群发送。整体NOT_READY。
+
 ### 2026-10-21：测试群发送授权与原生输入复用
 
 用户已明确允许个人微信“测试”群内部生成，随后扩大为该测试群完整发送试验；三个English群仍只读，不因这一授权启用生产来源或正式绩效。此前等待测试群范围确认的阻断已解除。当前B篇原稿及唯一一次修订仍保留BLOCKED_DRAFT_CHECK，两条method_visibility疑点未消除；不得另建任务重置修订次数或直接发送。

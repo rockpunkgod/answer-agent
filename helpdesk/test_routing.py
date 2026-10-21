@@ -8,12 +8,69 @@ platform and stable key before it can use the test target.
 from dataclasses import dataclass
 from datetime import datetime
 from hashlib import sha256
+import json
+import re
 
 from .delivery import BoundMessage
 
 
 TEST_DISPLAY_NAME = "苇中鹤"
 TEST_PLATFORM = "wecom"
+PERSONAL_TEST_PLATFORM = 'personal_wechat_test'
+
+
+@dataclass(frozen=True)
+class PersonalWeChatTestRecipient:
+    """One explicitly reviewed account + test room, separate from WeCom routing."""
+    account_id: str
+    room_id: str
+    verification_evidence: str
+    verified_at: datetime
+    display_name: str = '测试'
+    platform: str = PERSONAL_TEST_PLATFORM
+
+    def __post_init__(self):
+        if (self.platform != PERSONAL_TEST_PLATFORM or self.display_name != '测试'
+                or not isinstance(self.account_id, str)
+                or not re.fullmatch(r'[A-Za-z0-9_-]+', self.account_id)
+                or not isinstance(self.room_id, str)
+                or not re.fullmatch(r'[A-Za-z0-9_-]+@chatroom', self.room_id)
+                or not isinstance(self.verification_evidence, str)
+                or not self.verification_evidence.strip()
+                or not isinstance(self.verified_at, datetime)
+                or self.verified_at.utcoffset() is None):
+            raise ValueError('EXPLICIT_PERSONAL_TEST_ACCOUNT_AND_ROOM_REQUIRED')
+
+    @property
+    def stable_key(self):
+        return 'personal-wechat-test:' + sha256(json.dumps(
+            [self.account_id, self.room_id], separators=(',', ':')).encode()).hexdigest()
+
+    def frozen_evidence(self):
+        return json.dumps({'format': 'personal-test-target-v1', 'account_id': self.account_id,
+                           'room_id': self.room_id, 'evidence': self.verification_evidence}, sort_keys=True)
+
+
+def test_recipient_from_mapping(mapping):
+    """Validate existing frozen target columns, including during stale-source readback."""
+    if mapping['target_platform'] == PERSONAL_TEST_PLATFORM:
+        try:
+            evidence = json.loads(mapping['verification_evidence'])
+            if set(evidence) != {'format', 'account_id', 'room_id', 'evidence'} or evidence['format'] != 'personal-test-target-v1':
+                raise ValueError()
+            recipient = PersonalWeChatTestRecipient(evidence['account_id'], evidence['room_id'],
+                evidence['evidence'], datetime.fromisoformat(mapping['verified_at']),
+                mapping['target_display_name'])
+            if recipient.stable_key != mapping['target_key']:
+                raise ValueError()
+            return recipient
+        except (ValueError, TypeError, KeyError, AttributeError):
+            raise ValueError('TEST_TARGET_INVALID') from None
+    if (mapping['target_platform'] != TEST_PLATFORM or mapping['target_display_name'] != TEST_DISPLAY_NAME
+            or not mapping['target_key'] or mapping['target_key'] == TEST_DISPLAY_NAME):
+        raise ValueError('TEST_TARGET_INVALID')
+    return TestRecipient(TEST_PLATFORM, mapping['target_key'], TEST_DISPLAY_NAME,
+                         mapping['verification_evidence'], datetime.fromisoformat(mapping['verified_at']))
 
 
 @dataclass(frozen=True)

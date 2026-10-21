@@ -24,8 +24,15 @@ def same_clipboard_body(copied, body):
     return copied.replace('\r\n', '\n') == body.replace('\r\n', '\n')
 
 
-def verify_frame(record, pin, *, foreground=None):
+def verify_frame(record, pin, *, foreground=None, expected_process='WXWork'):
     from PIL import Image
+    if expected_process not in ('WXWork', 'Weixin'):
+        raise PreflightFailure('FOREGROUND_PROCESS_OUTSIDE_ALLOWLIST')
+    if expected_process == 'Weixin':
+        from .personal_wechat_test_transport import NativePersonalWeChatTestTransport
+        NativePersonalWeChatTestTransport.validate_pin(pin)
+        if foreground is None or record.get('backend') != 'PERSONAL_WECHAT_TEST_NATIVE':
+            raise PreflightFailure('PERSONAL_TEST_NATIVE_FRAME_REQUIRED')
     if foreground is None:
         text = snapshot_text(record)
         if 'Focused Window:' not in text or 'Opened Windows:' not in text:
@@ -37,7 +44,7 @@ def verify_frame(record, pin, *, foreground=None):
         numbers = re.findall(r'\d+', line)
         geometry = list(map(int, numbers[-3:])) if len(numbers) >= 4 else []
     else:
-        if record.get('tool') != 'Screenshot' or record.get('is_error') is not False or foreground.get('process') != 'WXWork':
+        if record.get('tool') != 'Screenshot' or record.get('is_error') is not False or foreground.get('process') != expected_process:
             raise PreflightFailure('FOREGROUND_PROBE_FAILED')
         geometry = [foreground['width'],foreground['height'],foreground['handle']]
     if geometry != pin['window_geometry_handle']:
@@ -62,6 +69,8 @@ class MCPTestAnswerDesktop:
     simulated = False
     test_only = True
     test_answer_transport = True
+    receipt_platform = 'wecom'
+    receipt_name = '苇中鹤'
 
     def __init__(self, transport, pin, workspace, *, resume_existing_draft=False):
         from .mcp_transport import MCPProcess
@@ -157,8 +166,12 @@ class MCPTestAnswerDesktop:
             raise NotSubmitted('PRE_SUBMISSION_CHECK_FAILED') from exc
         # Workflow has already committed SENDING. No exception below can be
         # reported as a definitely unsubmitted draft, even if the tool times out.
+        self._before_submit(message)
         self._call('Click', loc=self.pin['send_point'])
         return self.reconcile(message)
+
+    def _before_submit(self, message):
+        """Optional adapter checkpoint; Workflow already owns durable SENDING."""
 
     def reconcile(self, message):
         """Copy an observed bubble for exact readback; never submit or re-type."""
@@ -202,7 +215,7 @@ class MCPTestAnswerDesktop:
             if not same_clipboard_body(copied, message.body) or not after['editor_blank']:
                 raise ValueError('SENT_BUBBLE_TEXT_MISMATCH')
             return {'confirmed': True, 'simulated': False, 'body_hash': message.body_hash,
-                    'confirmed_at': now(), 'target_platform': 'wecom', 'target_name': '苇中鹤',
+                    'confirmed_at': now(), 'target_platform': self.receipt_platform, 'target_name': self.receipt_name,
                     'target_key': self.pin['target_key'], 'source_student_delivered': False,
                     'verification': 'pinned current-session header/avatar + exact copied bubble + empty composer',
                     'server_receipt': False, 'recipient_read': False, 'frames': self.last_frames}

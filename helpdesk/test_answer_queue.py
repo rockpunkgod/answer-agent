@@ -7,7 +7,7 @@ from .delivery import BoundMessage
 from .domain import new_id
 from .service import Helpdesk
 from .storage import now
-from .test_routing import TestRecipient, TEST_DISPLAY_NAME, TEST_PLATFORM
+from .test_routing import TestRecipient, PersonalWeChatTestRecipient, test_recipient_from_mapping
 
 
 TEST_PREFIX = "【测试答案副本，仅发苇中鹤，不代表已回复学生，编号"
@@ -95,9 +95,9 @@ def validate_test_copy(store, row):
     if not source or source["state"] != "PENDING" or source["simulated"] != 0:
         raise ValueError("TEST_SOURCE_INVALID")
     source_bound, answer = validate_source_answer(store, source)
-    if (mapping["target_platform"] != TEST_PLATFORM or mapping["target_display_name"] != TEST_DISPLAY_NAME
-            or not mapping["target_key"] or mapping["target_key"] == TEST_DISPLAY_NAME):
-        raise ValueError("TEST_TARGET_INVALID")
+    recipient = test_recipient_from_mapping(mapping)
+    if isinstance(recipient, PersonalWeChatTestRecipient) and mapping['body_format'] != PLAIN_BODY_FORMAT:
+        raise ValueError('PERSONAL_TEST_PLAIN_BODY_REQUIRED')
     if (mapping["source_body_hash"] != source_bound.body_hash
             or mapping["question_version"] != source["question_version"]
             or mapping["context_revision"] != source["context_revision"]
@@ -109,23 +109,24 @@ def validate_test_copy(store, row):
             or row["question_version"] != source["question_version"]
             or row["context_revision"] != source["context_revision"]):
         raise ValueError("TEST_COPY_STALE")
-    return BoundMessage(row["id"], source["binding_id"], TEST_PLATFORM, mapping["target_key"], row["body"])
+    return BoundMessage(row["id"], source["binding_id"], recipient.platform, recipient.stable_key, row["body"])
 
 
 def test_copy_reconcile_bound(store, row):
     """Rebuild the frozen destination after a possible send, even if source went stale."""
     mapping = store.one("SELECT * FROM test_answer_copies WHERE test_outbox_id=?", (row["id"],))
-    if not mapping or row["purpose"] != "TEST_ANSWER" or mapping["target_platform"] != TEST_PLATFORM or not mapping["target_key"]:
+    if not mapping or row["purpose"] != "TEST_ANSWER":
         raise ValueError("TEST_COPY_MAPPING_MISSING")
+    recipient = test_recipient_from_mapping(mapping)
     source = store.one("SELECT binding_id FROM outbox WHERE id=?", (mapping["source_outbox_id"],))
     if not source or row["binding_id"] != source["binding_id"]:
         raise ValueError("TEST_COPY_BINDING_MISMATCH")
-    return BoundMessage(row["id"], row["binding_id"], TEST_PLATFORM, mapping["target_key"], row["body"])
+    return BoundMessage(row["id"], row["binding_id"], recipient.platform, recipient.stable_key, row["body"])
 
 
-def queue_test_answer(store, source_outbox_id: str, recipient: TestRecipient) -> str:
-    """Queue one real, reviewed answer copy for the verified WeCom test contact."""
-    if not isinstance(recipient, TestRecipient):
+def queue_test_answer(store, source_outbox_id: str, recipient: TestRecipient | PersonalWeChatTestRecipient) -> str:
+    """Queue one reviewed copy for an explicit supported test destination."""
+    if not isinstance(recipient, (TestRecipient, PersonalWeChatTestRecipient)):
         raise ValueError("Verified TestRecipient required")
     if not isinstance(source_outbox_id, str) or not source_outbox_id:
         raise ValueError("Source outbox id required")
@@ -156,7 +157,8 @@ def queue_test_answer(store, source_outbox_id: str, recipient: TestRecipient) ->
             question_version,context_revision,answer_revision,created_at,body_format)
             VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (source_outbox_id, test_id, recipient.platform, recipient.stable_key, recipient.display_name,
-             recipient.verification_evidence, recipient.verified_at.isoformat(),
+             recipient.frozen_evidence() if isinstance(recipient, PersonalWeChatTestRecipient) else recipient.verification_evidence,
+             recipient.verified_at.isoformat(),
              sha256(source["body"].encode("utf-8")).hexdigest(), source["question_version"],
              source["context_revision"], answer["answer_revision"], now(), PLAIN_BODY_FORMAT))
         return test_id
