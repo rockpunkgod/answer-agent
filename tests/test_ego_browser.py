@@ -46,6 +46,51 @@ class EgoBridgeTests(unittest.TestCase):
         self.assertEqual(command[1:3],['nodejs','-e'])
         self.assertNotIn('fixture prompt',command[-1])
 
+    def test_recreated_space_binds_name_and_keeps_unsubmitted_legacy_journal(self):
+        controls=self.root/'controls';controls.mkdir()
+        prior=self.root/'old-state.json';prior.write_text(json.dumps({'phase':'PREPARING'}))
+        owner=controls/'space-1-p1.owner';owner.write_text(str(prior))
+        adapter=EgoDeepSeek(1,self.root/'receipts',space_name='new-space',executable=self.root/'ego.exe')
+        with patch('helpdesk.ego_browser.subprocess.run',side_effect=self.complete):
+            adapter.submit(*self.args)
+        scripts=list((self.root/'receipts').glob('round-*.mjs'))
+        self.assertIn('"space_name": "new-space"',scripts[0].read_text())
+        self.assertEqual(owner.read_text(),str(prior))
+        self.assertEqual(json.loads(prior.read_text())['phase'],'PREPARING')
+
+    def test_named_space_cannot_bypass_unknown_legacy_submission(self):
+        controls=self.root/'controls';controls.mkdir()
+        prior=self.root/'old-state.json';prior.write_text(json.dumps({'phase':'SUBMISSION_INTENT'}))
+        (controls/'space-1-p1.owner').write_text(str(prior))
+        adapter=EgoDeepSeek(1,self.root/'receipts',space_name='new-space',executable=self.root/'ego.exe')
+        with patch('helpdesk.ego_browser.subprocess.run') as run:
+            with self.assertRaisesRegex(BrowserPaused,'LEGACY_OUTCOME'):
+                adapter.submit(*self.args)
+            run.assert_not_called()
+
+    def test_named_unknown_request_blocks_legacy_and_other_names_on_same_numeric_page(self):
+        first=EgoDeepSeek(1,self.root/'receipts',space_name='space-name',executable=self.root/'ego.exe')
+        def timeout(*args,**kwargs):
+            path=self.root/'receipts/run-teach.state.json'
+            state=json.loads(path.read_text());state['phase']='SUBMISSION_INTENT'
+            path.write_text(json.dumps(state))
+            raise subprocess.TimeoutExpired('fixture',1)
+        with patch('helpdesk.ego_browser.subprocess.run',side_effect=timeout) as run:
+            with self.assertRaisesRegex(BrowserPaused,'OUTCOME_UNKNOWN'):first.submit(*self.args)
+            for name in (None,'renamed-space'):
+                other=EgoDeepSeek(1,self.root/'other',space_name=name,executable=self.root/'ego.exe')
+                with self.assertRaisesRegex(BrowserPaused,'PAGE_HAS_UNRESOLVED_REQUEST'):
+                    other.submit('another',self.args[1],'another question')
+            self.assertEqual(run.call_count,1)
+
+    def test_named_spaces_share_the_original_physical_page_lock(self):
+        from helpdesk.locking import resource_lock
+        adapter=EgoDeepSeek(1,self.root/'receipts',space_name='named-space',executable=self.root/'ego.exe')
+        with resource_lock(self.root/'controls/space-1-p1.lock'),patch('helpdesk.ego_browser.resource_lock',
+                side_effect=lambda path,timeout:resource_lock(path,timeout=.02)),patch('helpdesk.ego_browser.subprocess.run') as run:
+            with self.assertRaises(TimeoutError):adapter.submit(*self.args)
+            run.assert_not_called()
+
     def test_timeout_never_resubmits_and_only_prior_submitted_can_be_captured(self):
         def timeout(*args,**kwargs):
             path=self.root/'receipts/run-teach.state.json'

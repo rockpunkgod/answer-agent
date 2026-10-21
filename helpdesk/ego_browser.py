@@ -30,10 +30,13 @@ class EgoDeepSeek:
     This is a browser primitive, like PlaywrightDeepSeek. Its captured reply is
     still subject to business version, ANSWER and delivery checks by the caller.
     """
-    def __init__(self, space_id, evidence_dir, *, page='p1', allowed_files=(), executable=None):
+    def __init__(self, space_id, evidence_dir, *, page='p1', allowed_files=(), executable=None, space_name=None):
         if type(space_id) is not int or space_id < 1 or not re.fullmatch(r'p[1-9][0-9]*', page):
             raise ValueError('An existing ego space and page are required')
         self.space_id, self.page = space_id, page
+        if space_name is not None and (not isinstance(space_name,str) or not space_name.strip() or len(space_name)>200):
+            raise ValueError('Invalid ego space identity')
+        self.space_name=space_name
         self.directory = Path(evidence_dir).resolve()
         self.allowed_files = frozenset(Path(p).resolve(strict=True) for p in allowed_files)
         self.executable = Path(executable).resolve() if executable else ego_executable()
@@ -60,15 +63,22 @@ class EgoDeepSeek:
             raise BrowserPaused('ATTACHMENT_NAME_COLLISION')
         request = {'space_id': self.space_id, 'page': self.page, 'session_url': session_url,
                    'prompt': prompt, 'files': files, 'response_token': response_token}
+        if self.space_name is not None:
+            request['space_name']=self.space_name
         if new_session:
             request['new_session'] = True
         fingerprint = sha256(json.dumps(request, sort_keys=True, ensure_ascii=False).encode()).hexdigest()
         self.directory.mkdir(parents=True, exist_ok=True)
         state_path = self.directory / (request_id + '.state.json')
         output_path = self.directory / (request_id + '.answer.json')
-        control = page_control_directory() / f'space-{self.space_id}-{self.page}'
+        physical_control = page_control_directory() / f'space-{self.space_id}-{self.page}'
+        control=physical_control
+        if self.space_name is not None:
+            control=control.with_name(control.name+'-'+sha256(self.space_name.encode()).hexdigest()[:16])
         owner_path = control.with_suffix('.owner')
-        with resource_lock(control.with_suffix('.lock'), timeout=5), \
+        # Names identify a recreated space, but every caller still serializes
+        # the same numeric page, including legacy callers without a name.
+        with resource_lock(physical_control.with_suffix('.lock'), timeout=5), \
                 resource_lock(self.directory / (request_id + '.lock'), timeout=5):
             # Old marker protocol is recovery-only; never create a new marked request.
             if response_token is not None and not state_path.exists():
@@ -84,6 +94,17 @@ class EgoDeepSeek:
                     if owner_path.exists() and owner_path.read_text(encoding='utf-8') == str(state_path):
                         owner_path.unlink()
                     return json.loads(raw)
+            for peer in physical_control.parent.glob(physical_control.name+'*.owner'):
+                if not re.fullmatch(re.escape(physical_control.name)+r'(?:-[0-9a-f]{16})?\.owner',peer.name):continue
+                if peer==owner_path:continue
+                prior=Path(peer.read_text(encoding='utf-8'))
+                phase=json.loads(prior.read_text(encoding='utf-8')).get('phase')
+                if phase=='CAPTURED':continue
+                if self.space_name and peer==physical_control.with_suffix('.owner') and phase=='PREPARING':
+                    continue  # No submission intent; preserve the legacy journal.
+                raise BrowserPaused('EGO_LEGACY_OUTCOME_REQUIRES_REVIEW' if peer==physical_control.with_suffix('.owner')
+                                    else 'EGO_PAGE_HAS_UNRESOLVED_REQUEST')
+            if state_path.exists():
                 if not capture_only:
                     raise BrowserPaused('PRIOR_ATTEMPT_REQUIRES_READONLY_CAPTURE')
                 if state.get('phase') not in ('SUBMISSION_INTENT', 'SUBMITTED'):

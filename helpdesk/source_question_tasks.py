@@ -238,6 +238,40 @@ class SourceQuestionTasks(OperatorTasks):
                         question=answer['question_id'], turn=answer['turn_id'], details=details)
         return self.get_draft(draft['id'])
 
+    def admit_confirmed_semantic(self, collector, decision_id, manifest, *, ego_space,
+                                ego_page='p1', self_sender_ids=(), teacher_sender_ids=()):
+        """Admit an already confirmed semantic decision without another human click.
+
+        This is not a message classifier or a confidence-based approval. The
+        existing resolver, original receipt, complete question/version, shared
+        counting relation and original attachments are revalidated first. The
+        same review/task and durable WAITING_ACK admission are reused on retry.
+        No desktop, generation, send or completed performance is performed here.
+        """
+        if type(ego_space) is not int or ego_space<1:
+            raise ValueError('Explicit existing ego space required')
+        draft=self.create_from_semantic(collector,decision_id,self_sender_ids=self_sender_ids,
+                                        teacher_sender_ids=teacher_sender_ids)
+        link=dict(self.db.one('SELECT * FROM source_question_drafts WHERE draft_id=?',(draft['id'],)))
+        origin=_read_origin(self.db,link)
+        # Review uses only unchanged source fields, never model-supplied routing.
+        _payload(draft['payload'],complete=True)
+        proof=encode({'kind':'CONFIRMED_SEMANTIC_SOURCE_CHECK','decision_id':decision_id,
+                      'source_sha256':origin['source_sha256'],
+                      'question_version':origin['context']['question_version'],
+                      'context_revision':origin['context']['context_revision']})
+        existing=self.db.one('SELECT id FROM operator_tasks WHERE draft_id=?',(draft['id'],))
+        if existing:
+            validate_reviewed_source_task(self.db,existing[0])
+            task=self.get_task(existing[0])
+        else:
+            task=self.review(draft['id'],expected_revision=draft['revision'],
+                             reviewer='system:confirmed-semantic-source',source_evidence=proof)
+        from .reviewed_question_queue import request_enqueue
+        queued=request_enqueue(self.db,task['id'],manifest,ego_space=ego_space,
+                               ego_page=ego_page,ego_policy='MATCH_THEN_TEACH')
+        return {**self.get_task(task['id']),'auto_queue':queued}
+
     def create_from_received(self, collector, collector_task_id, *, question_type, resolver_evidence,
                              self_sender_ids=(), teacher_sender_ids=()):
         """Trusted backend intake only. UI cannot supply original identity or files.

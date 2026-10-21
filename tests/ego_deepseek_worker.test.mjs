@@ -4,7 +4,30 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import {createHash} from 'node:crypto';
-import {run,attachmentsReady} from '../helpdesk/ego_deepseek.mjs';
+import {run,attachmentsReady,replyStable} from '../helpdesk/ego_deepseek.mjs';
+
+test('read-aloud during streaming is not stable completion',()=>{
+  const originalNow=Date.now;let now=1000;let text='partial';
+  const previousDocument=globalThis.document;
+  globalThis.document={querySelectorAll(){return [{get innerText(){return text},closest(){return {querySelector(){return {}},getAttribute(){return 'new'}}}}]}};
+  Date.now=()=>now;
+  const args={selector:'.reply',baseline:[],key:'anonymous-stream-test'};
+  try {
+    assert.equal(replyStable(args),false);
+    now+=2100;text='still streaming';assert.equal(replyStable(args),false);
+    now+=1000;assert.equal(replyStable(args),false);
+    now+=1100;assert.equal(replyStable(args),true);
+  } finally {Date.now=originalNow;globalThis.document=previousDocument;}
+});
+
+test('reused numeric space with wrong name stops before page access',async()=>{
+  const f=await fixture();
+  f.request.space_name='expected-space';
+  const previous=globalThis.taskSpace;
+  globalThis.taskSpace=async()=>({name:'another-space',page(){throw new Error('PAGE_MUST_NOT_BE_ACCESSED')}});
+  try {await assert.rejects(run(f.request),/SPACE_IDENTITY_CHANGED/);}
+  finally {globalThis.taskSpace=previous;await f.cleanup();}
+});
 
 async function fixture(options={}) {
   const directory=await fs.mkdtemp(path.join(os.tmpdir(),'ego-fixture-'));
@@ -32,7 +55,14 @@ async function fixture(options={}) {
     async goto(url){state.url=options.redirectLogin?'https://chat.deepseek.com/sign_in':url},
     async evaluate(fn,arg){return fn(arg)},
     async setInputFiles(){state.uploads++},
-    async waitForFunction(fn,arg){if(!fn(arg))throw new Error('WAIT_CONDITION_FAILED')},
+    async waitForFunction(fn,arg){
+      if(fn(arg))return;
+      if(fn.name==='replyStable') {
+        const original=Date.now;const now=original();
+        try {Date.now=()=>now+2001;if(fn(arg))return;} finally {Date.now=original;}
+      }
+      throw new Error('WAIT_CONDITION_FAILED');
+    },
     async fill(selector,text){state.value=options.stagedMismatch?'wrong':text;if(options.moveAfterFill)state.url='https://example.org/'},
     async press(){throw new Error('KEYBOARD_SUBMISSION_FORBIDDEN')},
     async click(){state.submissions++;if(options.newChat)state.url='https://chat.deepseek.com/a/chat/s/created';state.answer=options.plain?'第34题：这是自然语言答复。':'BEGIN_fixture\n{"text":"fixture"}\nEND_fixture';if(options.submitError)throw new Error('UNKNOWN_SUBMIT_OUTCOME')}

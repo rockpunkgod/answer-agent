@@ -45,6 +45,20 @@ export function sendControlReady(selector) {
     && !visible[0].classList.contains('ds-button--disabled');
 }
 
+export function replyStable({selector,token,baseline,key}) {
+  const nodes=[...document.querySelectorAll(selector)].filter(node=>{
+    const row=node.closest('[data-virtual-list-item-key]');
+    return row?.querySelector('[aria-label="朗读"]') && !baseline.includes(row.getAttribute('data-virtual-list-item-key'));
+  });
+  if(nodes.length!==1) return false;
+  const text=nodes[0].innerText.trim();
+  if(!text || (token && !text.endsWith('END_'+token))) return false;
+  const cache=globalThis.__answerAgentReplyStability ||= {};
+  const previous=cache[key];
+  if(!previous || previous.text!==text) {cache[key]={text,at:Date.now()};return false;}
+  return Date.now()-previous.at>=2000;
+}
+
 async function saveState(request, values) {
   const current = JSON.parse(await fs.readFile(request.state_path, 'utf8'));
   if (current.fingerprint !== request.fingerprint) throw new Error('REQUEST_CHANGED');
@@ -59,6 +73,7 @@ export async function run(request, {resumeStaged=false}={}) {
   if(request.capture_only && !['SUBMISSION_INTENT','SUBMITTED'].includes(persisted.phase)) throw new Error('NOT_SUBMITTED');
   if(resumeStaged && (request.capture_only || persisted.phase!=='PREPARING')) throw new Error('STAGED_RESUME_REQUIRES_UNSUBMITTED_REQUEST');
   const task = await taskSpace(request.space_id);
+  if(request.space_name && task.name !== request.space_name) throw new Error('SPACE_IDENTITY_CHANGED');
   const page = task.page(request.page);
   const expected=persisted.resolved_session_url || request.session_url;
   const isChat=url=>/^https:\/\/chat\.deepseek\.com\/a\/chat\/s\/[A-Za-z0-9-]+$/.test(url);
@@ -117,6 +132,9 @@ export async function run(request, {resumeStaged=false}={}) {
   if(!request.response_token && !Array.isArray(saved.baseline_answer_keys)) throw new Error('MISSING_REPLY_BASELINE');
   const capture={selector:answers,token:request.response_token,baseline:saved.baseline_answer_keys || []};
   await page.waitForFunction(readReply,capture,{timeout:request.timeout_ms});
+  // The read-aloud control can appear while text is still streaming. Require
+  // an unchanged response as well; structured consumers still validate JSON.
+  await page.waitForFunction(replyStable,{...capture,key:request.state_path},{timeout:request.timeout_ms});
   const resolved=await page.url();
   if(request.new_session) {
     if(!isChat(resolved) || (saved.resolved_session_url && saved.resolved_session_url !== resolved)) throw new Error('SESSION_CHANGED');

@@ -191,7 +191,7 @@ CREATE TABLE IF NOT EXISTS live_activation (
                 db.execute("INSERT INTO students VALUES(?,?,?) ON CONFLICT(source_type,sender_id) DO UPDATE SET display_name=excluded.display_name", (message.source_type, message.sender_id, message.sender_display_name))
                 before_activation = bool(activation and (not message.sent_at_utc or
                     datetime.fromisoformat(message.sent_at_utc) < datetime.fromisoformat(activation[0])))
-                allowed = mode == SyncMode.LIVE and not collision and not before_activation and message.time_confidence != 'low' and message.source_confidence != 'low'
+                allowed = message.source_type != 'personal_wechat_local' and mode == SyncMode.LIVE and not collision and not before_activation and message.time_confidence != 'low' and message.source_confidence != 'low'
                 db.execute("INSERT INTO events(event_id,event_type,message_id,source_name,mode,auto_reply_allowed,created_at,last_error) VALUES(?,?,?,?,?,?,?,?)", (str(uuid4()), "message_received", message.message_id, source_name, mode, int(allowed), utc_now(), "PRE_ACTIVATION_HISTORY_ACK_FORBIDDEN" if before_activation and mode == SyncMode.LIVE else None))
                 if message.media_id or message.message_type in {"image", "file", "voice", "video"}:
                     db.execute("INSERT INTO message_media(message_id,media_id,media_type) VALUES(?,?,?)", (message.message_id, message.media_id, message.message_type))

@@ -49,13 +49,14 @@ class _AnswerConnection(MCPProcess):
 
 class AutomaticAnswerRuntime:
     def __init__(self, database, config=None, *, manifest=None, reference_config=None,
-                 transport_factory=None, navigator=None):
+                 transport_factory=None, navigator=None, collector_config=None):
         value = (json.loads(Path(config).read_text(encoding='utf-8'))
                  if isinstance(config, (str, Path)) else deepcopy(config))
         value = {'enabled': False} if value is None else value
         if (not isinstance(value, dict) or type(value.get('enabled')) is not bool
-                or set(value) - {'enabled', 'display_index', 'new_chat_button', 'preparation_controls', 'max_generation_attempts', 'backend', 'space_id', 'page', 'ego_policy', 'allow_disabled_search'}
-                or type(value.get('allow_disabled_search', False)) is not bool):
+                or set(value) - {'enabled', 'display_index', 'new_chat_button', 'preparation_controls', 'max_generation_attempts', 'backend', 'space_id', 'page', 'ego_policy', 'allow_disabled_search', 'admit_confirmed_sources'}
+                or type(value.get('allow_disabled_search', False)) is not bool
+                or type(value.get('admit_confirmed_sources',False)) is not bool):
             raise ValueError('Explicit local automatic answer configuration required')
         self.backend = value.get('backend','windows_mcp')
         if self.backend not in ('windows_mcp','ego_lite'):
@@ -65,6 +66,14 @@ class AutomaticAnswerRuntime:
         self.workspace = Path(__file__).resolve().parents[1]
         self.manifest, self.reference_config = manifest, reference_config
         self.config = value
+        self.collector_config=deepcopy(collector_config)
+        self.last_admission=None
+        if value.get('admit_confirmed_sources'):
+            settings=(collector_config or {}).get('collector',{})
+            if (not self.enabled or self.backend!='ego_lite' or value.get('ego_policy')!='MATCH_THEN_TEACH'
+                    or not isinstance(settings.get('database'),(str,Path)) or not str(settings['database']).strip()):
+                raise ValueError('Automatic source admission requires an existing collector and two-stage ego runtime')
+            Path(settings['database']).resolve(strict=True)
         self.max_generation_attempts = value.get('max_generation_attempts', 2)
         if type(self.max_generation_attempts) is not int or not 1 <= self.max_generation_attempts <= 2:
             raise ValueError('Generation attempts must be 1 or 2')
@@ -97,7 +106,7 @@ class AutomaticAnswerRuntime:
                 raise ValueError('A reviewed literal new-chat button name is required')
         if self.enabled:
             from .teaching_bundle import verify_bundle
-            verify_bundle(manifest, for_generation=True)
+            self.question_type=verify_bundle(manifest, for_generation=True)['question_type']
             self.manifest_sha256 = sha256(Path(manifest).read_bytes()).hexdigest()
 
     def require_running(self):
@@ -139,6 +148,7 @@ class AutomaticAnswerRuntime:
                 'paused': self.pause_requested.is_set() or bool(stop and stop[0] == 'true'),
                 'busy': self.lock.locked(),
                 'last_result': self.last_result, 'error_type': self.error_type,
+                'last_source_admission':self.last_admission,
                 'native_call_pending': bool(self.pending_process and self.pending_process._proc
                     and self.pending_process._proc.poll() is None),
                 'live_validation': 'NOT_VERIFIED'}
@@ -417,6 +427,42 @@ class AutomaticAnswerRuntime:
                           'PAGE_WAIT_LIMIT_REACHED' if failures == 2 else 'PAGE_NOT_READY')
             return get(store, task_id)
 
+    def _admit_confirmed_sources(self,store):
+        """Existing semantic decisions only; no inference, GUI or external calls."""
+        if not self.config.get('admit_confirmed_sources'):return
+        from .collector_storage import CollectorStore
+        from .semantic_decisions import CONFIRMED
+        from .source_question_tasks import SourceQuestionTasks
+        settings=self.collector_config['collector']
+        collector=CollectorStore.__new__(CollectorStore)
+        collector.path=str(Path(settings['database']).resolve(strict=True))
+        rows=store.all('''SELECT a.details FROM audit a WHERE a.event=?
+            AND json_extract(a.details,'$.question_type')=? AND NOT EXISTS (
+              SELECT 1 FROM audit b WHERE b.event IN ('SOURCE_AUTO_ADMITTED','SOURCE_AUTO_ADMISSION_BLOCKED')
+              AND json_extract(b.details,'$.decision_id')=json_extract(a.details,'$.decision_id'))
+            ORDER BY a.rowid LIMIT 10''',(CONFIRMED,self.question_type))
+        for row in rows:
+            self.require_running()
+            decision=json.loads(row[0])
+            try:
+                task=SourceQuestionTasks(store).admit_confirmed_semantic(collector,decision['decision_id'],
+                    self.manifest,ego_space=self.config['space_id'],ego_page=self.config.get('page','p1'),
+                    self_sender_ids=settings.get('self_sender_ids',()),
+                    teacher_sender_ids=settings.get('teacher_sender_ids',()))
+                result={'decision_id':decision['decision_id'],'task_id':task['id'],
+                        'phase':task['auto_queue']['phase'],'human_review_performed':False}
+                event='SOURCE_AUTO_ADMITTED'
+            except (ValueError,OSError) as error:
+                code=str(error)
+                result={'decision_id':decision['decision_id'],'phase':'NEEDS_ATTENTION',
+                        'error_type':type(error).__name__,'automatic_retry':False,
+                        'reason':code if re.fullmatch(r'[A-Z][A-Z0-9_]{1,100}',code) else 'SOURCE_ADMISSION_CHECK_FAILED'}
+                event='SOURCE_AUTO_ADMISSION_BLOCKED'
+            with store.transaction():
+                store.execute('INSERT INTO audit(event,details,created_at) VALUES(?,?,?)',
+                              (event,encode(result),now()))
+            self.last_admission=result
+
     def tick(self):
         if not self.enabled:
             return {'state': 'DISABLED'}
@@ -426,6 +472,7 @@ class AutomaticAnswerRuntime:
             self.require_running()
             from .reviewed_question_queue import list_queue, advance
             with closing(Store(self.database.resolve(strict=True))) as store:
+                self._admit_confirmed_sources(store)
                 eligible = {row[0] for row in store.all('SELECT id FROM operator_tasks WHERE label=?',
                     ('SOURCE_MESSAGE',))} if not self.simulation and store.one(
                         "SELECT name FROM sqlite_master WHERE name='operator_tasks'") else None

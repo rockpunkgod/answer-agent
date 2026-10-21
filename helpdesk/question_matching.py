@@ -143,6 +143,37 @@ def prepare_text(snapshot, directory, *, create=True):
     return {'kind': 'matching_text', 'path': str(path), 'name': path.name, 'sha256': digest}
 
 
+def decode_matching_text(text):
+    """Parse one complete object, allowing only observed code-block chrome.
+
+    DeepSeek's DOM innerText includes the code block's language/copy/download
+    labels. Keep that raw capture; unwrap labels without extracting arbitrary
+    prose or accepting a partial JSON object.
+    """
+    _require(isinstance(text,str) and len(text)<=100_000, 'MATCH_RESULT_TEXT_INVALID')
+    content=text.replace('\r\n','\n').strip()
+    prefix='json\n复制\n下载\n'
+    if content.startswith(prefix):
+        content=content[len(prefix):]
+    elif content.startswith('```json\n') or content.startswith('```\n'):
+        _require(content.endswith('\n```'), 'MATCH_RESULT_JSON_INCOMPLETE')
+        content=content.split('\n',1)[1][:-4]
+    def unique(pairs):
+        value={}
+        for key,item in pairs:
+            _require(key not in value, 'MATCH_RESULT_DUPLICATE_KEY')
+            value[key]=item
+        return value
+    def constant(_):
+        raise ValueError('MATCH_RESULT_NONFINITE_NUMBER')
+    try:
+        result=json.loads(content,object_pairs_hook=unique,parse_constant=constant)
+    except (json.JSONDecodeError,RecursionError):
+        raise ValueError('MATCH_RESULT_JSON_INVALID_OR_INCOMPLETE') from None
+    _require(isinstance(result,dict), 'MATCH_RESULT_OBJECT_REQUIRED')
+    return result
+
+
 def validate_result(snapshot, result):
     """Confidence is never accepted. Exact identity/mapping still uses compare."""
     keys = {'match_status', 'selected_candidate', 'relation', 'differences', 'option_mapping', 'unresolved_fields'}
@@ -375,7 +406,7 @@ def _captured_result(store, snapshot, proof, page):
              and captured.get('completion_evidence') == 'NEW_ASSISTANT_AND_READ_ALOUD_CONTROL'
              and captured.get('upload_manifest') == request['files'],
              'MATCH_NATIVE_CAPTURE_CHANGED')
-    return json.loads(captured['text'])
+    return decode_matching_text(captured['text'])
 
 
 def record_ego_result(store, snapshot, capture_path):

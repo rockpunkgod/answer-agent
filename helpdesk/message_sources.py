@@ -78,12 +78,12 @@ class NormalizedMessage:
     business_timezone: str = "Asia/Shanghai"
 
     def __post_init__(self):
-        if self.source_type not in {"wecom_archive", "wecom_api", "windows_gui"}:
+        if self.source_type not in {"wecom_archive", "wecom_api", "windows_gui", "personal_wechat_local"}:
             raise ValueError("unknown source_type")
         if not all(isinstance(v, str) and v.strip() for v in (self.message_id, self.room_id, self.sender_id)):
             raise ValueError("message_id, room_id and sender_id are required")
         if self.source_type != "windows_gui" and not self.source_message_id:
-            raise ValueError("official source requires verified stable source_message_id")
+            raise ValueError("non-GUI source requires verified stable source_message_id")
         if self.source_message_id is not None and (not isinstance(self.source_message_id, str) or not self.source_message_id.strip()):
             raise ValueError("source_message_id must be a nonempty string")
         if self.message_type not in {"text", "image", "file", "voice", "video", "link", "quote", "other"}:

@@ -56,6 +56,22 @@ class EgoMatchingProofTests(unittest.TestCase):
         finally:
             reopened.close()
 
+    def test_observed_dom_code_block_labels_are_parsed_without_changing_raw_evidence(self):
+        attempt=self.begin()
+        self.captured(attempt,change={'text':'json\n复制\n下载\n'+json.dumps(STUDENT_ONLY)})
+        raw=self.capture.read_bytes()
+        saved=matching.record_ego_result(self.db,self.snapshot,self.capture)
+        self.assertEqual(saved['question_match_result']['checked']['status'],'VERIFIED_STUDENT_ONLY')
+        self.assertEqual(self.capture.read_bytes(),raw)
+
+    def test_matching_parser_rejects_partial_prose_duplicates_and_nonfinite_values(self):
+        for text in ('{"match_status":"STUDENT_ONLY"', '说明：'+json.dumps(STUDENT_ONLY),
+                     json.dumps(STUDENT_ONLY)+' trailing', '{"a":1,"a":2}',
+                     '{"a":NaN}', '[]', '```json\n{}'):
+            with self.subTest(text=text),self.assertRaises(ValueError):
+                matching.decode_matching_text(text)
+        self.assertEqual(matching.decode_matching_text('```json\n'+json.dumps(STUDENT_ONLY)+'\n```'),STUDENT_ONLY)
+
     def test_request_is_durable_before_upload_and_cannot_be_restarted(self):
         attempt = self.begin()
         self.assertEqual(attempt['backend'], 'EGO_LITE')

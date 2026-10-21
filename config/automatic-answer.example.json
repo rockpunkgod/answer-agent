@@ -1,5 +1,6 @@
 {
   "enabled": false,
+  "admit_confirmed_sources": false,
   "display_index": 0,
   "new_chat_button": "开启新对话",
   "max_generation_attempts": 2,

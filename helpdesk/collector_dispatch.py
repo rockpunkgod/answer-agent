@@ -87,7 +87,9 @@ class CollectorDispatcher:
         raw = message.raw_payload if isinstance(message.raw_payload, dict) else {}
         role = str(raw.get("sender_role", raw.get("role", ""))).lower()
         reason = None
-        if str(mode) != "LIVE":
+        if message.source_type == 'personal_wechat_local':
+            reason = 'PERSONAL_WECHAT_READ_ONLY_PROTOTYPE'
+        elif str(mode) != "LIVE":
             reason = "BACKFILL_ACK_FORBIDDEN"
         elif self.ack_room_names is not None and message.room_name not in self.ack_room_names:
             reason = "GROUP_OUTSIDE_ACK_SCOPE"
@@ -142,6 +144,8 @@ class CollectorDispatcher:
         task_id = sha256((message.source_type + ":" + identity).encode()).hexdigest()
         trusted = (message.source_confidence == "high" and message.time_confidence == "high"
                    and bool(message.sent_at_local) and message.parse_status == "parsed")
+        if message.source_type == 'personal_wechat_local':
+            trusted = False
         if message.source_type == "windows_gui":
             trusted = trusted and message.raw_payload.get("identity_verified") is True
         binding = self.business.one("SELECT * FROM bindings WHERE group_key=? AND student_key=? AND verified=1",
@@ -232,6 +236,8 @@ class CollectorDispatcher:
         conflict = db.execute("SELECT 1 FROM message_conflicts WHERE message_id=? LIMIT 1", (task["collector_message_id"],)).fetchone()
         if conflict or not source_row:
             raise ValueError("Collector source conflict or missing original message")
+        if source_row['source_type'] == 'personal_wechat_local':
+            raise ValueError('PERSONAL_WECHAT_READ_ONLY_PROTOTYPE')
         if self.business.one("SELECT id FROM source_conflicts WHERE message_id=? LIMIT 1", (task["business_message_id"],)):
             raise ValueError("Original receipt has an unresolved source conflict")
         raw = json.loads(source_row["raw_payload"])

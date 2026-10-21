@@ -447,7 +447,8 @@ class DemoHTTPServer(ThreadingHTTPServer):
         from .automatic_answer_runtime import AutomaticAnswerRuntime
         self.automatic_answer = AutomaticAnswerRuntime(self.db_path, automatic_answer_config,
             manifest=(self.operator_config or {}).get('manifest'), reference_config=reference_lookup_config,
-            transport_factory=automatic_answer_transport_factory, navigator=automatic_answer_navigator)
+            transport_factory=automatic_answer_transport_factory, navigator=automatic_answer_navigator,
+            collector_config=self.collector_config)
         if self.automatic_answer.enabled and self.automatic_answer.backend == 'ego_lite':
             if self.operator_config is not None:
                 self.operator_config.update(ego_space=self.automatic_answer.config['space_id'],

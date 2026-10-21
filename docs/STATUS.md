@@ -1,3 +1,53 @@
+### 2026-10-21：Level 3 目标复核及自动接线增量（未上线）
+
+用户目标原文已读取：`2384694d-9325-4171-9fe4-2cb55a7084f4/pasted-text-1.txt`。保持完整 Level 3 目标，不把本轮只读练习或新增接线缩小成最终成功条件。业务远端 main=7bd61a5868619a6033f6b45af91db34e49b6138a；原主工作区13项未提交变更未动。
+
+ANSWER_COMMIT=1c388a0596b13935ae7c6a1af00834915a8efa33。重新 fetch 并用 ls-remote --symref 核对远端默认 main/HEAD，最新确实为该提交；验收工作树干净。主参考目录 HEAD=b04ebc2，不能把它冒称最新内容；实际教学包来自独立的 ANSWER-acceptance-1c388a0 工作树。当前原文、完整依赖及缓存仍由原 build/verify 检查，不修改教学文件或脚本。
+
+本批实际改动：SourceQuestionTasks 支持共享语义决定确认后的自动来源核验/任务创建，原 AutomaticAnswerRuntime 在显式 admit_confirmed_sources 下承接，复用原 WAITING_ACK 和恢复队列。默认关闭，仅已有可信来源、既有 CollectorStore、ego MATCH_THEN_TEACH 允许配置；不解除个人微信只读原型限制。失败按决定记录原 audit，不无限重试，也不挡住后续合法决定。此前人工审核结果原样复用。此接线不提供尚未接通的消息语义模型。
+
+修复真实网页发现的 JSON 代码块按钮文字：只解包已观察的 json/复制/下载前缀或完整 Markdown fence，原捕获不改写；半截、额外说明、重复键、NaN 和非对象拒绝。仍执行原候选ID、差异、选项映射和版本校验。
+
+| 冻结验收项 | 现有实现/证据入口 | 当前结论与真实缺口 |
+| --- | --- | --- |
+| ANSWER 来源/依赖/缓存 | answer_teaching、teaching_bundle、teaching_routes；远端实查与原文 manifest | 版本已重新核实；该次真实草稿检查失败仍保留 |
+| 消息/身份/原始时间/去重/15分钟入口 | message_sources、message_sync、collector_storage、native_message_source；personal_wechat_source | 文件来源保留，个人微信四群本地读取已实测；持续真实新到达及生产者/SLA未验收 |
+| AckTask 独立与幂等 | collector_dispatch、delivery_tasks、AutomaticDeliveryRuntime、test_ack_before_generation | 原收到路径保留；个人微信原型不发送；新消息真实15分钟SLA未证实 |
+| Reference 预算/独立失败/Top2 | reference_lookup、reference_fetch、reference_resolution；现有相关测试 | 站点配置和保护保留；准入/真实可用候选来源未完成，不伪造已搜索 |
+| 两阶段核验与24种映射 | question_matching、ego_generation、test_question_matching、test_ego_matching | 结构/ID/映射已有匿名回归；独立网页练习不是完整业务匹配回执 |
+| 详细教学与发送前检查 | lesson_checks、Workflow、ANSWER原脚本 | 新测试群两稿真实失败；不放宽检查、不继续绕过该题重试预算 |
+| Session及追问复用 | session_isolation、followup_reuse、question_session_isolation | 匿名隔离/追问测试保留；新个人微信群真实追问交付未验收 |
+| AnswerTask分阶段重试 | reviewed_question_queue、automatic_answer_runtime、ego_revision | 新增自动准入，无第二次人工点击；语义模型输出至确认仍未自动接线 |
+| AutoSendGate | Workflow、delivery_tasks、wecom_tools | 原目标/版本/暂停/UNKNOWN守卫保留；个人微信生产发送未启用 |
+| DeliveryBatch/回读/DeliveryRecord | delivery_batches、delivery、Workflow | 原有分段/部分未知停止保护保留；本轮无真实发送或交付回流 |
+| 中途更正/旧答案阻止 | service、Workflow、test_question_matching、相关版本测试 | 保护保留；新消息源真实中途更正试运行未完成 |
+| 绩效/23:00/重复日报 | semantic_decisions、performance_rules、performance_reports | 复用同一归属，候选数量不等于确认完成；新源无正式交付、不记正式绩效 |
+| 实际成本统计 | call_costs、RunMeter、task_cost | 正式队列已有记录接口；当前真实全链路实际账单仍未核实，平均/P50/P95/max不能报0 |
+| A–H真实场景与20任务试运行 | 原STATUS真实证据及私有Pilot记录 | 未达到；不把历史图或匿名fixture凑成真实20任务 |
+| 六阶段重启恢复 | test_process_restart、test_ego_process_restart、test_ego_revision | 原匿名进程测试保留；新群完整真实恢复未验收 |
+
+REAL修补：原图加载仅改变download_status，旧整行锚点误停。先备份，再对照原始行逐个升级当前四群8个v1游标为v2；未移除seen锚点、不吞未见消息，旧停用测试群游标不动。随后LIVE四群0新增/0重复/0冲突，前台未变；原始17条消息及events/message_conflicts/message_media与备份逐表哈希一致。不是新消息SLA或自动补下载验收。
+
+UNIT/MOCK最新定向：9组89项通过，0失败/跳过，22.529秒，含来源自动准入、原图下载状态、v1证据升级、网页解析、两阶段/JS守卫、HTTP来源、交付集成和会话隔离。新增测试初次对阶段名误期望ENQUEUED，原API实际投影WAITING_DESKTOP_EXECUTOR；只修正测试期望，业务阶段未改，已在该89项中回归。先前较完整回归82项中81通过、该误期望1失败（591.038秒）；不将失败整批说成全绿，也不为此反复运行整套长测试。
+
+补充复核：空间名称与旧客户端共用原物理页面锁，各名称的未完成提交互相拦截；不能靠换名称或不传名称绕过UNKNOWN。新增跨名称/旧入口互斥后，5组52项定向通过，0失败/跳过，3.312秒。一次补跑命令误用了配置测试所属类名，报2个测试定位错误；改用AutomaticAnswerConfigurationTests后4项通过（0.314秒），没有据此修改生产逻辑。当前进程BRAVE_SEARCH_API_KEY未配置，未发现主工作区私有目录顶层的reference TOML；不能据此断言其他账号不存在配置，也不能声称本轮已启用真实搜索。
+
+原有核心回归：`python -X utf8 -B -m unittest -q tests.test_reference_lookup tests.test_reference_fetch tests.test_reference_resolution tests.test_delivery_batches tests.test_performance_rules tests.test_call_costs tests.test_followup_reuse`，135项通过，0失败/跳过，433.477秒；这些是UNIT/MOCK或本地HTTP，不是对真实网站、真实发送或实际账单的验证。原文包实际verify_bundle(for_generation=True)再次通过，8份原文、1项必需依赖完整。新的正文稳定窗口已在两次真实生成使用，但真实流式长停顿/中断样本未验收，不以稳定窗口单测宣称完整捕获已全面解决。
+
+教学来源/依赖/缓存回归：`python -X utf8 -B -m unittest -q tests.test_answer_teaching tests.test_teaching_routes tests.test_teaching_bundle`，48项运行、47通过、1跳过、0失败，79.079秒。单独verbose复核跳过项为test_symbolic_link_dependency_is_rejected，原因Filesystem cannot create symbolic links；保留SKIPPED，不算通过，不要求管理员权限或关闭系统设置。已有真实路径与Windows junction防护及测试保留。
+
+结论仍 NOT_READY。下一业务缺口保持：自动语义理解/现有确认接口接线、原图无缓存时的自动获取、授权测试目标的真实交付与追问，以及可核实成本和稳定性试运行；不以新增模块或测试数量替代验收。
+
+### 2026-10-21：隔离个人微信数据库采集原型
+
+`prototype/personal-wechat-db-20261021` 基于 main 7bd61a5，原 main 工作区未提交修改保持不动。新增明确来源 personal_wechat_local，复用 CollectorStore/SyncEngine，不允许 ACK、业务投影或正式绩效。只加载固定上游 db/media，替代有丢回调风险的原 Listener。配置、缓存、密钥及证据只在私有目录。完整范围与命令见 PERSONAL_WECHAT_LOCAL_SOURCE.md。
+
+REAL：三个 English 群各三条本地系统记录；后续唯一“测试”群读到真实文字与图片、完整原始时间及发送者。旧测试群停用并保留记录。用户加载原图后，本地后台原图读取成功且哈希已保存。不能把这次人工加载说成自动获取。未自动发 ACK/正文，未改正式台账；来源至现有 Workflow/Outbox 尚未接通，整体全自动仍 NOT_READY。
+
+UNIT/MOCK：最终采集与网页13组162项通过、0失败/跳过，17.278秒；JS worker 内15项通过。合并首次运行新增 JS 测试的清理代码误用不存在的 fixture.directory 导致1项失败，改用已有 cleanup 后重跑全部通过，未删断言。真实恢复去重有验证，真实新 LIVE 到达、缺原图自动获取和进程崩溃后的真实恢复尚未验证。
+
+REAL WEB：新测试群B篇原图只上传一次；识别24—27题、同会话上传固定ANSWER原文、生成稿、唯一一次修订均真实执行。最初捕获半截JSON，原捕获不覆盖；网页只读补取完整结果后校验结构。修正以后捕获增加正文稳定检查。原ANSWER定位脚本和成稿检查脚本实际运行：初稿5个method_visibility疑点，唯一修订后仍2个，状态BLOCKED_DRAFT_CHECK，未再重试。保留原始输出、补取证据及两稿；未伪造教学通过或Workflow/Outbox接通，未外发/计绩效。网页结果页保留供查看，控制已释放。
+
 ### 2026-10-20：单条原始时间的人工确认回读
 
 - 用户仅确认本条测试消息日期为 2026-10-19；确认追加至现有 audit，关联原始文字、时间观察和既有 OPERATOR_TEST 消息，写入前已备份 SQLite。未修改原始证据或批量补年份。
