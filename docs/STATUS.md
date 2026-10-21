@@ -1,3 +1,13 @@
+### 2026-10-21：测试群发送授权与原生输入复用
+
+用户已明确允许个人微信“测试”群内部生成，随后扩大为该测试群完整发送试验；三个English群仍只读，不因这一授权启用生产来源或正式绩效。此前等待测试群范围确认的阻断已解除。当前B篇原稿及唯一一次修订仍保留BLOCKED_DRAFT_CHECK，两条method_visibility疑点未消除；不得另建任务重置修订次数或直接发送。
+
+新增 `NativePersonalWeChatTestTransport`，仅接受明确审核的个人微信测试群会话ID、名称“测试”、有效期和外部任务/目标守卫。复用现有Win32实现，以固定类属性隔离Weixin和WXWork的进程、主窗口标题、证据目录及backend名称；未扩大原企业微信入口的进程白名单。每次输入仍检查当前前台/布局、交互桌面、按键及指针变化、暂停/任务守卫；未知动作保留不可自动重放的原生意图。没有导入上游发送/UIA驱动、开启Qt gate或创建新的桌面控制器。
+
+UNIT/MOCK：`python -X utf8 -B -m unittest -q tests.test_personal_wechat_test_transport tests.test_wecom_native tests.test_native_group_ack tests.test_mcp_test_delivery`，51项通过，0失败/跳过，0.543秒。新8项验证测试群范围拒绝、有效期、配置复制、企业微信与个人微信互相拒绝、布局/指针/暂停停止、独立backend证据及提交异常后UNKNOWN意图不重放。Win32均为模拟，不构造真实WinDLL或操作账号。
+
+这只是原生输入边界，尚不是可运行的个人微信交付适配器。原Outbox接线、实际群身份与当前消息锚点核验、分段发送和独立实际回读仍需实现并真实验证；当前没有将它加入AutomaticDeliveryRuntime或Collector。没有真实采集、DeepSeek调用、GUI输入、ACK或正文发送，也没有修改正式绩效或生产配置。唯一下一步：在原发送接口中补齐仅测试群的Outbox适配和独立回读，之后才可执行合格稿件的真实发送验收。整体NOT_READY。
+
 ### 2026-10-21：新采集入口真实后台只读单次验证
 
 用户明确授权仅一次后台只读采集。执行前只核对配置、已有库和进程元数据，绑定进程匹配；SQLite只读备份完整性通过。随后仅执行一次隔离解释器的 `tools/personal_wechat_collect.py poll --config data/private/replica-runtime/source.local.json`，耗时4.405秒，退出0，RAW_COLLECTOR_SYNCED/LIVE。四个已确认群均完成本地读取，新增0、冲突0；未启动watch或工作台服务，未重复执行。

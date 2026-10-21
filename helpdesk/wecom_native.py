@@ -18,10 +18,14 @@ from .mcp_window_probe import FOREGROUND_COMMAND
 
 class NativeWeComTransport:
     native_backend=True
+    process_name='WXWork'
+    window_titles=('企业微信',)
+    backend_name='WECOM_NATIVE'
+    private_subdirectory='wecom-native'
     def __init__(self,pin,root,*,guard):
         if os.name!='nt':raise ValueError('WINDOWS_REQUIRED')
         self.pin=pin;self.guard=guard
-        self.directory=Path(root)/'data/private/wecom-native';self.directory.mkdir(parents=True,exist_ok=True)
+        self.directory=Path(root)/'data/private'/self.private_subdirectory;self.directory.mkdir(parents=True,exist_ok=True)
         self.user=ctypes.WinDLL('user32',use_last_error=True)
         self.kernel=ctypes.WinDLL('kernel32',use_last_error=True)
         self.user.GetForegroundWindow.restype=w.HWND
@@ -109,7 +113,7 @@ class NativeWeComTransport:
             raise ValueError('REVIEWED_MAIN_WINDOW_UNAVAILABLE')
         native=self.foreground(handle)
         title=ctypes.create_unicode_buffer(256);self.user.GetWindowTextW(handle,title,len(title))
-        if native['process']!='WXWork' or title.value!='企业微信':
+        if native['process']!=self.process_name or title.value not in self.window_titles:
             raise ValueError('REVIEWED_MAIN_WINDOW_IDENTITY_CHANGED')
         def is_foreground():
             try:
@@ -149,7 +153,7 @@ class NativeWeComTransport:
         self._check_modifiers()
         self._interactive_desktop()
         current=self.foreground()
-        if current['process']!='WXWork' or current!=self.last_native:
+        if current['process']!=self.process_name or current!=self.last_native:
             raise ValueError('NATIVE_FOREGROUND_OR_LAYOUT_CHANGED')
         if point is not None:
             x,y=point
@@ -164,7 +168,7 @@ class NativeWeComTransport:
         stamp=reviewed.get('reviewed_at');expected=reviewed.get('window')
         if (type(stamp) not in (int,float) or not math.isfinite(stamp)
                 or not 0<=time.time()-stamp<=30 or not isinstance(expected,dict)
-                or set(expected)!=set(current) or expected.get('process')!='WXWork'
+                or set(expected)!=set(current) or expected.get('process')!=self.process_name
                 or any(type(expected.get(k)) is not int for k in ('handle','left','top','width','height'))
                 or expected['handle']<=0 or expected['width']<=0 or expected['height']<=0
                 or reviewed.get('owner_handle')!=current['handle']):
@@ -243,7 +247,7 @@ class NativeWeComTransport:
     def call(self,tool,arguments):
         attempt=uuid4().hex;started=datetime.now(timezone.utc).isoformat()
         capture_metadata={}
-        journal={'attempt_id':attempt,'tool':tool,'backend':'WECOM_NATIVE','started_at':started,
+        journal={'attempt_id':attempt,'tool':tool,'backend':self.backend_name,'started_at':started,
                  'status':'OUTCOME_UNCONFIRMED','automatic_retry_allowed':False}
         path=self.directory/('attempt-'+attempt+'.json')
         path.write_text(json.dumps(journal),encoding='utf-8')
@@ -270,7 +274,7 @@ class NativeWeComTransport:
             if list(image.size)!=size:image=image.resize(tuple(size),Image.Resampling.LANCZOS)
             output=self.directory/(attempt+'.png');image.save(output)
             bounds=','.join(map(str,region));index=self.pin['display_index']
-            text=f'Selected Displays: {index}\nScreenshot Region: ({bounds})\nVisible Displays: {index}:{info.device} ({bounds})\nCapture Backend: WECOM_NATIVE'
+            text=f'Selected Displays: {index}\nScreenshot Region: ({bounds})\nVisible Displays: {index}:{info.device} ({bounds})\nCapture Backend: {self.backend_name}'
             content=[{'type':'text','text':text},{'type':'image','path':str(output)}]
         elif tool in ('Click','Clipboard','Shortcut','Type','Scroll','Move'):
             self._check_input(arguments.get('loc'))
@@ -306,7 +310,7 @@ class NativeWeComTransport:
                 self.user.mouse_event(2,0,0,0,0);self.user.mouse_event(4,0,0,0,0)
                 self._clipboard('set',text);self._shortcut('ctrl+v');content=[]
         else:raise ValueError('NATIVE_OPERATION_OUTSIDE_ALLOWLIST')
-        result={'tool':tool,'backend':'WECOM_NATIVE','is_error':False,'attempt_id':attempt,'content':content,
+        result={'tool':tool,'backend':self.backend_name,'is_error':False,'attempt_id':attempt,'content':content,
                 **capture_metadata}
         result_path=self.directory/(attempt+'.json');result_path.write_text(json.dumps(result,ensure_ascii=False),encoding='utf-8')
         journal.update(status='TOOL_RETURNED',result_path=str(result_path));path.write_text(json.dumps(journal),encoding='utf-8')
