@@ -54,7 +54,8 @@ class AutomaticAnswerRuntime:
                  if isinstance(config, (str, Path)) else deepcopy(config))
         value = {'enabled': False} if value is None else value
         if (not isinstance(value, dict) or type(value.get('enabled')) is not bool
-                or set(value) - {'enabled', 'display_index', 'new_chat_button', 'preparation_controls', 'max_generation_attempts', 'backend', 'space_id', 'page', 'ego_policy'}):
+                or set(value) - {'enabled', 'display_index', 'new_chat_button', 'preparation_controls', 'max_generation_attempts', 'backend', 'space_id', 'page', 'ego_policy', 'allow_disabled_search'}
+                or type(value.get('allow_disabled_search', False)) is not bool):
             raise ValueError('Explicit local automatic answer configuration required')
         self.backend = value.get('backend','windows_mcp')
         if self.backend not in ('windows_mcp','ego_lite'):
@@ -301,7 +302,8 @@ class AutomaticAnswerRuntime:
         from .reference_lookup import LookupConfig, ReferenceLookup
         lookup = None if snapshot.get('intent') == 'FOLLOWUP' else ReferenceLookup(LookupConfig.load(
             self.reference_config or self.workspace / 'config/reference-lookup.example.toml'))
-        return prepare_input(store, snapshot['run_id'], lookup)
+        return prepare_input(store, snapshot['run_id'], lookup,
+                             allow_disabled_search=self.config.get('allow_disabled_search', False))
 
     def _prepare(self, *, store, task, snapshot, attempt_id, session_url, candidate_path):
         self._course(task)

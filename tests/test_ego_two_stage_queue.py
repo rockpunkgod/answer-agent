@@ -94,6 +94,23 @@ class EgoTwoStageQueueTests(unittest.TestCase):
         self.runtime.tick()
         self.assertEqual(len(self.calls), 2)
 
+    def test_explicit_no_search_still_requires_two_stages_and_keeps_draft_pending(self):
+        with self.assertRaises(ValueError):
+            AutomaticAnswerRuntime(self.db.path,dict(self.config,allow_disabled_search='true'))
+        self.lookup.run_for_question.return_value=dict(retrieval_status='DISABLED',top_candidates=[])
+        self.runtime=AutomaticAnswerRuntime(self.db.path,dict(self.config,allow_disabled_search=True),manifest=self.fx.fx.manifest_path)
+        self.admit()
+        self.assertEqual(self.runtime.tick()['state'],'READY_FOR_GENERATION')
+        task=self.fx.fx.tasks.get_task(self.fx.task['id'])
+        frozen=json.loads(self.db.one('SELECT input_json FROM runs WHERE id=?',(task['run_id'],))[0])
+        self.assertEqual(frozen['question_match_input']['search_status'],'DISABLED')
+        self.assertIs(frozen['question_match_input']['reference_search_verified'],False)
+        self.assertEqual(self.runtime.tick()['state'],'GENERATED')
+        self.assertEqual(len(self.calls),2)
+        self.assertFalse(self.calls[1]['new'])
+        self.assertEqual(self.db.one("SELECT state FROM outbox WHERE purpose='ANSWER'")[0],'PENDING')
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM performance_units')[0],0)
+
     def test_ordinary_followup_uses_origin_match_and_does_not_search_or_reupload(self):
         self.admit()
         self.assertEqual(self.runtime.tick()['state'], 'READY_FOR_GENERATION')

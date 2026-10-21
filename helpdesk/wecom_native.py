@@ -253,6 +253,7 @@ class NativeWeComTransport:
                     raise ValueError('HISTORY_SCROLL_OUTSIDE_ALLOWLIST')
                 if not self.user.SetCursorPos(*arguments['loc']):raise ValueError('POINTER_MOVE_FAILED')
                 self._check_input(arguments['loc'])
+                if self.pointer()!=list(arguments['loc']):raise ValueError('USER_POINTER_MOVED_INPUT_PAUSED')
                 self.user.mouse_event(0x0800,0,0,360,0)
                 content=[]
             elif tool=='Click':
@@ -261,6 +262,7 @@ class NativeWeComTransport:
                 if not self.user.SetCursorPos(*arguments['loc']):raise ValueError('POINTER_MOVE_FAILED')
                 for _ in range(clicks):
                     self._check_input(arguments['loc']);down,up=(2,4) if button=='left' else (8,16)
+                    if self.pointer()!=list(arguments['loc']):raise ValueError('USER_POINTER_MOVED_INPUT_PAUSED')
                     self.user.mouse_event(down,0,0,0,0);self.user.mouse_event(up,0,0,0,0)
                 content=[]
             elif tool=='Clipboard':content=[{'type':'text','text':'Clipboard content:\n'+self._clipboard(arguments['mode'],arguments.get('text'))}]
@@ -269,6 +271,8 @@ class NativeWeComTransport:
                 text=arguments.get('text')
                 if arguments.get('press_enter') or not isinstance(text,str) or '\n' in text or '\r' in text:raise ValueError('UNSAFE_TYPE')
                 if not self.user.SetCursorPos(*arguments['loc']):raise ValueError('POINTER_MOVE_FAILED')
+                self._check_input(arguments['loc'])
+                if self.pointer()!=list(arguments['loc']):raise ValueError('USER_POINTER_MOVED_INPUT_PAUSED')
                 self.user.mouse_event(2,0,0,0,0);self.user.mouse_event(4,0,0,0,0)
                 self._clipboard('set',text);self._shortcut('ctrl+v');content=[]
         else:raise ValueError('NATIVE_OPERATION_OUTSIDE_ALLOWLIST')

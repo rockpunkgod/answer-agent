@@ -97,6 +97,24 @@ class MatchingTests(unittest.TestCase):
                 matching.prepare_input(self.db, self.run, lookup)
         self.assertNotIn('question_match_input', json.loads(self.db.one('SELECT input_json FROM runs WHERE id=?', (self.run,))[0]))
 
+    def test_explicit_disabled_search_keeps_true_status_and_does_not_hide_failures(self):
+        for status in ('INTERRUPTED', 'PROVIDER_UNAVAILABLE'):
+            with self.subTest(status=status), self.assertRaisesRegex(ValueError, 'SEARCH_UNAVAILABLE'):
+                matching.prepare_input(self.db, self.run, self.lookup(status=status), allow_disabled_search=True)
+        with self.assertRaisesRegex(ValueError, 'DISABLED_SEARCH_HAS_CANDIDATES'):
+            matching.prepare_input(self.db, self.run, self.lookup(['invented'], status='DISABLED'), allow_disabled_search=True)
+        frozen=matching.prepare_input(self.db, self.run, self.lookup(status='DISABLED'), allow_disabled_search=True)
+        item=frozen['question_match_input']
+        self.assertEqual(item['search_status'],'DISABLED')
+        self.assertEqual(item['search_policy'],'OPERATOR_SKIPPED')
+        self.assertIs(item['reference_search_verified'],False)
+        self.assertEqual(item['candidates'],[])
+        self.assertEqual(matching.validate_result(frozen,STUDENT_ONLY)['status'],'VERIFIED_STUDENT_ONLY')
+        with self.assertRaisesRegex(ValueError,'MATCH_REQUIRES_REVIEW'):
+            matching.validate_result(frozen,dict(STUDENT_ONLY,match_status='UNRESOLVED',unresolved_fields=['image unclear']))
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM answers')[0],0)
+        self.assertEqual(self.db.one('SELECT COUNT(*) FROM performance_units')[0],0)
+
     def test_all_24_independent_option_orders_and_number_change(self):
         cid = self.candidate()
         frozen = matching.prepare_input(self.db, self.run, self.lookup([cid]))

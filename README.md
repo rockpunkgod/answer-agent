@@ -452,6 +452,8 @@ python tools/wecom_cli.py --database "<业务库>" --delivery-config "<原生ACK
 
 当前只采用已真实验证且用户认可的去手写能力。搜题暂不接入，不继续开通、复测或联系客服；已有实现与测试保留，`search_enabled=false`，不作为答疑的启动依赖。去手写使用独立的 `--erase-only` 入口，保留原图，处理成功后的摘要提供 `processed_path` 以定位处理图。效果认可不等于已逐字核验印刷内容，也不自动计为答疑完成。
 
+本轮不搜题的受控答疑可在现有自动答疑配置中明确设置 `allow_disabled_search=true`（默认 false）。仅检索配置主动关闭时，允许以完整的已审核学生题面进入两阶段核验；冻结记录仍为 `search_status=DISABLED`、`search_policy=OPERATOR_SKIPPED`、`reference_search_verified=false`，不伪装成“已搜索但无结果”。搜索中断或失败仍停止，DeepSeek 核验不清楚仍停止。此选项不启用发送；本轮答疑稿停在原 Outbox 的待发送状态，不登记交付或绩效。正式 Reference Search 验收仍未完成。
+
 两个独立客户端复用本地缓存、现有审计表和候选审核，不启动 DeepSeek、不创建答案 Outbox、不发送、不计绩效；没有新增数据库或依赖。应用 ID 和 AppSecret 分别读取 `YOUDAO_ERASE_APP_KEY` / `YOUDAO_ERASE_APP_SECRET` 与 `YOUDAO_SEARCH_APP_KEY` / `YOUDAO_SEARCH_APP_SECRET`。也可放入忽略的 `data/private/youdao-credentials.local.json`，键名仍用这四个环境变量名；环境变量优先。密钥只在本机配置，不粘贴到普通日志、源码或测试。
 
 [配置示例](config/youdao.example.toml)保持两项关闭。要准备受控单图测试，将它复制到 `data/private/youdao.local.toml`；审核账号价格后填写两个单次预算预留上限。缺凭据返回 `CREDENTIALS_NOT_CONFIGURED`，缺上限返回 `BUDGET_REVIEW_REQUIRED`，均不请求网络。不得仅因写好配置就启用自动队列；真实调用仍需用户明确指定匿名图片并授权。

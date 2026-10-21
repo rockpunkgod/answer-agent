@@ -68,13 +68,14 @@ def validate_input(store, snapshot):
     return item
 
 
-def prepare_input(store, run_id, lookup, **lookup_args):
+def prepare_input(store, run_id, lookup, *, allow_disabled_search=False, **lookup_args):
     """Run one existing bounded search and pin real Top2 IDs on the frozen run.
 
     An interrupted/disabled/unavailable search is exposed, never called no hit.
     Repeated calls reuse the same frozen input and do not search again.
     """
     _require(not store.connection.in_transaction, 'MATCH_REQUIRES_COMMITTED_RUN')
+    _require(type(allow_disabled_search) is bool, 'MATCH_SEARCH_POLICY_INVALID')
     row = store.one('SELECT input_json FROM runs WHERE id=?', (run_id,))
     _require(row is not None, 'MATCH_RUN_NOT_FOUND')
     snapshot = json.loads(row[0])
@@ -91,7 +92,13 @@ def prepare_input(store, run_id, lookup, **lookup_args):
     trigger = 'version_difference' if snapshot.get('intent') in ('CORRECTION', 'DISPUTE') else 'initial_question'
     report = lookup.run_for_question(store, snapshot['question_id'], snapshot['question_version'],
                                      snapshot['context_revision'], trigger=trigger, run_id=run_id, **lookup_args)
-    _require(report.get('retrieval_status') in ('CANDIDATES_FOUND', 'NO_RESULTS', 'OFFLINE_FIXTURE')
+    skipped = allow_disabled_search and report.get('retrieval_status') == 'DISABLED'
+    if skipped:
+        _require(not report.get('top_candidates'), 'MATCH_DISABLED_SEARCH_HAS_CANDIDATES')
+        _require(Question.from_dict(snapshot['student_question']).complete
+                 and isinstance(snapshot['student_material'], str)
+                 and bool(snapshot['student_material'].strip()), 'MATCH_STUDENT_SOURCE_INCOMPLETE')
+    _require((skipped or report.get('retrieval_status') in ('CANDIDATES_FOUND', 'NO_RESULTS', 'OFFLINE_FIXTURE'))
              and not report.get('stale') and not report.get('evidence_expired_or_unavailable'),
              'MATCH_SEARCH_UNAVAILABLE:' + str(report.get('retrieval_status')))
     _require(snapshot.get('simulated') is True or report['retrieval_status'] != 'OFFLINE_FIXTURE',
@@ -102,6 +109,8 @@ def prepare_input(store, run_id, lookup, **lookup_args):
         candidates.append(_candidate(store, snapshot, item['candidate_id']))
     snapshot['question_match_input'] = {'binding': _binding(snapshot), 'candidates': candidates,
         'search_status': report['retrieval_status'], 'lookup_key': report.get('lookup_key')}
+    if skipped:
+        snapshot['question_match_input'].update(search_policy='OPERATOR_SKIPPED', reference_search_verified=False)
     with store.transaction():
         current = _current(store, snapshot)
         _require('question_match_input' not in json.loads(current['input_json']), 'MATCH_INPUT_ALREADY_FROZEN')

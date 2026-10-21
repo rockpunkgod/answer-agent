@@ -25,6 +25,24 @@ class NativeGuardTests(unittest.TestCase):
             GetUserObjectInformationW=Mock(side_effect=name),CloseDesktop=Mock(),
             GetAsyncKeyState=Mock(return_value=0),
             SetCursorPos=Mock(return_value=True),mouse_event=Mock())
+        cursor=[0,0]
+        def move(x,y):cursor[:]=[x,y];return True
+        def position(pointer):pointer._obj.x,pointer._obj.y=cursor;return True
+        self.native.user.SetCursorPos.side_effect=move
+        self.native.user.GetCursorPos=Mock(side_effect=position)
+
+    def test_pointer_moved_after_positioning_stops_before_click_scroll_or_paste(self):
+        self.native.pointer=Mock(return_value=[1595,1416])
+        self.native._clipboard=Mock()
+        self.native._shortcut=Mock()
+        for tool,args in (('Click',{'loc':[150,150],'button':'right'}),
+                          ('Scroll',{'loc':[150,150],'direction':'up'}),
+                          ('Type',{'loc':[150,150],'text':'received'})):
+            with self.subTest(tool=tool), self.assertRaisesRegex(ValueError,'USER_POINTER_MOVED_INPUT_PAUSED'):
+                self.native.call(tool,args)
+        self.native.user.mouse_event.assert_not_called()
+        self.native._clipboard.assert_not_called()
+        self.native._shortcut.assert_not_called()
 
     def test_activation_requires_exact_wxwork_main_window_and_never_types(self):
         self.native.pin={'window_geometry_handle':[200,100,1]}
