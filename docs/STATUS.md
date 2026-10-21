@@ -1,3 +1,15 @@
+### 2026-10-21：用户指定按题型直接上传本机教学文件夹
+
+用户明确将新直接网页答疑的教学输入调整为 `C:/Users/ASUS/.claude/skills/gaokao-english`、`gaokao-grammar-fill`、`gaokao-writing`，按题型选择整个对应文件夹原文，不重写或重新总结。此明确变更优先于此前新任务只能来自ANSWER仓库的约定；旧冻结任务、已拒绝B篇和既有重试次数不静默改写。
+
+新增 `local_teaching_files` 并接入现有 `tools.run_ego_deepseek --question-type`：阅读/七选五/完形选择english，语法填空选择grammar-fill，应用文/读后续写选择writing。听力只选择已有english目录，不据此激活该目录内明确尚未验收的方法。脚本展开原Markdown/文本/Python文件，由既有ego上传器逐文件上传；不打包、不生成额外教学manifest/JSON、不修改教学内容，已有附件哈希与请求防重放继续生效。只解析这三个固定目录，子路径越界停止，未知题型不猜。直接网页命令仍只生成内部稿，不作为原Workflow/Outbox完成证据。
+
+本机离线检查实际可读取english9份、grammar-fill6份、writing3份原文文件。english是用户部署的junction，实际目标位于本机skills-manager目录；按用户明确批准的目录解析该根，内部文件仍受真实路径约束。不宣称这些本机内容等于ANSWER的任何commit，也未将本机原文/账户数据复制进Git。UNIT/MOCK：`tests.test_local_teaching_uploads tests.test_luna_navigation tests.test_personal_wechat_test_transport` 共28项通过/0.808秒，0失败/跳过；教学新增3项验证只选对应目录、保留原始字节、原CLI实际传入附件和原题号、文件更新可见与入口缺失停止。没有真实上传或DeepSeek提交。
+
+用户交出输入设备后，个人微信导航验证已执行一次原生激活和一次Ctrl+F，未输入文字、未粘贴、未Enter或发送，且没有重放该导航意图。会话列表存在但没有唯一“测试”项，搜索控件在主窗口及同进程辅助窗口中仍不可读；各次临时Qt标志均记录恢复。专门的Luna定位入口仅补充个人微信原生截图的独立目录/backend校验，仍固定GPT-6 Luna low、禁用工具、仅返回坐标建议；对应真实定位尝试在截图及模型调用之前发现个人微信已非前台，返回PERSONAL_WECHAT_NOT_FOREGROUND，没有再次激活或发起模型调用。不得将这次停止算作Luna识图成功。相关私有导航/定位意图保留，不自动重放。
+
+当前仍未绑定真实“测试”会话或发送B篇；三个English群只读，正式绩效未变。新本机目录上传入口可用不等于整个自动答疑/交付/绩效闭环已验收。整体NOT_READY，下一次界面验证先核对现有搜索状态，不重复旧Ctrl+F或未知操作。
+
 ### 2026-10-21：真实账号/测试群/原消息联合核验
 
 新增 `personal_test_identity`，在原私有隔离解释器中复用审核过的db读取，不加载上游发送、GUI驱动或媒体模块。每次守卫重新检查固定进程及创建时间、窗口所属进程、从当前进程取得的实际账号、唯一同名群联系记录、当前聊天标题和输入框，以及与本账号本群数据库唯一连续对齐的原消息ID。图像序列本身不作为身份；缺文字锚点、同文重复、原消息不可见、账号/群变化均停止。核验成功也不自行授权发送或计绩效，不修改Collector/游标/原消息。

@@ -23,6 +23,8 @@ ACTIONS = frozenset({'ACTIVATE_WECOM', 'OPEN_ORIGINAL_IMAGE', 'SAVE_ICON',
                      'FILENAME_FIELD', 'SAVE_BUTTON', 'DEEPSEEK_NEW_CHAT',
                      'DEEPSEEK_COMPOSER', 'WECOM_COMPOSER', 'WECOM_SEND',
                      'WECOM_RECEIPT', 'WECOM_COPY_MENU', 'STOP'})
+PERSONAL_TEST_ACTIONS = frozenset({'PERSONAL_WECHAT_SEARCH'})
+ACTIONS = ACTIONS | PERSONAL_TEST_ACTIONS
 _DISABLED = ('shell_tool', 'apps', 'plugins', 'browser_use', 'browser_use_external',
              'computer_use', 'multi_agent', 'hooks', 'skill_search', 'image_generation', 'view_image')
 
@@ -34,13 +36,17 @@ def _source(record_path, display_index):
     archive = (ROOT / 'data/private/windows-mcp').resolve(strict=True)
     record_path = Path(record_path).resolve(strict=True)
     native=False
+    expected_backend=None
     if not record_path.is_relative_to(archive):
-        native_archive=ROOT/'data/private/wecom-native'
-        if not native_archive.is_dir() or not record_path.is_relative_to(native_archive.resolve(strict=True)):
+        candidates=[(ROOT/'data/private/wecom-native','WECOM_NATIVE'),
+                    (ROOT/'data/private/personal-wechat-test-native','PERSONAL_WECHAT_TEST_NATIVE')]
+        matches=[(path.resolve(strict=True),backend) for path,backend in candidates
+                 if path.is_dir() and record_path.is_relative_to(path.resolve(strict=True))]
+        if len(matches)!=1:
             raise ValueError('LUNA_SCREENSHOT_OUTSIDE_APPROVED_DIRECTORY')
-        archive=native_archive.resolve(strict=True);native=True
+        archive,expected_backend=matches[0];native=True
     record, _ = _json(record_path)
-    if native and record.get('backend')!='WECOM_NATIVE':
+    if native and record.get('backend')!=expected_backend:
         raise ValueError('LUNA_NATIVE_SCREENSHOT_REQUIRED')
     if record.get('tool') != 'Screenshot' or record.get('is_error') is not False:
         raise ValueError('LUNA_NATIVE_SCREENSHOT_REQUIRED')
@@ -65,7 +71,7 @@ def _source(record_path, display_index):
         raise ValueError('LUNA_NATIVE_JOURNAL_REQUIRED')
     attempt_path = archive / ('attempt-' + record['attempt_id'] + '.json')
     attempt, _ = _json(attempt_path)
-    if native and attempt.get('backend')!='WECOM_NATIVE':
+    if native and attempt.get('backend')!=expected_backend:
         raise ValueError('LUNA_NATIVE_JOURNAL_REQUIRED')
     captured = datetime.fromisoformat(attempt['started_at'])
     if captured.utcoffset() is None:

@@ -69,6 +69,23 @@ class LunaNavigationTests(unittest.TestCase):
                 self.assertEqual(result['display_region'], list(bounds))
                 runner.assert_called_once()
 
+    def test_personal_test_capture_requires_its_own_backend_and_journal(self):
+        archive=self.root/'data/private/personal-wechat-test-native';archive.mkdir()
+        image=archive/'frame.png';Image.new('RGB',(1920,1080),'white').save(image)
+        record=archive/'frame.json';attempt=archive/('attempt-'+'a'*32+'.json')
+        value=dict(self.source,backend='PERSONAL_WECHAT_TEST_NATIVE')
+        value['content']=[self.source['content'][0],{'type':'image','path':str(image)}]
+        journal=dict(self.journal,backend='PERSONAL_WECHAT_TEST_NATIVE',result_path=str(record))
+        record.write_text(json.dumps(value),encoding='utf-8');attempt.write_text(json.dumps(journal),encoding='utf-8')
+        runner=self.runner('{"action":"PERSONAL_WECHAT_SEARCH","image_x":100,"image_y":50}')
+        result=navigation.suggest(record,'Locate only the personal WeChat search field.',
+                                  ['PERSONAL_WECHAT_SEARCH','STOP'],runner=runner,display_index=1)
+        self.assertEqual(result['action'],'PERSONAL_WECHAT_SEARCH')
+        value['backend']='WECOM_NATIVE';record.write_text(json.dumps(value),encoding='utf-8')
+        with self.assertRaisesRegex(ValueError,'NATIVE_SCREENSHOT_REQUIRED'):
+            navigation.suggest(record,'search',['PERSONAL_WECHAT_SEARCH','STOP'],runner=runner,display_index=1)
+        self.assertEqual(runner.call_count,1)
+
     def test_same_display_moved_between_observations_uses_new_origin(self):
         runner = self.runner('{"action":"ACTIVATE_WECOM","image_x":900,"image_y":30}')
         first = self.suggest(runner)
