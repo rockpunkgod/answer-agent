@@ -1,3 +1,15 @@
+### 2026-10-21：真实账号/测试群/原消息联合核验
+
+新增 `personal_test_identity`，在原私有隔离解释器中复用审核过的db读取，不加载上游发送、GUI驱动或媒体模块。每次守卫重新检查固定进程及创建时间、窗口所属进程、从当前进程取得的实际账号、唯一同名群联系记录、当前聊天标题和输入框，以及与本账号本群数据库唯一连续对齐的原消息ID。图像序列本身不作为身份；缺文字锚点、同文重复、原消息不可见、账号/群变化均停止。核验成功也不自行授权发送或计绩效，不修改Collector/游标/原消息。
+
+默认不更改客户端无障碍标志。普通UIA不可用时，可在明确的测试预检中显式选择现有 `temporary_accessibility`，不新建第二套控制器；它短暂改写固定客户端的Qt布尔标志，退出时独立回读恢复，不能描述为完全无进程修改的只读操作。每次失败清空上一次成功证据；失败后的标志恢复状态单独保留，不成为发送许可。异常终止时的恢复仍未真实验证，不能启用为生产后台读取。
+
+REAL：本轮有两次同一测试范围的无输入身份预检（不是新增消息轮询）。均通过固定账号/窗口和测试群数据库读取准备，随后在当前聊天名/输入框核验处返回 `ACCESSIBILITY_CURRENT_CHAT_CHANGED`，没有读取当前其他会话的消息、没有Invoke/点击/输入/发送，也未重放此前图片预览意图。第一次耗时3.427秒，前台未变；首次私有摘要未记录失败路径的标志恢复字段，补充记录后第二次耗时2.892秒，独立记录 process_flag_changed=true/process_flag_restored=true，但前后前台不同。没有调用激活或强制恢复；无法据此断言是用户切换还是客户端内部变化。私有摘要 `data/private/replica-runtime/test-live-identity-preflight.local.json`，当前状态仍LIVE_PERSONAL_TEST_IDENTITY_UNAVAILABLE；不算当前测试群绑定或发送验收通过。
+
+UNIT/MOCK：`python -X utf8 -B -m unittest -q tests.test_personal_wechat_identity tests.test_personal_wechat_accessibility tests.test_personal_wechat_test_delivery tests.test_personal_wechat_test_transport tests.test_personal_wechat_source tests.test_personal_wechat_collect tests.test_personal_wechat_polling`，73项通过/3.896秒，0失败/跳过。覆盖真实事实校验结构、旧成功不重用、默认不启用Qt标志、失败也记录恢复、群歧义、重复/截断文字及原消息对齐；账号/桌面读取在测试中均为模拟。早先命令误列不存在的 `tests.test_personal_wechat_replica`，产生1项导入错误，已修正为实际现存模块后完整运行，不把该错误计作通过。
+
+此前测试群完整发送授权继续有效，不重复索取；但预检发现前台变化，已询问电脑是否正被使用，等待可独占界面验证的时机。B篇仍BLOCKED_DRAFT_CHECK，不通过更名任务或重置修订预算强行生成可发送稿。唯一下一步：在用户不使用输入设备时核验并绑定真实“测试”会话，复用本守卫进入发送适配器预检；当前没有额外消息导入、DeepSeek/付费调用、外发或绩效变化。完整目标仍NOT_READY。
+
 ### 2026-10-21：原测试Outbox接入个人微信交付适配器
 
 新增 `PersonalWeChatTestRecipient`，个人微信测试目标的稳定键同时绑定账号和群ID；仅名称“测试”不够。复用原 `test_answer_copies` 字段保存冻结目标证据及原Outbox，不新增表或完成台账。`queue_test_answer`、发送前校验及UNKNOWN回读现在支持这类明确目标；原企业微信“苇中鹤”的TestRecipient限制不变。源答案仍须真实生成、当前版本、完整证据和原审核；被拒绝/未形成Outbox的B篇不能进入此入口。

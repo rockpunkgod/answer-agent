@@ -16,6 +16,48 @@ import time
 ACCESSIBILITY_HASH='5a62382dd82c2916fdf50928a4a5dc4ec7f688ec5f212b077c48e2a7c4f35d60'
 
 
+def verify_test_chat_alignment(recipient,*,live_account_id,room_matches,ui_rows,db_rows,source_message_ids):
+    """Bind an actual test chat to account/room facts and unique original messages.
+
+    Inputs must come from fresh local reads by the caller. This function does
+    not read a process, enable accessibility, import messages or authorize a
+    send. UI rows are the result of current_chat_rows' two-anchor name check.
+    """
+    from .test_routing import PersonalWeChatTestRecipient
+    if not isinstance(recipient,PersonalWeChatTestRecipient) or live_account_id!=recipient.account_id:
+        raise ValueError('PERSONAL_TEST_LIVE_ACCOUNT_CHANGED')
+    if (not isinstance(room_matches,list) or len(room_matches)!=1 or not isinstance(room_matches[0],dict)
+            or room_matches[0].get('username')!=recipient.room_id
+            or room_matches[0].get('nick_name')!=recipient.display_name):
+        raise ValueError('PERSONAL_TEST_ROOM_ID_NOT_UNIQUE')
+    if (not isinstance(source_message_ids,(list,tuple)) or not source_message_ids
+            or any(not isinstance(v,str) or not v for v in source_message_ids)
+            or len(set(source_message_ids))!=len(source_message_ids)
+            or not isinstance(ui_rows,list) or not ui_rows or len(ui_rows)>100
+            or not isinstance(db_rows,list) or not db_rows or len(db_rows)>10000):
+        raise ValueError('PERSONAL_TEST_MESSAGE_ANCHORS_REQUIRED')
+    if (any(not isinstance(row,dict) or row.get('kind') not in ('text','image') or not isinstance(row.get('text'),str) for row in ui_rows)
+            or any(not isinstance(row,dict) or row.get('kind') not in ('text','image') or not isinstance(row.get('text'),str)
+                   or not isinstance(row.get('message_id'),str) or not row['message_id'] for row in db_rows)
+            or len({row['message_id'] for row in db_rows})!=len(db_rows)):
+        raise ValueError('PERSONAL_TEST_MESSAGE_SEQUENCE_INVALID')
+    # Image-only sequences cannot prove which material is on screen.
+    if not any(row['kind']=='text' and row['text'].strip() for row in ui_rows):
+        raise ValueError('PERSONAL_TEST_TEXT_ANCHOR_REQUIRED')
+    width=len(ui_rows)
+    offsets=[index for index in range(len(db_rows)-width+1)
+             if all(ui['kind']==db['kind'] and (ui['kind']=='image' or ui['text']==db['text'])
+                    for ui,db in zip(ui_rows,db_rows[index:index+width]))]
+    if len(offsets)!=1:
+        raise ValueError('PERSONAL_TEST_MESSAGE_ALIGNMENT_NOT_UNIQUE')
+    matched=[row['message_id'] for row in db_rows[offsets[0]:offsets[0]+width]]
+    if not set(source_message_ids).issubset(matched):
+        raise ValueError('PERSONAL_TEST_ORIGINAL_MESSAGE_NOT_VISIBLE')
+    return {'status':'LIVE_PERSONAL_TEST_CHAT_BOUND','target_key':recipient.stable_key,
+            'source_message_ids':list(source_message_ids),'matched_message_ids':matched,
+            'sending_authorized':False,'formal_performance_eligible':False}
+
+
 def current_chat_rows(root,*,room_id,rooms):
     """Read only the current authorized chat, never traverse the session list."""
     if room_id not in rooms:raise ValueError('ACCESSIBILITY_ROOM_NOT_AUTHORIZED')
