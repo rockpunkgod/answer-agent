@@ -30,7 +30,7 @@ def collect_once(config_path,mode):
     # Importing the shared CLI does not initialize any desktop or upstream module.
     from tools.personal_wechat_replica_cli import run
     config=json.loads(Path(config_path).read_text(encoding='utf-8-sig'))
-    result=run(config,'sync',mode=mode,observe_foreground=False)
+    result=run(config,'sync',mode=mode)
     if any(row['has_more'] or row['conflicts'] for cycle in result['passes'] for row in cycle):
         raise RuntimeError('COLLECTION_INCOMPLETE_OR_CONFLICTED')
     return {'status':result['status'],'mode':mode,

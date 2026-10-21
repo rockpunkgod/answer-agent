@@ -1,3 +1,13 @@
+### 2026-10-21：轻量化首批清理
+
+当前默认入口为既有工作台控制采集；history/poll/watch 独立命令保留用于首次基线、单独运行或维护，不要求同时开两套循环。采集 CLI 移除未取得原图的 probe-accessibility / locate-image 实验接线，并在加载账号前拒绝旧命令；不再加载原生桌面传输、读取前台窗口元数据或依赖 observe_foreground 开关。移除无活跃调用者的个人微信激活/idle方法及该停用方法的专用测试；通用焦点释放与用户接管保护及测试保留。UIA诊断代码、其保护测试、原失败/UNKNOWN证据仍保留，不是当前启动步骤。
+
+README收敛为73行当前用法，旧内容归档 LEGACY_OPERATIONS.md；不删除数据库、附件、运行证据或旧配置，不更改生产配置、发送/版本/Reference/Performance核心保护。未成功取图没有因清理被改写成成功，仍缺真实自动原图获取。
+
+回归命令：`python -X utf8 -B -m unittest -q tests.test_personal_wechat_collect tests.test_personal_wechat_polling tests.test_personal_wechat_source tests.test_wecom_native tests.test_personal_wechat_accessibility tests.test_collector_supervisor tests.test_current_demo_launcher tests.test_demo_http`。93项通过、0失败/跳过，24.187秒；CLI帮助确认只剩inventory/sync/media/upgrade-cursors，JS语法检查通过。新进程离线导入两个采集入口后，原生桌面、UIA、上游wx/media均未加载。上述为UNIT/MOCK/匿名HTTP/启动脚本验证，本轮没有真实采集、桌面操作、外发或正式绩效变更。
+
+完整Level 3目标仍NOT_READY。本次复核另外发现：completion_for_turn当前只投影人工登记完成包，reviewed_question_queue的student_delivered固定false；自动回执到任务卡的只读完成投影尚待补齐。本轮遵照先精简的最新要求没有顺带扩建该功能。其余既有缺口仍以原完整验收映射为准，不以轻量化删掉消息事实、ACK独立、实际交付或绩效需求。
+
 ### 2026-10-21：个人微信采集接入现有工作台（未运行真实账号）
 
 复用 CollectorSupervisor 的原线程和控制入口，个人来源每轮调用隔离 poll 子进程，继续写原 CollectorStore，不跑 ACK drain、不新建业务完成台账。工作台显示 PERSONAL_WECHAT_LOCAL，只读原文区展示本库消息、发送人和原始时间；不标为官方存档，不用假定0条替代未知统计。失败或超时停止，配置改变要求重启；JSON/TOML同库校验保留。启动脚本显式指定不同采集配置时拒绝复用旧服务，避免误用旧来源。

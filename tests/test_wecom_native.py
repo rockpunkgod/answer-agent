@@ -53,13 +53,6 @@ class NativeGuardTests(unittest.TestCase):
         self.assertEqual(self.native.restore_focus(original,target),'SKIPPED_ORIGINAL_CHANGED')
         self.native.user.SetForegroundWindow.assert_not_called()
 
-    def test_personal_read_activation_rejects_wrong_process_before_activation(self):
-        self.native.focus_window=Mock(return_value={'process':'WXWork','process_id':7})
-        self.native.user.SetForegroundWindow=Mock()
-        with self.assertRaisesRegex(ValueError,'IDENTITY_CHANGED'):
-            self.native.activate_personal_read_window(1,7)
-        self.native.user.SetForegroundWindow.assert_not_called()
-
     def test_pointer_moved_after_positioning_stops_before_click_scroll_or_paste(self):
         self.native.pointer=Mock(return_value=[1595,1416])
         self.native._clipboard=Mock()

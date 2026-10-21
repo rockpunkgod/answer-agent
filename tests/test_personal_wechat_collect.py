@@ -16,6 +16,12 @@ from helpdesk.personal_wechat_replica import load_read_modules
 
 
 class CollectionRunnerTests(unittest.TestCase):
+    def test_retired_gui_operations_are_rejected_before_loading_account(self):
+        from tools.personal_wechat_replica_cli import run
+        for operation in ('probe-accessibility','locate-image','send'):
+            with self.assertRaisesRegex(ValueError,'OPERATION_NOT_SUPPORTED'):
+                run({},operation)
+
     def test_once_uses_shared_storage_without_desktop_probe(self):
         with tempfile.TemporaryDirectory() as folder:
             config=Path(folder)/'source.json';config.write_text('{}')
@@ -23,7 +29,7 @@ class CollectionRunnerTests(unittest.TestCase):
                 {'inserted':2,'duplicates':1,'conflicts':0,'has_more':False}]]}
             with patch('tools.personal_wechat_replica_cli.run',return_value=result) as run:
                 summary=cli.collect_once(config,'LIVE')
-            run.assert_called_once_with({},'sync',mode='LIVE',observe_foreground=False)
+            run.assert_called_once_with({},'sync',mode='LIVE')
             self.assertEqual(summary['inserted'],2)
             self.assertFalse(summary['desktop_access']);self.assertFalse(summary['sending_enabled'])
             result['passes'][0][0]['has_more']=True

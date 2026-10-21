@@ -1,4 +1,4 @@
-"""Scoped, opt-in accessibility probe; never activates or inputs into a client.
+"""Retired diagnostic; not connected to any current collection entrypoint.
 
 The ordinary database/media worker still forbids interactive SDK imports. This
 separate diagnostic loads only the audited accessibility helper, temporarily

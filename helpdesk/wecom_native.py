@@ -78,24 +78,6 @@ class NativeWeComTransport:
             raise ValueError('INPUT_STATE_UNAVAILABLE')
         return int(info.tick)
 
-    def idle_seconds(self):
-        self.kernel.GetTickCount.restype=w.DWORD
-        return ((int(self.kernel.GetTickCount())-self.input_tick())&0xffffffff)/1000
-
-    def activate_personal_read_window(self,handle,process_id):
-        """One scoped restore/activation for an explicitly authorized read action."""
-        self.guard();self._check_modifiers();self._interactive_desktop()
-        target=self.focus_window(handle)
-        if target['process']!='Weixin' or target['process_id']!=process_id:
-            raise ValueError('PERSONAL_READ_WINDOW_IDENTITY_CHANGED')
-        self.user.ShowWindow.argtypes=[w.HWND,ctypes.c_int]
-        if self.user.IsIconic(handle):self.user.ShowWindow(handle,9)
-        if self.user.GetForegroundWindow()!=handle:self.user.SetForegroundWindow(handle)
-        deadline=time.monotonic()+1
-        while self.user.GetForegroundWindow()!=handle and time.monotonic()<deadline:time.sleep(.05)
-        if self.user.GetForegroundWindow()!=handle:raise ValueError('FOREGROUND_READ_ACTIVATION_UNCONFIRMED')
-        return self.focus_window(handle)
-
     def focus_window(self,handle=None):
         value=self.foreground(handle)
         pid=w.DWORD();self.user.GetWindowThreadProcessId(value['handle'],ctypes.byref(pid))
