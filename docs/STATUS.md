@@ -1,3 +1,15 @@
+### 2026-10-21：完整交付的终态与重复推进
+
+沿用原队列和完整交付验证，只有原任务完整回执已核验且题目/上下文仍有效时才投影phase=DONE；持久化生成phase和原回执保持原样，不新增完成表或状态迁移。交付后更正仍是NEEDS_ATTENTION，保留DELIVERED_STALE历史事实。advance及AutomaticAnswerRuntime遇DONE直接返回，不再次进入生成恢复、网页或执行回调。工作台补充DONE显示名。
+
+DONE不覆盖原来源/生成核验错误：自动交付继续要求原生成与来源验证通过；人工交付在原稿取消后复用原来源回执验证。来源证据改变仍保留历史交付，但任务进入NEEDS_ATTENTION，不因为有一条完成回执而掩盖错误。
+
+本轮主终态改动的UNIT/MOCK回归：`python -X utf8 -B -m unittest -q tests.test_automatic_answer_runtime tests.test_delivery_batches tests.test_reviewed_question_queue tests.test_manual_delivery_registration tests.test_source_question_tasks`，114项通过、0失败/跳过，603.732秒；测试句柄和进程均核验结束，未因较慢另启同批测试。
+
+随后来源边界加强后的最终定向：`python -X utf8 -B -m unittest -q tests.test_reviewed_question_queue tests.test_manual_delivery_registration tests.test_delivery_batches.NativeBatchIntegrationTests`，53项通过、0失败/跳过，15.818秒。包括自动/人工交付后的来源篡改拒绝DONE、当前版本更正与UNKNOWN边界。独立启动新Python进程打开原数据库，get和advance均返回DONE，禁止执行的四类回调均未调用；outbox/delivery_checks/audit/performance_events/reviewed_question_attempts数量不变。JS语法/diff检查通过。这是匿名SQLite和模拟网页/原生协议恢复，不是真实账号崩溃/发送验收，不将两批重叠测试相加成唯一测试数量。
+
+完整Level 3目标仍NOT_READY；未操作桌面、读取真实新消息、外发、提交DeepSeek或修改正式绩效。本批只补实质终态保护，不扩建工作流平台。
+
 ### 2026-10-21：原任务展示自动交付事实
 
 已修复上轮发现的回流展示缺口。复用 completion_for_turn、原 Outbox/delivery_checks/分段计划，在任务卡和原队列只读投影自动交付；不创建新台账、服务、状态迁移或发送动作。必须有完整、匹配任务/版本/目标/正文/完成时间的原回执；分段复用原 validate_complete，单段回读复用原回执校验。模拟、草稿、部分成功、UNKNOWN及缺少/损坏回执不显示已完成。指定原Outbox时不会借用同轮其他任务的回执。

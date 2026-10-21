@@ -209,6 +209,21 @@ class ManualDeliveryRegistrationTests(unittest.TestCase):
         task=self.fixture.fx.tasks.get_task(self.fixture.fx.task['id'])
         self.assertEqual(task['actual_delivery']['outbox_id'],result['completion_outbox_id'])
         self.assertFalse(task['actual_delivery']['stale'])
+        from helpdesk.reviewed_question_queue import get
+        self.assertEqual(get(self.db,task['id'])['phase'],'DONE')
+
+    def test_manual_completion_does_not_hide_changed_source_evidence(self):
+        self.register()
+        from helpdesk.reviewed_question_queue import get
+        task_id=self.fixture.fx.task['id']
+        self.assertEqual(get(self.db,task_id)['phase'],'DONE')
+        with self.fixture.fx.raw.connect() as connection:
+            connection.execute('UPDATE messages SET raw_content=? WHERE message_id=?',
+                               ('Changed anonymous source',self.fixture.fx.message.message_id))
+        state=get(self.db,task_id)
+        self.assertTrue(state['student_delivered'])
+        self.assertEqual(state['phase'],'NEEDS_ATTENTION')
+        self.assertEqual(state['last_error'],'DELIVERY_SOURCE_RECHECK_REQUIRED')
 
 
 class DirectManualDeliveryTests(unittest.TestCase):

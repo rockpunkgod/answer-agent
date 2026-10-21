@@ -80,6 +80,19 @@ def get(store, task_id):
             value['actual_delivery']=delivery
             value['student_delivered']=True
             value['delivery_status']='DELIVERED_STALE' if delivery['stale'] else 'VERIFIED_COMPLETE'
+            if delivery['stale']:
+                value['phase'],value['last_error']='NEEDS_ATTENTION','DELIVERED_CONTEXT_CHANGED'
+            elif value['phase']=='GENERATED':
+                value['phase'],value['last_error']='DONE',None
+            elif delivery['verification_method']=='MANUAL_ATTESTATION':
+                from .source_question_tasks import _read_origin_receipt
+                try:
+                    link=store.one('SELECT s.* FROM source_question_drafts s JOIN operator_tasks t ON t.draft_id=s.draft_id WHERE t.id=?',(task_id,))
+                    _read_origin_receipt(store,dict(link))
+                except (ValueError,TypeError,OSError):
+                    value['phase'],value['last_error']='NEEDS_ATTENTION','DELIVERY_SOURCE_RECHECK_REQUIRED'
+                else:
+                    value['phase'],value['last_error']='DONE',None
             break
     return value
 
@@ -445,6 +458,9 @@ def advance(store, task_id, *, executor=None, session_creator=None, preparer=Non
     _require(not store.connection.in_transaction, 'COMMITTED_QUEUE_TRANSACTION_REQUIRED')
     _require(executor in (None, 'LUNA'), 'ONLY_EXPLICIT_LUNA_EXECUTOR_ALLOWED')
     with resource_lock(str(Path(store.path).resolve()) + '.reviewed-question-executor.lock'):
+        completed=get(store,task_id)
+        if completed['phase']=='DONE':
+            return completed
         try:
             task, snapshot, stage = _authoritative_result(store, task_id)
         except Exception as exc:

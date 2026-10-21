@@ -251,6 +251,7 @@ class NativeBatchIntegrationTests(unittest.TestCase):
         for _ in range(2):
             queue=get(self.db,task_id)
             self.assertTrue(queue['student_delivered'])
+            self.assertEqual(queue['phase'],'DONE')
             self.assertEqual(queue['delivery_status'],'VERIFIED_COMPLETE')
             self.assertEqual(queue['actual_delivery']['outbox_id'],self.oid)
             card=self.fx.fx.fx.tasks.get_task(task_id)
@@ -266,6 +267,7 @@ class NativeBatchIntegrationTests(unittest.TestCase):
         self.assertEqual(self.fx.engine.tick()['state'],'SEND_UNKNOWN')
         self.assertIsNone(completion_for_turn(self.db,self.fx.row['turn_id']))
         self.assertFalse(get(self.db,self.fx.fx.fx.task['id'])['student_delivered'])
+        self.assertNotEqual(get(self.db,self.fx.fx.fx.task['id'])['phase'],'DONE')
         # Even a corrupted flag cannot replace the required per-part evidence.
         self.db.execute("UPDATE outbox SET state='SENT_UI_CONFIRMED' WHERE id=?",(self.oid,))
         self.assertIsNone(completion_for_turn(self.db,self.fx.row['turn_id']))
@@ -286,6 +288,53 @@ class NativeBatchIntegrationTests(unittest.TestCase):
         queue=get(self.db,task_id)
         self.assertTrue(queue['student_delivered'])
         self.assertEqual(queue['delivery_status'],'DELIVERED_STALE')
+        self.assertEqual(queue['phase'],'NEEDS_ATTENTION')
+
+    def test_completed_delivery_survives_restart_and_repeated_advance_without_callbacks(self):
+        from unittest.mock import Mock
+        from helpdesk.reviewed_question_queue import get,advance
+        from helpdesk.automatic_answer_runtime import AutomaticAnswerRuntime
+        self.fx.engine.tick()
+        total=len(read_plan(self.db,self.fx.row)['parts'])
+        for _ in range(total-1):self.fx.engine.tick()
+        task_id=self.fx.fx.fx.task['id']
+        before={name:self.db.one('SELECT COUNT(*) FROM '+name)[0] for name in
+                ('outbox','delivery_checks','audit','performance_events','reviewed_question_attempts')}
+        forbidden=Mock(side_effect=AssertionError('Completed task must not execute again'))
+        # Reopen the same persisted database; no reset or recreated task.
+        restarted=Store(self.db.path)
+        try:
+            self.assertEqual(get(restarted,task_id)['phase'],'DONE')
+            for _ in range(2):
+                result=advance(restarted,task_id,executor='LUNA',session_creator=forbidden,
+                               preparer=forbidden,generator=forbidden,matcher=forbidden)
+                self.assertEqual(result['phase'],'DONE')
+            runtime=AutomaticAnswerRuntime(self.db.path)
+            runtime.require_running=forbidden
+            self.assertEqual(runtime._execute_ready(restarted,{'task_id':task_id})['phase'],'DONE')
+            forbidden.assert_not_called()
+            self.assertEqual(before,{name:restarted.one('SELECT COUNT(*) FROM '+name)[0] for name in before})
+        finally:restarted.close()
+        import subprocess
+        import sys
+        child_script='''import json,sys
+from helpdesk.storage import Store
+from helpdesk.reviewed_question_queue import get,advance
+def forbidden(**kwargs):raise AssertionError('Completed delivery replayed')
+store=Store(sys.argv[1])
+try:
+    before=get(store,sys.argv[2])
+    after=advance(store,sys.argv[2],executor='LUNA',session_creator=forbidden,
+                  preparer=forbidden,generator=forbidden,matcher=forbidden)
+    print(json.dumps({'before':before['phase'],'after':after['phase'],
+                      'delivered':after['student_delivered']}))
+finally:store.close()
+'''
+        child=subprocess.run([sys.executable,'-X','utf8','-B','-c',child_script,str(self.db.path),task_id],
+                             capture_output=True,text=True,encoding='utf-8',timeout=20)
+        self.assertEqual(child.returncode,0,child.stderr)
+        self.assertEqual(json.loads(child.stdout),{'before':'DONE','after':'DONE','delivered':True})
+        self.assertEqual(before,{name:self.db.one('SELECT COUNT(*) FROM '+name)[0] for name in before})
 
     def test_lost_part_receipt_removes_completion_projection_without_replaying_send(self):
         from helpdesk.manual_delivery import completion_for_turn
@@ -297,6 +346,22 @@ class NativeBatchIntegrationTests(unittest.TestCase):
         self.db.execute("DELETE FROM delivery_checks WHERE outbox_id=? AND status='PART_UI_CONFIRMED' AND json_extract(evidence,'$.part_number')=2",(self.oid,))
         self.assertIsNone(completion_for_turn(self.db,self.fx.row['turn_id']))
         self.assertEqual(self.fx.native.submissions,submitted)
+
+    def test_completed_delivery_never_overrides_changed_source_validation(self):
+        from helpdesk.reviewed_question_queue import get
+        self.fx.engine.tick()
+        total=len(read_plan(self.db,self.fx.row)['parts'])
+        for _ in range(total-1):self.fx.engine.tick()
+        task_id=self.fx.fx.fx.task['id']
+        self.assertEqual(get(self.db,task_id)['phase'],'DONE')
+        source=self.fx.fx.fx.raw
+        with source.connect() as connection:
+            connection.execute('UPDATE messages SET raw_content=? WHERE message_id=?',
+                               ('Changed anonymous source evidence',self.fx.fx.fx.message.message_id))
+        value=get(self.db,task_id)
+        self.assertTrue(value['student_delivered'])  # Actual historical delivery is not erased.
+        self.assertEqual(value['phase'],'NEEDS_ATTENTION')
+        self.assertEqual(value['last_error'],'GENERATED_OUTBOX_INVALID')
 
     def test_partial_not_counted_then_complete_counts_one_night_piece(self):
         self.assertEqual(self.fx.engine.tick()['state'], 'PART_DELIVERED')

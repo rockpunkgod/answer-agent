@@ -359,6 +359,8 @@ class AutomaticAnswerRuntime:
         task_id = queued['task_id']
         # Recover persisted facts and validate source BEFORE opening the desktop.
         queued = advance(store, task_id)
+        if queued['phase']=='DONE':
+            return queued
         if self.backend == 'ego_lite':
             if queued['phase'] in ('GENERATED','NEEDS_ATTENTION','EXECUTION_UNCERTAIN'):
                 return queued

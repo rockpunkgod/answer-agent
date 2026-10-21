@@ -294,7 +294,7 @@ function configureMode(data){
  if(teachingBlocked)document.getElementById('operator-flow-note').textContent=teachingNote+'自动生成暂停，已有任务和人工交付登记保留。';
  updateButtons();
 }
-const queueNames={WAITING_ACK:'题面已确认，等待收到确认',STOPPED:'已暂停，保留题面确认',READY_FOR_ENQUEUE:'题面已确认，正在排队',WAITING_DESKTOP_EXECUTOR:'已排队，等待 Luna 操作',READY_FOR_PREPARATION:'独立会话已就绪，等待上传材料',READY_FOR_MATCHING:'等待核验题面',MATCHING_STARTED:'正在核验题面',READY_FOR_GENERATION:'已排队，等待生成',ATTACHMENTS_READY:'材料已上传，等待生成',GENERATED:'已生成，等待交付',SESSION_CREATION_STARTED:'正在新建独立会话',PREPARATION_STARTED:'正在上传材料',GENERATION_STARTED:'正在生成讲解',EXECUTION_UNCERTAIN:'操作结果需核实，已暂停重试',NEEDS_ATTENTION:'题面已确认，准备条件需检查'};
+const queueNames={WAITING_ACK:'题面已确认，等待收到确认',STOPPED:'已暂停，保留题面确认',READY_FOR_ENQUEUE:'题面已确认，正在排队',WAITING_DESKTOP_EXECUTOR:'已排队，等待 Luna 操作',READY_FOR_PREPARATION:'独立会话已就绪，等待上传材料',READY_FOR_MATCHING:'等待核验题面',MATCHING_STARTED:'正在核验题面',READY_FOR_GENERATION:'已排队，等待生成',ATTACHMENTS_READY:'材料已上传，等待生成',GENERATED:'已生成，等待交付',DONE:'已核验完整交付',SESSION_CREATION_STARTED:'正在新建独立会话',PREPARATION_STARTED:'正在上传材料',GENERATION_STARTED:'正在生成讲解',EXECUTION_UNCERTAIN:'操作结果需核实，已暂停重试',NEEDS_ATTENTION:'题面已确认，准备条件需检查'};
 let operatorRenderedState='';
 async function refreshOperatorTasks(){
  const response=await fetch('/api/operator-tasks',{cache:'no-store'});
