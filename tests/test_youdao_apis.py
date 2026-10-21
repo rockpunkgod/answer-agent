@@ -191,6 +191,26 @@ class YoudaoApiTests(unittest.TestCase):
         self.assertNotIn('synthetic-search',stdout.getvalue())
         self.assertNotIn('q',result)
 
+    def test_cli_erase_only_returns_artifact_without_search(self):
+        from tools.test_youdao_apis import main
+        transport=Mock(return_value=(200,self.erase_response()))
+        client=HandwritingErase(self.settings,transport=transport)
+        original=self.image.read_bytes()
+        with patch('tools.test_youdao_apis.Settings.load',return_value=self.settings), \
+             patch('tools.test_youdao_apis.ROOT',self.root), \
+             patch('tools.test_youdao_apis.HandwritingErase',return_value=client), \
+             patch.object(PhotoSearch,'execute') as search, \
+             patch('helpdesk.youdao_api.http.client.HTTPSConnection') as network, redirect_stdout(io.StringIO()) as stdout:
+            code=main(['--image',str(self.image),'--erase-only','--output-dir',str(self.root/'data/private/results')])
+        self.assertEqual(code,0);search.assert_not_called();network.assert_not_called()
+        transport.assert_called_once()
+        result=json.loads(stdout.getvalue())
+        self.assertEqual(result['status'],'CLEANUP_SUCCEEDED')
+        artifact=Path(result['processed_path'])
+        self.assertTrue(artifact.is_relative_to(self.root/self.settings.private_root))
+        self.assertEqual(sha256(artifact.read_bytes()).hexdigest(),result['processed_sha256'])
+        self.assertEqual(self.image.read_bytes(),original)
+
     def test_cli_rejects_external_output_or_missing_real_pipeline_task(self):
         from tools.test_youdao_apis import main
         with patch('tools.test_youdao_apis.Settings.load',return_value=self.settings), \

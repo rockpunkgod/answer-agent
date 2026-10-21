@@ -61,7 +61,7 @@ def main(argv=None):
                 result=YoudaoReferencePipeline(settings).run(store,args.run_id,args.image,
                     needs_cleanup=args.needs_cleanup,cleanup_review=review)
         allowed=('status','cleanup_status','search_status','original_sha256','input_sha256',
-                 'processed_sha256','dimensions','processed_dimensions','actual_call','actual_requests',
+                 'processed_sha256','processed_path','dimensions','processed_dimensions','actual_call','actual_requests',
                  'cache_hit','latency_ms','charge_status','amount_cny','error_code','raw_response_sha256','budget_warning','injected')
         summary={k:result[k] for k in allowed if k in result}
         if 'candidates' in result:summary['candidate_count']=len(result['candidates'])

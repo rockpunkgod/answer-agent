@@ -448,7 +448,9 @@ python tools/wecom_cli.py --database "<业务库>" --delivery-config "<原生ACK
 `renew` 失败会返回可直接处理的错误码，例如 `WECOM_WINDOW_CHANGED` 或 `TEST_CONTACT_VISUAL_PIN_CHANGED`（沿用现有共享校验器的代码）。窗口变化需要重新审核当前窗口，不能仅手改有效期；任意异常详情、路径和服务响应不会作为错误原因输出。
 
 
-## 有道单图检索（默认关闭）
+## 有道去手写（按需单图使用，搜题延期）
+
+当前只采用已真实验证且用户认可的去手写能力。搜题暂不接入，不继续开通、复测或联系客服；已有实现与测试保留，`search_enabled=false`，不作为答疑的启动依赖。去手写使用独立的 `--erase-only` 入口，保留原图，处理成功后的摘要提供 `processed_path` 以定位处理图。效果认可不等于已逐字核验印刷内容，也不自动计为答疑完成。
 
 两个独立客户端复用本地缓存、现有审计表和候选审核，不启动 DeepSeek、不创建答案 Outbox、不发送、不计绩效；没有新增数据库或依赖。应用 ID 和 AppSecret 分别读取 `YOUDAO_ERASE_APP_KEY` / `YOUDAO_ERASE_APP_SECRET` 与 `YOUDAO_SEARCH_APP_KEY` / `YOUDAO_SEARCH_APP_SECRET`。也可放入忽略的 `data/private/youdao-credentials.local.json`，键名仍用这四个环境变量名；环境变量优先。密钥只在本机配置，不粘贴到普通日志、源码或测试。
 
@@ -457,7 +459,7 @@ python tools/wecom_cli.py --database "<业务库>" --delivery-config "<原生ACK
 当前只需验证本地图片，可执行：
 
 ```powershell
-python -m tools.test_youdao_apis --image "data/private/youdao/test-images/synthetic-single-question.png" --search-only --dry-run
+python -m tools.test_youdao_apis --image "data/private/youdao/test-images/synthetic-single-question.png" --erase-only --dry-run
 ```
 
 该图为本次自制离线样例；`--dry-run`检查批准目录、格式、大小和尺寸，不上传。`--erase-only`、`--search-only`各验证一个客户端，`--pipeline --db <已有库> --run-id <原run>`才关联原任务；组合流程要求图片路径与 SHA-256 均在该 run 的原附件中。命令不会创建空业务库或自动迁移旧库。`--output-dir`只改变脱敏摘要位置，不改变幂等缓存；只能在 `data/private` 内、缓存目录外。完整响应与擦除图留在固定私有缓存，不输出到终端。
