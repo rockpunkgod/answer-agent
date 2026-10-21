@@ -20,6 +20,25 @@
 
 ## 运行
 
+### 仅采集独立入口
+
+新增 `tools/personal_wechat_collect.py`，可脱离答疑主程序单独运行，但仍复用仓库已有的 MessageSource、CollectorStore 和 SyncEngine；不是另建数据库或发布完整上游 fork。默认只加载固定哈希的 db.py，不加载 media.py、UIA、原生桌面传输、上游包初始化或业务 Dispatcher。最低采集第三方运行依赖为现有隔离环境中的 cryptography、psutil、zstandard；不需要 Pillow、numpy、uiautomation、Playwright 或 Windows-MCP。数据库解密所需的只读进程访问和私有明文缓存边界仍然存在，不等于官方接口。
+
+```powershell
+# 首次须完成历史基线；不会为历史消息生成 ACK。
+& data/private/replica-runtime/venv/Scripts/python.exe -X utf8 -B tools/personal_wechat_collect.py history --config data/private/replica-runtime/source.local.json
+# 单次增量，要求已存在完整历史基线。
+& data/private/replica-runtime/venv/Scripts/python.exe -X utf8 -B tools/personal_wechat_collect.py poll --config data/private/replica-runtime/source.local.json
+# 持续采集；Ctrl+C 暂停，重启同一命令接续原游标。
+& data/private/replica-runtime/venv/Scripts/python.exe -X utf8 -B tools/personal_wechat_collect.py watch --config data/private/replica-runtime/source.local.json --interval 5
+```
+
+这里的“监听”是定时增量轮询，不是消息到达推送。每轮使用同一隔离解释器的新子进程，避免重复加载上游和残留状态；间隔默认5秒，但实际延迟还包含数据库读取耗时，不能声称5秒 SLA。可用 `--cycles 3` 限定轮数；单轮默认超时120秒，最大可设600秒。失败、超时、冲突或未完成分页会停止，不自动跳消息、重建游标或反复重试；已提交页保留，重启沿用原游标。最新失败覆盖原私有 last-result，不能继续展示旧成功。
+
+不调用上游 Listener：其 db.py 实际在回调重试耗尽后仍 `_commit_watermark`，且队列在内存中。独立入口使用现有“消息与游标同事务”路径，原有同序号、迟到消息及失败回滚保护保持。每群默认一万条的完整快照上限仍在；达到上限停止人工核对，不宣称无限历史覆盖或高吞吐实时能力。
+
+本轮仅后台代码与离线验证，未启动常驻采集、未访问真实客户端测试新入口、未更改生产来源。`python -X utf8 -B -m unittest -q tests.test_personal_wechat_collect tests.test_personal_wechat_source tests.test_personal_wechat_accessibility tests.test_wecom_native`：57项通过、0失败/跳过，1.284秒。包括新子进程轮询、失败不重试、历史/增量区分、失败覆盖旧成功，以及不加载媒体/交互模块；不能替代真实新消息及持续运行验收。图片保留媒体引用，实际原图读取仍通过原 `media` 命令按需执行，本入口不自动下载缺失原图。
+
 私有 `source.local.json` 绑定进程创建时间、账号、已确认群 ID、批准目录和原型 CollectorStore。不得复制到生产配置或把密钥写入命令行。
 
 ```powershell

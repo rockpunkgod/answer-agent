@@ -20,15 +20,19 @@ from helpdesk.message_sync import SyncEngine
 from helpdesk.message_sources import SyncMode,utc_now
 
 
-def run(config,operation,*,mode='BACKFILL',iterations=1,interval=5,message_id=None,image_tier='original'):
+def run(config,operation,*,mode='BACKFILL',iterations=1,interval=5,message_id=None,image_tier='original',observe_foreground=True):
     import psutil
-    from helpdesk.wecom_native import NativeWeComTransport
+    if not observe_foreground and operation not in ('sync','inventory','upgrade-cursors'):
+        raise ValueError('COLLECTION_ONLY_OPERATION_REQUIRED')
     private=Path(config['private_root']).resolve(strict=True)
     if not private.is_relative_to(ROOT/'data/private') or config.get('prototype_only') is not True:
         raise ValueError('ISOLATED_PRIVATE_PROTOTYPE_REQUIRED')
-    window=NativeWeComTransport({},ROOT,guard=lambda:(_ for _ in ()).throw(RuntimeError('READ_ONLY')))
-    before=window.foreground()
-    m,media_module=load_read_modules(config['upstream'])
+    window=None
+    if observe_foreground:
+        from helpdesk.wecom_native import NativeWeComTransport
+        window=NativeWeComTransport({},ROOT,guard=lambda:(_ for _ in ()).throw(RuntimeError('READ_ONLY')))
+        before=window.foreground()
+    m,media_module=load_read_modules(config['upstream'],include_media=operation=='media')
     process=psutil.Process(config['process_id']);created=process.create_time()
     if process.name().lower()!='weixin.exe' or created!=config['process_create_time']:
         raise ValueError('PINNED_WECHAT_PROCESS_CHANGED')
@@ -189,7 +193,8 @@ def run(config,operation,*,mode='BACKFILL',iterations=1,interval=5,message_id=No
                                        (info['path'],info['sha256'],info['size'],utc_now(),
                                         'READY' if info['original_attachment'] else 'DERIVATIVE_ONLY',message_id))
     guard()
-    result['foreground_preserved']=window.foreground()==before
+    result['foreground_probe_performed']=observe_foreground
+    if window is not None:result['foreground_preserved']=window.foreground()==before
     (private/'last-result.local.json').write_text(json.dumps(result,ensure_ascii=False,indent=2),encoding='utf-8')
     return result
 

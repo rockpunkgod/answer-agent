@@ -1,3 +1,9 @@
+### 2026-10-21：独立采集入口（未启用生产）
+
+新增 tools/personal_wechat_collect.py：history / poll / watch，脱离答疑主程序运行，复用原 CollectorStore 与持久化游标。watch 为持续增量轮询，每轮隔离子进程，失败/超时即停；不复用上游失败后仍推进水位的 Listener。采集模式只加载 db.py，不加载媒体、UIA、桌面传输、答疑或发送模块；历史不 ACK，个人来源生产守卫不解除。原媒体和诊断命令保留，不为精简重写已稳定内核。
+
+UNIT/MOCK：`python -X utf8 -B -m unittest -q tests.test_personal_wechat_collect tests.test_personal_wechat_source tests.test_personal_wechat_accessibility tests.test_wecom_native`，57项通过、0失败/跳过（1.284秒）；CLI --help 实际通过。当前仅后台开发，没有真实运行该入口或常驻服务。真实持续新消息、轮询成本和中断恢复尚待验证，原图缺缓存仍不自动补下载。启动方式与依赖边界见 PERSONAL_WECHAT_LOCAL_SOURCE.md。
+
 ### 2026-10-21：取图定位诊断及后台修补（未上线）
 
 当前用户正在使用电脑，已停止桌面输入、激活和无障碍探测，仅后台开发/离线测试。未发送 ACK/正文，未调用付费 API 或 DeepSeek，未修改正式绩效。

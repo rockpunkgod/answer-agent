@@ -41,11 +41,13 @@ class StrictReadLogger:
     error=warning
 
 
-def load_read_modules(upstream):
+def load_read_modules(upstream,*,include_media=True):
     root=Path(upstream).resolve(strict=True)
     if any(name=='wechatauto' or name.startswith('wechatauto.') for name in sys.modules):
         raise RuntimeError('FRESH_ISOLATED_REPLICA_PROCESS_REQUIRED')
+    names=('db','media') if include_media else ('db',)
     for filename,digest in HASHES.items():
+        if filename.removesuffix('.py') not in names:continue
         if sha256((root/'wechatauto'/filename).read_bytes()).hexdigest()!=digest:
             raise ValueError('UPSTREAM_CONTENT_CHANGED')
     package=types.ModuleType('wechatauto');package.__path__=[str(root/'wechatauto')]
@@ -54,16 +56,16 @@ def load_read_modules(upstream):
     sys.modules['wechatauto.logger']=logger
     class ReadOnlyImports(importlib.abc.MetaPathFinder):
         def find_spec(self,fullname,path=None,target=None):
-            if fullname.startswith('wechatauto.') and fullname not in ('wechatauto.db','wechatauto.media','wechatauto.logger'):
+            if fullname.startswith('wechatauto.') and fullname not in tuple('wechatauto.'+name for name in names)+('wechatauto.logger',):
                 raise ImportError('INTERACTIVE_REPLICA_MODULE_FORBIDDEN')
             return None
     sys.meta_path.insert(0,ReadOnlyImports())
     modules=[]
-    for name in ('db','media'):
+    for name in names:
         spec=importlib.util.spec_from_file_location('wechatauto.'+name,root/'wechatauto'/(name+'.py'))
         module=importlib.util.module_from_spec(spec);sys.modules[spec.name]=module
         spec.loader.exec_module(module);setattr(package,name,module);modules.append(module)
-    return tuple(modules)
+    return (modules[0],modules[1] if include_media else None)
 
 
 def strict_database(module, *, db_root, account, cache, pid):
